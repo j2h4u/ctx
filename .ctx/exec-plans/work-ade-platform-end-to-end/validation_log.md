@@ -258,3 +258,65 @@ These baseline results must be rerun after subsequent implementation phases.
 - Manager validation:
   - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh test --manifest-path Cargo.toml --locked -p ctx-core models::plugin`
   - Result: passed, 12 tests.
+
+## Declarative Plugin Registry Projection Slice
+
+- Worker validation:
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh test -p ctx-daemon extension_registry_projects_declarative_workbench_buckets -- --nocapture`
+  - Result: passed, 1 test on the worker branch.
+- Manager integration:
+  - `git cherry-pick 4223f2e`
+  - Result: passed; integrated as `4c8f7c0`.
+- Manager validation:
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh test --manifest-path Cargo.toml --locked -p ctx-core models::plugin`
+  - Result: passed, 12 tests.
+- Manager validation:
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh test --manifest-path Cargo.toml --locked -p ctx-daemon extension_registry_projects_declarative_workbench_buckets`
+  - Result: passed, 1 test.
+- Reviewer:
+  - Banach (`019ee1ca-ff8d-71b2-ba67-3e42615b3140`) found no Rust
+    projection blockers and identified two follow-ups: web store preservation
+    for new buckets and direct declarative duplicate-warning coverage.
+- Manager follow-up validation:
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh test --manifest-path Cargo.toml --locked -p ctx-daemon declarative_workbench`
+  - Result: passed, 2 tests after adding `e86cf92`.
+
+## Declarative Workbench Projection Slice
+
+- Worker validation:
+  - Focused Vitest could not run in the worker worktree because dependencies
+    were not installed there.
+- Reviewer:
+  - Rawls (`019ee1cb-d0a8-7363-88b6-f63a7bb02b9e`) found backend/type
+    projection dependency gaps before `4c8f7c0`, a `review-summary`
+    compatibility mismatch, and missing store-normalization coverage.
+  - All findings were addressed before the correction commit `903a55c`.
+- Manager integration:
+  - `git cherry-pick 0bdc5f7`
+  - Result: passed; integrated as `cd5f76e`.
+- Manager validation:
+  - `pnpm --dir core/apps/web exec vitest run src/pages/workbenchShell/pluginWorkbenchContributionProjection.test.ts src/state/pluginRegistryStore.test.ts`
+  - Result: passed, 2 files / 16 tests after `903a55c`.
+- Manager validation:
+  - `pnpm --dir core/apps/web typecheck`
+  - Result: passed after `903a55c`.
+
+## Slash Command Source Labels Slice
+
+- Worker validation:
+  - Focused Vitest passed on the worker branch for protocol slash command,
+    plugin command projection, and composer autocomplete tests.
+- Reviewer:
+  - Herschel (`019ee1cb-d3ae-7542-9610-4da75e65196a`) found no blockers and
+    identified coverage gaps around provider/plugin collision routing,
+    duplicate autocomplete keys, and Claude label consistency.
+  - All findings were addressed before the correction commit `c9d0eb1`.
+- Manager integration:
+  - `git cherry-pick 4c97c90`
+  - Result: passed; integrated as `65d9e22`.
+- Manager validation:
+  - `pnpm --dir core/apps/web exec vitest run src/utils/protocolSlashCommands.test.ts src/pages/workbenchShell/pluginCommandProjection.test.ts src/pages/workbenchShell/pluginCommandInvocation.test.ts src/state/useComposerAutocomplete.test.tsx`
+  - Result: passed, 4 files / 15 tests after `c9d0eb1`.
+- Manager validation:
+  - `pnpm --dir core/apps/web typecheck`
+  - Result: passed after `c9d0eb1`.

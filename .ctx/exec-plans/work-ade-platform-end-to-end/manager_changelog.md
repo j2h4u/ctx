@@ -113,3 +113,34 @@ Record each local commit or integrated worker handoff here.
   - Keeps arbitrary UI execution and redaction/export processors deferred.
   - Makes daemon/Rust manifest parsing fail closed on unknown fields and
     enforces toolbar command references against declared plugin commands.
+- `4c8f7c0` - Project declarative plugin buckets.
+  - Integrates worker branch `ctx/plugin-registry-declarative-buckets-20260619`.
+  - Adds daemon extension-registry projection for `templates`,
+    `toolbar_actions`, `artifact_renderers`, `card_renderers`,
+    `detail_sections`, and `review_sections`.
+  - Keeps provider/runtime collisions authority-bearing while treating
+    declarative bucket collisions as source-labeled advisory diagnostics.
+- `e86cf92` - Cover declarative plugin collision warnings.
+  - Adds direct daemon coverage for duplicate declarative Workbench IDs that
+    remain valid through namespace-prefix plugin IDs.
+  - Confirms affected plugins stay loaded, receive warning diagnostics, and
+    keep both plugin-qualified registry registrations.
+- `cd5f76e` - Project declarative workbench contributions.
+  - Integrates worker branch `ctx/workbench-declarative-contrib-20260619`.
+  - Adds inert frontend projection for the six declarative Workbench registry
+    buckets, with source labels, bucket grouping, compatibility states, and
+    loading/error/empty fallbacks.
+- `903a55c` - Align declarative workbench registry projection.
+  - Removes temporary local registry casts now that daemon/ctx-types expose the
+    declarative buckets directly.
+  - Aligns compatible template/renderer IDs with the public SDK examples and
+    adds store normalization coverage so buckets are preserved through daemon
+    loading.
+- `65d9e22` - Label slash command sources.
+  - Integrates worker branch `ctx/command-source-labels-20260619`.
+  - Adds source metadata for provider/plugin slash commands and renders compact
+    source labels in composer autocomplete while preserving command insertion.
+- `c9d0eb1` - Harden slash command source labels.
+  - Aligns provider labels with the harness catalog, covers provider/plugin
+    command collision insertion with namespaced plugin tokens, and prevents
+    duplicate autocomplete keys if duplicate descriptors leak through.

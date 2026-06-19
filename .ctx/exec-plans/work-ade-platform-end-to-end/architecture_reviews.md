@@ -76,3 +76,36 @@ Reviewer agents:
 - Residual architecture note: JSON Schema can validate target shape but cannot
   enforce same-manifest command cross-reference. That parity is enforced in the
   SDK and Rust model tests.
+
+## Declarative Plugin Registry And Workbench Projection Review
+
+- Reviewer Banach confirmed the Rust registry/daemon projection direction:
+  daemon extension registry records now carry the same six host-owned
+  declarative Workbench buckets exposed by the public SDK and Rust model.
+- The manager addressed Banach's web-store gap by integrating and correcting
+  the frontend registry normalization path, so daemon-projected `templates`,
+  `toolbar_actions`, `artifact_renderers`, `card_renderers`,
+  `detail_sections`, and `review_sections` are not dropped before Workbench
+  projection.
+- Reviewer Rawls' initial blocker was resolved by ordering integration so the
+  backend registry shape landed before frontend projection, then removing the
+  temporary local registry casts.
+- The slice remains host-owned and inert: renderer/template IDs are data
+  contracts over existing Workbench primitives, not arbitrary plugin React,
+  webview, or process execution.
+- Residual architecture note: public docs still need a later pass that clearly
+  names the initial host renderer/template vocabulary and how future IDs become
+  supported.
+
+## Slash Command Source Labels Review
+
+- Reviewer Herschel confirmed no source-label implementation blockers after
+  fixes. Provider and plugin slash commands now remain route-preserving while
+  displaying source labels for collision clarity.
+- The manager corrected the test shape to cover the real provider/plugin
+  collision path: provider `/review` and plugin `/review.tools:review`.
+- Source labels do not change invocation authority. Plugin command routing
+  still requires the namespaced plugin token and resolves through
+  `resolvePluginCommandMessage`.
+- Residual architecture note: richer command collision diagnostics can later
+  consume daemon plugin diagnostics, but this UI slice stays presentation-only.

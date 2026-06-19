@@ -148,3 +148,33 @@ Record adversarial test coverage reviews and gaps.
   gap: JSON Schema enforces shape and non-empty strings but cannot enforce
   same-manifest command cross-reference or whitespace-only trimming; SDK/Rust
   enforce those semantic checks.
+
+## Declarative Plugin Registry And Workbench Projection Review
+
+- Added Rust daemon coverage for projecting all six declarative Workbench
+  buckets into the extension registry.
+- Added Rust daemon coverage for duplicate declarative Workbench IDs that are
+  valid across namespace-prefix plugin IDs. The test confirms loaded status,
+  warning diagnostics, and retained plugin-qualified registrations.
+- Added frontend projection coverage for all six declarative buckets,
+  source-label metadata, compatibility states, malformed record filtering,
+  unsupported IDs, and loading/error/empty fallback states.
+- Added direct plugin registry store coverage so declarative registry buckets
+  are preserved and sorted through the daemon load/normalize/cache path.
+- Remaining gap: visual rendering of declarative host renderers is not covered
+  because this slice deliberately projects inert data only.
+
+## Slash Command Source Labels Review
+
+- Added/updated protocol slash command coverage for provider source metadata
+  and provider-specific filtering.
+- Added plugin command projection coverage for source-labeled namespaced slash
+  descriptors.
+- Added composer autocomplete coverage for provider/plugin command collisions,
+  ensuring the plugin selection inserts `/plugin.id:command` rather than the
+  provider token.
+- Added autocomplete regression coverage for duplicate descriptor keys.
+- Re-ran plugin command invocation tests to preserve routing semantics for
+  namespaced plugin slash commands.
+- Remaining gap: no browser/screen-reader audit yet for the visual source
+  label pill; this should be included with the next Playwright screenshot pass.

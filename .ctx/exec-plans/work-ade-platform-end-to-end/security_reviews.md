@@ -93,3 +93,20 @@ Record plugin, import/export, path, redaction, and capability security reviews.
 - Residual risk: once arbitrary UI/webview execution is introduced, it needs a
   separate capability, permission, sandbox, root-escape, env-leakage, and
   lifecycle security review before it is considered local-done.
+
+## Declarative Registry Projection And Slash Source Labels
+
+- Daemon extension-registry projection copies declarative Workbench
+  contributions as source-labeled data. It does not execute plugin entrypoints,
+  renderer code, React components, webviews, or module paths.
+- Duplicate declarative Workbench contribution IDs remain warning diagnostics
+  because rendered/useful surfaces are plugin-qualified and source-labeled.
+  Provider/runtime IDs remain authority-bearing hard errors.
+- Web Workbench projection treats template/renderer IDs as compatibility data
+  over host-owned primitives. Unsupported IDs are surfaced as unsupported data
+  rather than executed.
+- Slash command source labels are presentation-only. Provider commands and
+  plugin commands keep their existing routing contracts; plugin command
+  invocation still requires the namespaced plugin slash token.
+- Residual risk: future executable UI/webview contributions and richer
+  diagnostics surfaces need separate security review before local-done.
