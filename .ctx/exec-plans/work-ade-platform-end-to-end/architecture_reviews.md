@@ -57,3 +57,22 @@ Reviewer agents:
 - Non-blocking docs organization suggestion: move the harness boundary link out
   of the top docs "Start here" list. The manager applied this by placing the
   link under an Examples heading in `docs/README.md`.
+
+## Declarative Plugin Contribution Contract Review
+
+- Reviewer Poincare (`019ee1b3-9618-7ba2-b6d6-47bf1d4f5340`) reviewed worker
+  commit `276b773` after earlier blocker fixes and found no remaining blockers.
+- The slice keeps the public plugin contract manifest-first: ACP/provider,
+  command, collector, observer, and `ui_surfaces` remain the executable/local
+  runtime buckets; new Workbench `templates`, `toolbar_actions`,
+  `artifact_renderers`, `card_renderers`, `detail_sections`, and
+  `review_sections` are declarative host-owned buckets only.
+- The contract explicitly does not introduce arbitrary React/webview execution
+  or redaction/export processor execution in the manifest. Processor markers
+  remain SDK sidecars until provenance, permissions, and lifecycle semantics are
+  specified.
+- Toolbar `command` targets now mean declared commands in the same plugin,
+  while `action` targets remain an approved ctx action enum.
+- Residual architecture note: JSON Schema can validate target shape but cannot
+  enforce same-manifest command cross-reference. That parity is enforced in the
+  SDK and Rust model tests.

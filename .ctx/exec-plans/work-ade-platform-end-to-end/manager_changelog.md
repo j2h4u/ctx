@@ -106,3 +106,10 @@ Record each local commit or integrated worker handoff here.
     state out of public local import.
   - Closes reviewer gaps for dry-run relational validation and cross-workspace
     ID collision coverage.
+- `a4a53be` - Add declarative plugin contribution contract.
+  - Integrates worker branch `ctx/plugin-sdk-declarative-v2-20260619`.
+  - Adds host-owned declarative Workbench contribution buckets to the public
+    manifest, SDK, JSON schema, ctx-types, and Rust plugin model.
+  - Keeps arbitrary UI execution and redaction/export processors deferred.
+  - Makes daemon/Rust manifest parsing fail closed on unknown fields and
+    enforces toolbar command references against declared plugin commands.

@@ -133,3 +133,18 @@ Record adversarial test coverage reviews and gaps.
   without persisting the preceding valid change set.
 - Reviewer found no blockers after the slice was narrowed to local import and
   confirmed `ctx work capture` remains intentionally diagnostic-only.
+
+## Declarative Plugin Contribution Contract Review
+
+- Added SDK tests for declarative Workbench contribution buckets in the manifest.
+- Added negative SDK tests for runtime-shaped declarative fields, manifest
+  processor buckets, null toolbar targets, empty toolbar command targets, and
+  unknown toolbar command references.
+- Added Rust model tests for public manifest round trips, strict unknown-field
+  parsing, null toolbar targets, and unknown toolbar command references.
+- Added ctx-types type coverage by tightening toolbar target types so `command`
+  and `action` are omitted-or-non-null.
+- Reviewer confirmed previous parity blockers were cleared. Residual accepted
+  gap: JSON Schema enforces shape and non-empty strings but cannot enforce
+  same-manifest command cross-reference or whitespace-only trimming; SDK/Rust
+  enforce those semantic checks.

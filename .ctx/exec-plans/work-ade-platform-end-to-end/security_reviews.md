@@ -74,3 +74,22 @@ Record plugin, import/export, path, redaction, and capability security reviews.
 - Residual risk: active plugin command behavior during reload/remove still
   needs an explicit lifecycle slice before plugin dev-loop semantics are
   complete.
+
+## Declarative Plugin Contribution Contract Slice
+
+- Rust manifest parsing now uses strict `deny_unknown_fields` on public manifest
+  structs, so daemon loading rejects stray runtime-shaped declarative fields,
+  processor buckets, and unknown top-level keys instead of silently dropping
+  them.
+- The new declarative Workbench buckets are host-owned declarations only. They
+  identify host-known templates, renderer IDs, sections, data sources, and
+  approved action or declared command targets; they do not load arbitrary
+  renderer code, JavaScript modules, webview URLs, or React component names.
+- Toolbar command targets now validate against commands declared by the same
+  plugin. This avoids a misleading manifest where a toolbar button points at a
+  nonexistent plugin command.
+- Redaction/export processors remain out of the manifest and are only SDK
+  sidecar markers in this slice.
+- Residual risk: once arbitrary UI/webview execution is introduced, it needs a
+  separate capability, permission, sandbox, root-escape, env-leakage, and
+  lifecycle security review before it is considered local-done.

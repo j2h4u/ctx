@@ -221,3 +221,40 @@ These baseline results must be rerun after subsequent implementation phases.
 - Manager integration:
   - `git cherry-pick 68692be`
   - Result: passed; integrated as `0fd4576`.
+
+## Declarative Plugin Contribution Contract Slice
+
+- Worker validation:
+  - `pnpm --dir core/packages/plugin-sdk run typecheck`
+  - `pnpm --dir core/packages/plugin-sdk run test`
+  - `pnpm --dir core/packages/ctx-types run typecheck`
+  - Result: passed. SDK tests covered declarative Workbench buckets,
+    runtime-shaped field rejection, null toolbar targets, empty toolbar
+    commands, and unknown command references.
+- Worker validation:
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh test --manifest-path Cargo.toml --locked -p ctx-core models::plugin`
+  - Result: passed, 12 tests. Covered strict unknown-field rejection, null
+    toolbar targets, unknown toolbar command references, and public manifest
+    round trips.
+- Worker hygiene:
+  - `cargo fmt --manifest-path core/Cargo.toml --all -- --check`
+  - `git diff --check`
+  - Result: passed.
+- Reviewer:
+  - Carson (`019ee18e-2c5d-7b62-9cff-db5dbd2e4de1`) found null target
+    parity issues before the first fix.
+  - Plato (`019ee1aa-20db-78c1-8359-effb1482d401`) found strict unknown-field,
+    empty command, and command-reference parity blockers.
+  - Poincare (`019ee1b3-9618-7ba2-b6d6-47bf1d4f5340`) re-reviewed after fixes
+    and found no blockers.
+- Manager integration:
+  - `git cherry-pick 276b773`
+  - Result: passed; integrated as `a4a53be`.
+- Manager validation:
+  - `pnpm --dir core/packages/plugin-sdk run typecheck`
+  - `pnpm --dir core/packages/plugin-sdk run test`
+  - `pnpm --dir core/packages/ctx-types run typecheck`
+  - Result: passed.
+- Manager validation:
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh test --manifest-path Cargo.toml --locked -p ctx-core models::plugin`
+  - Result: passed, 12 tests.
