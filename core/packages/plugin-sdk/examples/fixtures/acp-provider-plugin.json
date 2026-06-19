@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "id": "example.acp-provider",
+  "name": "Example ACP Provider",
+  "version": "0.1.0",
+  "description": "Example local ACP v1 provider plugin manifest.",
+  "entrypoints": [
+    {
+      "id": "agent",
+      "kind": "process",
+      "command": "example-agent-acp"
+    }
+  ],
+  "contributes": {
+    "providers": [
+      {
+        "id": "example-agent",
+        "name": "Example Agent",
+        "entrypoint": "agent",
+        "capabilities": ["acp.v1"]
+      }
+    ]
+  },
+  "compatibility": {
+    "capabilities": ["plugins.manifest.v1", "acp.v1.local-stdio"]
+  }
+}

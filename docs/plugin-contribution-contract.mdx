@@ -21,13 +21,13 @@ Supported or explicitly deferred contribution types:
 | Collectors/importers | Supported |
 | Observers | Supported |
 | Redaction/export processors | Supported or explicitly deferred |
-| Workbench panels | Supported |
-| Workbench templates | Supported |
+| Workbench panels | Supported through `ui_surfaces` |
+| Workbench templates | Supported or explicitly deferred |
 | Card renderers | Supported or explicitly deferred |
 | Detail sections | Supported or explicitly deferred |
 | Review sections | Supported or explicitly deferred |
 | Toolbar actions | Supported or explicitly deferred |
-| Artifact renderers | Supported |
+| Artifact renderers | Supported or explicitly deferred |
 | Arbitrary webview/React UI | Deferred or gated behind explicit capability |
 
 Silent partial support is not allowed. If a contribution appears in the public
@@ -144,10 +144,7 @@ export default defineCtxPlugin({
   version: "0.1.0",
   contributes: {
     commands: [],
-    workbench: {
-      panels: [],
-      templates: [],
-    },
+    ui_surfaces: [],
   },
 });
 ```

@@ -1,0 +1,77 @@
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//core/packages/plugin-sdk:typescript/package_json.bzl", tsc_bin = "bin")
+load("@aspect_rules_js//js:defs.bzl", "js_run_binary", "js_test")
+load("@aspect_rules_js//npm:defs.bzl", "npm_package")
+
+package(default_visibility = ["//visibility:public"])
+
+PLUGIN_SDK_LOCAL_SOURCES = glob(
+    [
+        "examples/**/*",
+        "src/**/*",
+        "test-d/**/*",
+        "tests/**/*",
+    ],
+    allow_empty = True,
+) + [
+    "README.md",
+    "package.json",
+    "tsconfig.json",
+]
+
+PLUGIN_SDK_DATA = PLUGIN_SDK_LOCAL_SOURCES + [
+    "//core:tsconfig_json",
+]
+
+npm_link_all_packages()
+
+npm_package(
+    name = "pkg",
+    srcs = glob(["examples/**/*", "src/**/*"]) + [
+        "README.md",
+        "package.json",
+    ],
+    package = "@ctx/plugin-sdk",
+)
+
+tsc_bin.tsc_test(
+    name = "typecheck",
+    args = [
+        "--noEmit",
+        "--incremental",
+        "false",
+    ],
+    data = PLUGIN_SDK_DATA + [
+        ":node_modules/typescript",
+    ],
+    chdir = package_name(),
+)
+
+tsc_bin.tsc_binary(
+    name = "tsc_bin",
+    data = PLUGIN_SDK_DATA + [
+        ":node_modules/typescript",
+    ],
+    chdir = package_name(),
+)
+
+js_run_binary(
+    name = "build",
+    srcs = PLUGIN_SDK_LOCAL_SOURCES,
+    args = [
+        "-p",
+        "tsconfig.json",
+    ],
+    out_dirs = ["dist"],
+    tool = ":tsc_bin",
+    chdir = package_name(),
+)
+
+js_test(
+    name = "unit_tests",
+    data = PLUGIN_SDK_DATA + [
+        ":build",
+    ],
+    entry_point = "tests/plugin-sdk.test.mjs",
+    chdir = package_name(),
+)

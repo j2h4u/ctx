@@ -44,3 +44,23 @@ These baseline results must be rerun after subsequent implementation phases.
 - Before commit:
   - `pnpm -C core/apps/web typecheck`
   - Result: passed.
+
+## Plugin SDK Slice
+
+- Before commit:
+  - `pnpm -C core install --lockfile-only`
+  - Result: passed. Lockfile-only metadata refresh; no package tree install.
+    Existing deprecation warnings from transitive dependencies remained
+    warnings only.
+- Before commit:
+  - `pnpm -C core/packages/plugin-sdk test`
+  - Result: passed, 10 Node tests. This command built the package with `tsc -p
+    tsconfig.json` and ran tests against generated `dist` output.
+- Before commit:
+  - `pnpm -C core/packages/plugin-sdk typecheck`
+  - Result: passed.
+- Before commit:
+  - `.buildkite/run-bazel.sh test //core/packages/plugin-sdk:unit_tests //core/packages/plugin-sdk:typecheck`
+  - Result: passed, 2 Bazel targets. Initial failures exposed missing
+    repo-level `tsconfig.json` runfiles wiring; fixed by adding a root
+    `tsconfig_json` `js_library`.
