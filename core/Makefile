@@ -1,11 +1,14 @@
-.PHONY: test daemon web dev
+.PHONY: check test daemon web dev
 
 CTX_DAEMON_BIND ?= 127.0.0.1:4399
 CTX_DATA_DIR ?= $(HOME)/.ctx
 CTX_WEB_PORT ?= 5173
 
+check:
+	scripts/dev/check-local.sh
+
 test:
-	cargo test --workspace
+	scripts/dev/cargo-safe.sh test --manifest-path Cargo.toml --workspace --locked
 	pnpm -C apps/web test
 
 daemon:
