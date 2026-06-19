@@ -47,8 +47,24 @@ describe("deriveProtocolSlashCommands", () => {
     });
 
     expect(commands).toEqual([
-      { name: "compact" },
-      { name: "review" },
+      {
+        name: "compact",
+        source: {
+          kind: "provider",
+          providerId: "claude-crp",
+          protocol: "CRP",
+          label: "Claude",
+        },
+      },
+      {
+        name: "review",
+        source: {
+          kind: "provider",
+          providerId: "claude-crp",
+          protocol: "CRP",
+          label: "Claude",
+        },
+      },
     ]);
   });
 
@@ -65,8 +81,44 @@ describe("deriveProtocolSlashCommands", () => {
     });
 
     expect(commands).toEqual([
-      { name: "compact", description: "Summarize conversation" },
-      { name: "review" },
+      {
+        name: "compact",
+        description: "Summarize conversation",
+        source: {
+          kind: "provider",
+          providerId: "codex",
+          protocol: "ACP",
+          label: "Codex",
+        },
+      },
+      {
+        name: "review",
+        source: {
+          kind: "provider",
+          providerId: "codex",
+          protocol: "ACP",
+          label: "Codex",
+        },
+      },
+    ]);
+  });
+
+  it("uses the provider id as a safe source label for unknown providers", () => {
+    const commands = deriveProtocolSlashCommands({
+      providerId: "custom-provider",
+      slashCommands: ["/review"],
+    });
+
+    expect(commands).toEqual([
+      {
+        name: "review",
+        source: {
+          kind: "provider",
+          providerId: "custom-provider",
+          protocol: undefined,
+          label: "custom-provider",
+        },
+      },
     ]);
   });
 });

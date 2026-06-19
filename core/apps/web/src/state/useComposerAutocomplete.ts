@@ -13,6 +13,33 @@ export type SlashCommandDescriptor = {
   name: string;
   description?: string;
   argumentHint?: string;
+  source?: SlashCommandSourceMetadata;
+};
+
+export type SlashCommandSourceMetadata =
+  | {
+      kind: "provider";
+      providerId?: string;
+      protocol?: string;
+      label: string;
+    }
+  | {
+      kind: "plugin";
+      pluginId: string;
+      pluginName: string;
+      label: string;
+    }
+  | {
+      kind: "ctx";
+      label: string;
+    };
+
+const slashCommandSourceKey = (command: SlashCommandDescriptor): string => {
+  const source = command.source;
+  if (!source) return "default";
+  if (source.kind === "provider") return `provider:${source.providerId ?? source.label}`;
+  if (source.kind === "plugin") return `plugin:${source.pluginId}`;
+  return `ctx:${source.label}`;
 };
 
 export function useComposerAutocomplete({
@@ -105,10 +132,11 @@ export function useComposerAutocomplete({
       return name.startsWith(q) || name.includes(q) || full.includes(q);
     });
     return filtered.slice(0, 10).map((c) => ({
-      key: `slash:${c.name}`,
+      key: `slash:${c.name}:${slashCommandSourceKey(c)}`,
       label: `/${c.name}`,
       insertText: `/${c.name}`,
       description: c.description,
+      sourceLabel: c.source?.label,
       kind: "slash",
     }));
   }, [slashCommands, token]);

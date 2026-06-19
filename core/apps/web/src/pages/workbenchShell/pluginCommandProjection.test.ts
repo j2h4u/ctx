@@ -161,6 +161,12 @@ describe("pluginCommandProjection", () => {
       {
         name: "review.tools:review",
         description: "Review Diff - Run a plugin review pass.",
+        source: {
+          kind: "plugin",
+          pluginId: "review.tools",
+          pluginName: "Review Tools",
+          label: "Review Tools",
+        },
       },
     ]);
   });

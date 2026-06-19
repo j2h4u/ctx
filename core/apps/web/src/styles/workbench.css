@@ -4230,6 +4230,15 @@
 .composer-ac-item-text {
   min-width: 0;
   flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.composer-ac-item-main {
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4244,6 +4253,20 @@
 .composer-ac-item-right {
   font-size: 12px;
   color: var(--text-dim);
+}
+
+.composer-ac-source {
+  flex: 0 1 auto;
+  max-width: 116px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--text-dim);
+  background: var(--surface-soft);
 }
 
 .composer-ac-preview-popover {

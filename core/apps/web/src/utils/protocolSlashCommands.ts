@@ -112,6 +112,12 @@ const readString = (value: unknown): string | undefined => {
   return trimmed ? trimmed : undefined;
 };
 
+const providerSourceLabel = (providerId: string): string => {
+  if (providerId === "claude-crp") return "Claude";
+  if (providerId === "codex") return "Codex";
+  return providerId;
+};
+
 const normalizeSlashCommandName = (value: unknown): string | undefined => {
   const raw = readString(value);
   if (!raw) return undefined;
@@ -154,8 +160,17 @@ export function deriveProtocolSlashCommands(meta: {
 }): SlashCommandDescriptor[] {
   const out: SlashCommandDescriptor[] = [];
   const seen = new Set<string>();
-  const filterClaude = meta.providerId === "claude-crp";
-  const filterCodex = meta.providerId === "codex";
+  const providerId = readString(meta.providerId);
+  const filterClaude = providerId === "claude-crp";
+  const filterCodex = providerId === "codex";
+  const providerSource = providerId
+    ? {
+        kind: "provider" as const,
+        providerId,
+        protocol: providerId === "claude-crp" ? "CRP" : providerId === "codex" ? "ACP" : undefined,
+        label: providerSourceLabel(providerId),
+      }
+    : undefined;
 
   const add = (command: SlashCommandDescriptor | null) => {
     if (!command) return;
@@ -164,7 +179,7 @@ export function deriveProtocolSlashCommands(meta: {
     if (filterClaude && !isCtxSupportedClaudeProtocolCommand(key)) return;
     if (filterCodex && !isCtxSupportedCodexProtocolCommand(key)) return;
     seen.add(key);
-    out.push(command);
+    out.push(providerSource ? { ...command, source: command.source ?? providerSource } : command);
   };
 
   if (Array.isArray(meta.commands)) {

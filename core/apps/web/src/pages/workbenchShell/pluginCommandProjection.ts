@@ -68,4 +68,10 @@ export const projectPluginSlashCommands = (
     description: entry.description
       ? `${entry.title} - ${entry.description}`
       : `${entry.title} - ${entry.pluginName}`,
+    source: {
+      kind: "plugin",
+      pluginId: entry.pluginId,
+      pluginName: entry.pluginName,
+      label: entry.pluginName,
+    },
   }));

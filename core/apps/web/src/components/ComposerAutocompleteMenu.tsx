@@ -11,6 +11,7 @@ export type ComposerAutocompleteItem =
       label: string;
       insertText: string;
       description?: string;
+      sourceLabel?: string;
     }
   | {
       key: string;
@@ -144,6 +145,11 @@ export function ComposerAutocompleteMenu({
             : it.description
               ? it.description
               : "";
+        const sourceLabel = it.kind === "slash" ? it.sourceLabel : undefined;
+        const title =
+          it.kind === "file"
+            ? `${left} ${right}`.trim()
+            : [left, right, sourceLabel].filter(Boolean).join(" ");
 
         return (
           <div
@@ -165,9 +171,12 @@ export function ComposerAutocompleteMenu({
                 <FileIcon path={it.path} size={16} />
               </span>
             ) : null}
-            <span className="composer-ac-item-text" title={it.kind === "file" ? `${left} ${right}`.trim() : left}>
-              <span className="composer-ac-item-left">{left}</span>
-              {right && <span className="composer-ac-item-right"> {right}</span>}
+            <span className="composer-ac-item-text" title={title}>
+              <span className="composer-ac-item-main">
+                <span className="composer-ac-item-left">{left}</span>
+                {right && <span className="composer-ac-item-right"> {right}</span>}
+              </span>
+              {sourceLabel && <span className="composer-ac-source">{sourceLabel}</span>}
             </span>
           </div>
         );
