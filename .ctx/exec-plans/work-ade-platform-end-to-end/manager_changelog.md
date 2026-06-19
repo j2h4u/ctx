@@ -51,8 +51,16 @@ Record each local commit or integrated worker handoff here.
   - Adds local schema listing/printing, structural JSON validation, safe
     metadata inspection, redaction preview, durable local diagnostics, and
     explicit not-implemented diagnostics for list/show/capture/export/import.
-- pending - Harden Work CLI validation and redaction.
+- `c2af929` - Harden Work CLI validation and redaction.
   - Addresses adversarial review findings by routing plugin manifest validation
     through the Rust manifest model, rejecting unknown plugin manifest fields,
     extending transcript-like event redaction, and adding bundle schema smoke
     coverage.
+- pending - Add store-backed Work CLI operations.
+  - Wires `ctx work list`, `ctx work show`, `ctx work export`, and `ctx work
+    import` to the existing local `StoreManager` Work graph.
+  - Keeps `ctx work capture` as an explicit local diagnostic because live
+    capture needs daemon/session semantics rather than direct store wrapping.
+  - Defaults exports to safe redaction, supports explicit full-local export,
+    rejects cross-workspace imports, and keeps hosted/team/enforcement state out
+    of the public local CLI.

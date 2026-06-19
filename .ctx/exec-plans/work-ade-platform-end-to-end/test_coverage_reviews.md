@@ -59,3 +59,19 @@ Record adversarial test coverage reviews and gaps.
   model, daemon loader, CLI validator, and TypeScript SDK. A later slice should
   either generate validation from one schema source or add a shared contract
   parity test across those implementations.
+
+## Store-Backed Work CLI Slice Review
+
+- Added unit coverage for local store-backed `ctx work list`, `ctx work show`,
+  `ctx work export`, and `ctx work import` against a real temp `StoreManager`
+  and workspace store.
+- Covered full-local export/import round trip so persisted change sets and
+  contributions survive across data roots when the target workspace identity is
+  explicitly registered.
+- Covered workspace-mismatch rejection before writing so imports cannot
+  accidentally merge records into a different local workspace.
+- Preserved JSON-only stdout for `--json` and stdout export modes so
+  machine-readable output is parseable without stripping diagnostics.
+- Remaining gap: live `ctx work capture` remains intentionally diagnostic-only
+  until the daemon/session capture design lands; it should capture durable Work
+  events through daemon-owned semantics rather than direct ad hoc store writes.

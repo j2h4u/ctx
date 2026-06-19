@@ -26,3 +26,20 @@ Record plugin, import/export, path, redaction, and capability security reviews.
   installed. The final plugin threat model must explicitly review root escape,
   env leakage, command timeout/output caps, provider ID collisions, and
   diagnostics visibility.
+
+## Store-Backed Work CLI Slice
+
+- Local import/export is scoped to public Work records only: change sets and
+  contributions. It does not import hosted, team, enterprise, policy, gate, or
+  enforcement state.
+- `ctx work import` rejects records whose embedded workspace id does not match
+  the selected local workspace before writing.
+- `ctx work export` defaults to `safe-summary` redaction and requires explicit
+  `--redaction-profile full-local` for raw local records.
+- JSON stdout modes suppress diagnostics on stdout so downstream tools do not
+  accidentally parse mixed data and diagnostic text.
+- Residual risk: import writes are sequential through existing store APIs, not
+  yet a single explicit transaction. Existing store validation protects
+  workspace relationships and endpoint references, but transactional all-or-none
+  import should be added when the store API gains a dedicated import bundle
+  method.

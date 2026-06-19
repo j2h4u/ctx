@@ -96,3 +96,15 @@ These baseline results must be rerun after subsequent implementation phases.
   - `.buildkite/run-bazel.sh test --jobs=2 //core/crates/ctx-http:bin_tests_root_help //core/crates/ctx-http:bin_tests_agent_work_help //core/crates/ctx-http:bin_tests_agent_work_schema`
   - Result: passed, 3 Bazel smoke targets. The rerun used `--jobs=2` to reduce
     local memory pressure.
+
+## Store-Backed Work CLI Slice
+
+- Before commit:
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh test --manifest-path Cargo.toml --locked -p ctx-http --bin ctx agent_work_cli`
+  - Result: passed, 17 tests. Conservative cap: MemoryMax=24G, one cargo job,
+    one test thread.
+- Before commit:
+  - `.buildkite/run-bazel.sh test --jobs=2 //core/crates/ctx-http:bin_tests_root_help //core/crates/ctx-http:bin_tests_agent_work_help //core/crates/ctx-http:bin_tests_agent_work_schema`
+  - Result: passed, 3 Bazel smoke targets. First run exposed missing explicit
+    deps on the Bazel `ctx` binary target for `ctx-store`, `ctx-http-auth`,
+    `directories`, `serde`, and `uuid`; fixed before rerun.

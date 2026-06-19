@@ -1,10 +1,15 @@
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use clap::{Args, Subcommand, ValueEnum};
+use ctx_core::ids::{ChangeSetId, ContributionId, WorkspaceId};
 use ctx_core::models::PluginManifest;
+use ctx_core::models::{ChangeSet, Contribution};
+use ctx_store::{Store, StoreManager};
+use directories::BaseDirs;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Args)]
@@ -24,15 +29,15 @@ pub(crate) enum AgentWorkSubcommand {
     /// Show local redaction decisions for a Work JSON fixture.
     RedactionPreview(AgentWorkFileArgs),
     /// List local Work records.
-    List,
+    List(AgentWorkListArgs),
     /// Show a local Work record.
-    Show,
+    Show(AgentWorkShowArgs),
     /// Capture local Work records.
-    Capture,
+    Capture(AgentWorkStoreArgs),
     /// Export local Work records.
-    Export,
+    Export(AgentWorkExportArgs),
     /// Import local Work records.
-    Import,
+    Import(AgentWorkImportArgs),
 }
 
 #[derive(Debug, Args)]
@@ -57,6 +62,65 @@ pub(crate) struct AgentWorkFileArgs {
     pub(crate) file: PathBuf,
 }
 
+#[derive(Debug, Args, Clone)]
+pub(crate) struct AgentWorkStoreArgs {
+    /// ctx data root. Defaults to CTX_DATA_ROOT, then ~/.ctx.
+    #[arg(long)]
+    pub(crate) data_dir: Option<PathBuf>,
+    /// Workspace id to read or write. If omitted, ctx uses the only registered workspace.
+    #[arg(long)]
+    pub(crate) workspace_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentWorkListArgs {
+    #[command(flatten)]
+    pub(crate) store: AgentWorkStoreArgs,
+    /// Record class to list.
+    #[arg(long, value_enum, default_value = "all")]
+    pub(crate) kind: AgentWorkRecordKind,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentWorkShowArgs {
+    #[command(flatten)]
+    pub(crate) store: AgentWorkStoreArgs,
+    /// Record class. Omit to infer from the id prefix, then search both stores.
+    #[arg(long, value_enum)]
+    pub(crate) kind: Option<AgentWorkRecordKind>,
+    /// Change set or contribution id.
+    pub(crate) id: String,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentWorkExportArgs {
+    #[command(flatten)]
+    pub(crate) store: AgentWorkStoreArgs,
+    /// File to write. Omit to write JSON to stdout.
+    #[arg(long)]
+    pub(crate) output: Option<PathBuf>,
+    /// Redaction policy for exported records.
+    #[arg(long, value_enum, default_value = "safe-summary")]
+    pub(crate) redaction_profile: AgentWorkRedactionProfile,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentWorkImportArgs {
+    #[command(flatten)]
+    pub(crate) store: AgentWorkStoreArgs,
+    /// AgentWork JSON file produced by `ctx work export` or matching the public schema.
+    pub(crate) file: PathBuf,
+    /// Validate and report counts without writing records.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub(crate) enum AgentWorkSchemaKind {
     WorkBundle,
@@ -69,13 +133,44 @@ pub(crate) enum AgentWorkSchemaKind {
     PluginManifest,
 }
 
-pub(crate) fn run(command: AgentWorkCommand) -> Result<()> {
-    let stdout = io::stdout();
-    let mut stdout = stdout.lock();
-    run_with_writer(command, &mut stdout)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum AgentWorkRecordKind {
+    All,
+    ChangeSet,
+    Contribution,
 }
 
-fn run_with_writer(command: AgentWorkCommand, writer: &mut dyn Write) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum AgentWorkRedactionProfile {
+    /// Redact obvious secrets, host paths, and transcript-like payloads.
+    SafeSummary,
+    /// Preserve full local records. Use only for trusted local imports/exports.
+    FullLocal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AgentWorkExport {
+    change_sets: Vec<ChangeSet>,
+    contributions: Vec<Contribution>,
+}
+
+impl AgentWorkRecordKind {
+    fn includes_change_sets(self) -> bool {
+        matches!(self, Self::All | Self::ChangeSet)
+    }
+
+    fn includes_contributions(self) -> bool {
+        matches!(self, Self::All | Self::Contribution)
+    }
+}
+
+pub(crate) async fn run(command: AgentWorkCommand) -> Result<()> {
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    run_with_writer(command, &mut stdout).await
+}
+
+async fn run_with_writer(command: AgentWorkCommand, writer: &mut dyn Write) -> Result<()> {
     match command.command {
         AgentWorkSubcommand::Schema(args) => {
             write_schema(args, writer)?;
@@ -139,20 +234,20 @@ fn run_with_writer(command: AgentWorkCommand, writer: &mut dyn Write) -> Result<
             })?;
             write_redaction_preview(&args.file, &value, writer)?;
         }
-        AgentWorkSubcommand::List => {
-            not_implemented("list")?;
+        AgentWorkSubcommand::List(args) => {
+            list_work_records(args, writer).await?;
         }
-        AgentWorkSubcommand::Show => {
-            not_implemented("show")?;
+        AgentWorkSubcommand::Show(args) => {
+            show_work_record(args, writer).await?;
         }
-        AgentWorkSubcommand::Capture => {
+        AgentWorkSubcommand::Capture(_args) => {
             not_implemented("capture")?;
         }
-        AgentWorkSubcommand::Export => {
-            not_implemented("export")?;
+        AgentWorkSubcommand::Export(args) => {
+            export_work_records(args, writer).await?;
         }
-        AgentWorkSubcommand::Import => {
-            import_not_implemented()?;
+        AgentWorkSubcommand::Import(args) => {
+            import_work_records(args, writer).await?;
         }
     }
     Ok(())
@@ -171,15 +266,221 @@ fn not_implemented(command: &str) -> Result<()> {
     )
 }
 
-fn import_not_implemented() -> Result<()> {
-    bail!(
-        "{}",
+async fn list_work_records(args: AgentWorkListArgs, writer: &mut dyn Write) -> Result<()> {
+    let context = open_work_store(&args.store).await?;
+    let bundle = load_work_export(&context.store, context.workspace_id).await?;
+
+    if args.json {
+        let value = filtered_export_value(&bundle, args.kind)?;
+        serde_json::to_writer_pretty(&mut *writer, &value)?;
+        writeln!(writer)?;
+    } else {
+        writeln!(writer, "workspace: {}", context.workspace_id.0)?;
+        if args.kind.includes_change_sets() {
+            writeln!(writer, "change_sets: {}", bundle.change_sets.len())?;
+            for change_set in &bundle.change_sets {
+                writeln!(
+                    writer,
+                    "- {}{}",
+                    change_set.id,
+                    optional_title_suffix(change_set.title.as_deref())
+                )?;
+            }
+        }
+        if args.kind.includes_contributions() {
+            writeln!(writer, "contributions: {}", bundle.contributions.len())?;
+            for contribution in &bundle.contributions {
+                writeln!(
+                    writer,
+                    "- {}{}",
+                    contribution.id,
+                    optional_title_suffix(contribution.summary.as_deref())
+                )?;
+            }
+        }
+    }
+    if !args.json {
+        write_diagnostic(
+            writer,
+            DiagnosticSeverity::Info,
+            "ctx.work.list.completed",
+            &format!(
+                "listed Work records from {} for workspace {}",
+                context.data_root.display(),
+                context.workspace_id.0
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+async fn show_work_record(args: AgentWorkShowArgs, writer: &mut dyn Write) -> Result<()> {
+    let context = open_work_store(&args.store).await?;
+    let kind = args
+        .kind
+        .unwrap_or_else(|| infer_record_kind_from_id(&args.id));
+    let value = match kind {
+        AgentWorkRecordKind::All => {
+            find_work_record_value(&context.store, context.workspace_id, &args.id).await?
+        }
+        AgentWorkRecordKind::ChangeSet => context
+            .store
+            .get_workspace_change_set(context.workspace_id, ChangeSetId::from_id(args.id.clone()))
+            .await?
+            .map(serde_json::to_value)
+            .transpose()?
+            .with_context(|| format!("change set {} not found", args.id))?,
+        AgentWorkRecordKind::Contribution => context
+            .store
+            .get_contribution(ContributionId::from_id(args.id.clone()))
+            .await?
+            .filter(|contribution| contribution.workspace_id == context.workspace_id)
+            .map(serde_json::to_value)
+            .transpose()?
+            .with_context(|| format!("contribution {} not found", args.id))?,
+    };
+
+    if args.json {
+        serde_json::to_writer_pretty(&mut *writer, &value)?;
+        writeln!(writer)?;
+    } else {
+        writeln!(writer, "workspace: {}", context.workspace_id.0)?;
+        if let Some(record_type) = record_type_for_value(&value) {
+            writeln!(writer, "record_type: {record_type}")?;
+        }
+        if let Some(id) = value.get("id").and_then(Value::as_str) {
+            writeln!(writer, "id: {id}")?;
+        }
+        if let Some(title) = value
+            .get("title")
+            .or_else(|| value.get("summary"))
+            .and_then(Value::as_str)
+        {
+            writeln!(
+                writer,
+                "summary: {}",
+                ctx_core::redaction::redact_sensitive(title)
+            )?;
+        }
+    }
+    if !args.json {
+        write_diagnostic(
+            writer,
+            DiagnosticSeverity::Info,
+            "ctx.work.show.completed",
+            &format!(
+                "showed Work record {} from workspace {}",
+                args.id, context.workspace_id.0
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+async fn export_work_records(args: AgentWorkExportArgs, writer: &mut dyn Write) -> Result<()> {
+    let context = open_work_store(&args.store).await?;
+    let bundle = load_work_export(&context.store, context.workspace_id).await?;
+    let mut value = serde_json::to_value(&bundle).context("serializing Work export")?;
+    validate_value(AgentWorkSchemaKind::AgentWork, &value)
+        .context("generated Work export failed local validation")?;
+    if args.redaction_profile == AgentWorkRedactionProfile::SafeSummary {
+        value = redaction_preview(&value).value;
+    }
+
+    let wrote_file = if let Some(output) = args.output {
+        write_json_file(&output, &value)?;
+        writeln!(
+            writer,
+            "exported {} change sets and {} contributions to {}",
+            bundle.change_sets.len(),
+            bundle.contributions.len(),
+            output.display()
+        )?;
+        true
+    } else {
+        serde_json::to_writer_pretty(&mut *writer, &value)?;
+        writeln!(writer)?;
+        false
+    };
+    if wrote_file {
+        write_diagnostic(
+            writer,
+            DiagnosticSeverity::Info,
+            "ctx.work.export.completed",
+            &format!(
+                "exported Work records from {} for workspace {} with {:?} redaction",
+                context.data_root.display(),
+                context.workspace_id.0,
+                args.redaction_profile
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+async fn import_work_records(args: AgentWorkImportArgs, writer: &mut dyn Write) -> Result<()> {
+    let value = read_json_file(&args.file).with_context(|| {
         durable_diagnostic(
             DiagnosticSeverity::Error,
-            "ctx.work.import.not_implemented",
-            "ctx work import is not implemented in this local CLI slice yet; use `ctx work validate`, `ctx work inspect`, or `ctx work redaction-preview` for local bundle checks. Old control-plane imports are intentionally not active here and future support must import only historical Work records/diagnostics, never hosted/team enforcement state",
+            "ctx.work.import.invalid_json",
+            &format!("failed to parse {}", args.file.display()),
         )
-    )
+    })?;
+    validate_value(AgentWorkSchemaKind::AgentWork, &value).with_context(|| {
+        durable_diagnostic(
+            DiagnosticSeverity::Error,
+            "ctx.work.import.invalid_agent_work",
+            &format!(
+                "{} is not a valid local AgentWork export",
+                args.file.display()
+            ),
+        )
+    })?;
+    let bundle: AgentWorkExport =
+        serde_json::from_value(value).context("decoding local AgentWork export")?;
+    let context = open_work_store(&args.store).await?;
+    validate_import_workspace(context.workspace_id, &bundle)?;
+
+    if !args.dry_run {
+        for change_set in &bundle.change_sets {
+            context.store.upsert_change_set(change_set).await?;
+        }
+        for contribution in &bundle.contributions {
+            context.store.upsert_contribution(contribution).await?;
+        }
+    }
+
+    writeln!(
+        writer,
+        "{} {} change sets and {} contributions from {}",
+        if args.dry_run {
+            "validated"
+        } else {
+            "imported"
+        },
+        bundle.change_sets.len(),
+        bundle.contributions.len(),
+        args.file.display()
+    )?;
+    write_diagnostic(
+        writer,
+        DiagnosticSeverity::Info,
+        if args.dry_run {
+            "ctx.work.import.dry_run_completed"
+        } else {
+            "ctx.work.import.completed"
+        },
+        &format!(
+            "{} Work records into workspace {}; hosted/team enforcement state is not imported",
+            if args.dry_run {
+                "validated"
+            } else {
+                "imported"
+            },
+            context.workspace_id.0
+        ),
+    )?;
+    Ok(())
 }
 
 fn write_schema(args: AgentWorkSchemaArgs, writer: &mut dyn Write) -> Result<()> {
@@ -274,10 +575,189 @@ impl AgentWorkSchemaKind {
     }
 }
 
+struct WorkStoreContext {
+    data_root: PathBuf,
+    workspace_id: WorkspaceId,
+    store: Store,
+}
+
+async fn open_work_store(args: &AgentWorkStoreArgs) -> Result<WorkStoreContext> {
+    let data_root = resolve_data_root(args.data_dir.as_deref())?;
+    let manager = StoreManager::open(&data_root)
+        .await
+        .with_context(|| format!("opening ctx store at {}", data_root.display()))?;
+    let workspace_id = resolve_workspace_id(&manager, args.workspace_id.as_deref()).await?;
+    let store = manager
+        .workspace(workspace_id)
+        .await
+        .with_context(|| format!("opening workspace store {}", workspace_id.0))?;
+    Ok(WorkStoreContext {
+        data_root,
+        workspace_id,
+        store,
+    })
+}
+
+fn resolve_data_root(data_dir: Option<&Path>) -> Result<PathBuf> {
+    let raw = match data_dir {
+        Some(path) => path.to_path_buf(),
+        None => match std::env::var("CTX_DATA_ROOT") {
+            Ok(value) if !value.trim().is_empty() => PathBuf::from(value),
+            _ => {
+                let base = BaseDirs::new().context("resolving home dir")?;
+                base.home_dir().join(".ctx")
+            }
+        },
+    };
+    ctx_http_auth::daemon::prepare_daemon_data_root(raw)
+}
+
+async fn resolve_workspace_id(
+    manager: &StoreManager,
+    workspace_id: Option<&str>,
+) -> Result<WorkspaceId> {
+    if let Some(workspace_id) = workspace_id {
+        return parse_workspace_id(workspace_id);
+    }
+
+    let workspaces = manager
+        .global()
+        .list_workspaces()
+        .await
+        .context("listing local ctx workspaces")?;
+    match workspaces.as_slice() {
+        [workspace] => Ok(workspace.id),
+        [] => bail!("no ctx workspaces are registered in the selected data root"),
+        _ => {
+            let available = workspaces
+                .iter()
+                .map(|workspace| format!("{} ({})", workspace.id.0, workspace.name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!("multiple ctx workspaces are registered; pass --workspace-id. Available: {available}")
+        }
+    }
+}
+
+fn parse_workspace_id(value: &str) -> Result<WorkspaceId> {
+    Ok(WorkspaceId(
+        uuid::Uuid::parse_str(value.trim()).with_context(|| {
+            format!("workspace id `{value}` must be a UUID from the local ctx workspace registry")
+        })?,
+    ))
+}
+
+async fn load_work_export(store: &Store, workspace_id: WorkspaceId) -> Result<AgentWorkExport> {
+    let change_sets = store.list_workspace_change_sets(workspace_id).await?;
+    let contributions = store.list_workspace_contributions(workspace_id).await?;
+    Ok(AgentWorkExport {
+        change_sets,
+        contributions,
+    })
+}
+
+fn filtered_export_value(bundle: &AgentWorkExport, kind: AgentWorkRecordKind) -> Result<Value> {
+    let filtered = AgentWorkExport {
+        change_sets: if kind.includes_change_sets() {
+            bundle.change_sets.clone()
+        } else {
+            Vec::new()
+        },
+        contributions: if kind.includes_contributions() {
+            bundle.contributions.clone()
+        } else {
+            Vec::new()
+        },
+    };
+    serde_json::to_value(filtered).context("serializing filtered Work records")
+}
+
+async fn find_work_record_value(
+    store: &Store,
+    workspace_id: WorkspaceId,
+    id: &str,
+) -> Result<Value> {
+    if let Some(change_set) = store
+        .get_workspace_change_set(workspace_id, ChangeSetId::from_id(id))
+        .await?
+    {
+        return serde_json::to_value(change_set).context("serializing change set");
+    }
+    if let Some(contribution) = store.get_contribution(ContributionId::from_id(id)).await? {
+        if contribution.workspace_id == workspace_id {
+            return serde_json::to_value(contribution).context("serializing contribution");
+        }
+    }
+    bail!("Work record {id} not found in workspace {}", workspace_id.0)
+}
+
+fn infer_record_kind_from_id(id: &str) -> AgentWorkRecordKind {
+    if id.starts_with("chg_") {
+        AgentWorkRecordKind::ChangeSet
+    } else if id.starts_with("con_") {
+        AgentWorkRecordKind::Contribution
+    } else {
+        AgentWorkRecordKind::All
+    }
+}
+
+fn record_type_for_value(value: &Value) -> Option<&'static str> {
+    let object = value.as_object()?;
+    if object.contains_key("subject") && object.contains_key("target") {
+        Some("contribution")
+    } else if object.contains_key("target_branch")
+        || object.contains_key("head_revision")
+        || object.contains_key("base_revision")
+        || object.contains_key("pull_requests")
+    {
+        Some("change_set")
+    } else {
+        None
+    }
+}
+
+fn optional_title_suffix(title: Option<&str>) -> String {
+    title
+        .map(ctx_core::redaction::redact_sensitive)
+        .filter(|title| !title.trim().is_empty())
+        .map(|title| format!(" - {title}"))
+        .unwrap_or_default()
+}
+
+fn validate_import_workspace(workspace_id: WorkspaceId, bundle: &AgentWorkExport) -> Result<()> {
+    for change_set in &bundle.change_sets {
+        if change_set.workspace_id != workspace_id {
+            bail!(
+                "change set {} belongs to workspace {}; selected workspace is {}",
+                change_set.id,
+                change_set.workspace_id.0,
+                workspace_id.0
+            );
+        }
+    }
+    for contribution in &bundle.contributions {
+        if contribution.workspace_id != workspace_id {
+            bail!(
+                "contribution {} belongs to workspace {}; selected workspace is {}",
+                contribution.id,
+                contribution.workspace_id.0,
+                workspace_id.0
+            );
+        }
+    }
+    Ok(())
+}
+
 fn read_json_file(path: &PathBuf) -> Result<Value> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read JSON file {}", path.display()))?;
     serde_json::from_str(&text).with_context(|| format!("invalid JSON in {}", path.display()))
+}
+
+fn write_json_file(path: &Path, value: &Value) -> Result<()> {
+    let mut bytes = serde_json::to_vec_pretty(value).context("serializing JSON output")?;
+    bytes.push(b'\n');
+    std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
 }
 
 fn infer_schema_kind(value: &Value) -> Result<AgentWorkSchemaKind> {
@@ -892,6 +1372,10 @@ const WORK_BUNDLE_SCHEMA: &str = r#"{
 mod tests {
     use super::*;
     use clap::Parser;
+    use ctx_core::models::{
+        ContributionEndpoint, ContributionRole, RecordFidelity, RecordOrigin, RecordSource,
+        VcsKind, Workspace,
+    };
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -906,8 +1390,8 @@ mod tests {
         assert!(matches!(agent_work.command, Commands::Work(_)));
     }
 
-    #[test]
-    fn schema_without_kind_lists_known_schemas() {
+    #[tokio::test]
+    async fn schema_without_kind_lists_known_schemas() {
         let mut output = Vec::new();
         run_with_writer(
             AgentWorkCommand {
@@ -915,6 +1399,7 @@ mod tests {
             },
             &mut output,
         )
+        .await
         .unwrap();
 
         let output = String::from_utf8(output).unwrap();
@@ -1172,40 +1657,255 @@ mod tests {
         assert!(!diagnostic.contains("message: first line\nsecond line"));
     }
 
-    #[test]
-    fn not_implemented_commands_return_actionable_diagnostics() {
-        for command in [
-            AgentWorkSubcommand::List,
-            AgentWorkSubcommand::Show,
-            AgentWorkSubcommand::Capture,
-            AgentWorkSubcommand::Export,
-            AgentWorkSubcommand::Import,
-        ] {
-            let mut output = Vec::new();
-            let error = run_with_writer(AgentWorkCommand { command }, &mut output)
-                .unwrap_err()
-                .to_string();
-
-            assert!(error.contains("not implemented in this local CLI slice yet"));
-            assert!(error.contains("ctx work validate"));
-            assert!(error.contains("enforcement: none_local_diagnostic_only"));
-        }
-    }
-
-    #[test]
-    fn import_stub_diagnostic_rejects_old_control_plane_active_enforcement() {
+    #[tokio::test]
+    async fn capture_returns_actionable_not_implemented_diagnostic() {
         let mut output = Vec::new();
         let error = run_with_writer(
             AgentWorkCommand {
-                command: AgentWorkSubcommand::Import,
+                command: AgentWorkSubcommand::Capture(AgentWorkStoreArgs {
+                    data_dir: None,
+                    workspace_id: None,
+                }),
             },
             &mut output,
         )
+        .await
         .unwrap_err()
         .to_string();
 
-        assert!(error.contains("ctx.work.import.not_implemented"));
-        assert!(error.contains("Old control-plane imports are intentionally not active"));
-        assert!(error.contains("never hosted/team enforcement state"));
+        assert!(error.contains("not implemented in this local CLI slice yet"));
+        assert!(error.contains("ctx work validate"));
+        assert!(error.contains("enforcement: none_local_diagnostic_only"));
+    }
+
+    #[tokio::test]
+    async fn list_show_export_and_import_round_trip_local_store() {
+        let (source_dir, workspace, change_set_id, contribution_id) = seeded_work_store().await;
+        let source_store = store_args(source_dir.path(), Some(workspace.id));
+
+        let mut list_output = Vec::new();
+        run_with_writer(
+            AgentWorkCommand {
+                command: AgentWorkSubcommand::List(AgentWorkListArgs {
+                    store: source_store.clone(),
+                    kind: AgentWorkRecordKind::All,
+                    json: false,
+                }),
+            },
+            &mut list_output,
+        )
+        .await
+        .unwrap();
+        let list_output = String::from_utf8(list_output).unwrap();
+        assert!(list_output.contains(&change_set_id.0));
+        assert!(list_output.contains(&contribution_id.0));
+        assert!(list_output.contains("ctx.work.list.completed"));
+
+        let mut show_output = Vec::new();
+        run_with_writer(
+            AgentWorkCommand {
+                command: AgentWorkSubcommand::Show(AgentWorkShowArgs {
+                    store: source_store.clone(),
+                    kind: None,
+                    id: contribution_id.0.clone(),
+                    json: true,
+                }),
+            },
+            &mut show_output,
+        )
+        .await
+        .unwrap();
+        let show_json: Value = serde_json::from_slice(&show_output).unwrap();
+        assert_eq!(show_json["id"], contribution_id.0);
+        assert_eq!(show_json["workspace_id"], workspace.id.0.to_string());
+
+        let export_path = source_dir.path().join("work-export.json");
+        let mut export_output = Vec::new();
+        run_with_writer(
+            AgentWorkCommand {
+                command: AgentWorkSubcommand::Export(AgentWorkExportArgs {
+                    store: source_store,
+                    output: Some(export_path.clone()),
+                    redaction_profile: AgentWorkRedactionProfile::FullLocal,
+                }),
+            },
+            &mut export_output,
+        )
+        .await
+        .unwrap();
+        let exported = read_json_file(&export_path).unwrap();
+        validate_value(AgentWorkSchemaKind::AgentWork, &exported).unwrap();
+
+        let target_dir = TempDir::new().unwrap();
+        let target_manager = StoreManager::open(target_dir.path()).await.unwrap();
+        target_manager
+            .global()
+            .upsert_workspace(&workspace)
+            .await
+            .unwrap();
+        let mut import_output = Vec::new();
+        run_with_writer(
+            AgentWorkCommand {
+                command: AgentWorkSubcommand::Import(AgentWorkImportArgs {
+                    store: store_args(target_dir.path(), Some(workspace.id)),
+                    file: export_path,
+                    dry_run: false,
+                }),
+            },
+            &mut import_output,
+        )
+        .await
+        .unwrap();
+        let import_output = String::from_utf8(import_output).unwrap();
+        assert!(import_output.contains("imported 1 change sets and 1 contributions"));
+        assert!(import_output.contains("hosted/team enforcement state is not imported"));
+
+        let target_store = target_manager.workspace(workspace.id).await.unwrap();
+        assert!(target_store
+            .get_workspace_change_set(workspace.id, change_set_id)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(target_store
+            .get_contribution(contribution_id)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn import_rejects_workspace_mismatch_without_writing() {
+        let temp = TempDir::new().unwrap();
+        let manager = StoreManager::open(temp.path()).await.unwrap();
+        let workspace = manager
+            .global()
+            .create_workspace(
+                "target".to_string(),
+                "/tmp/target".to_string(),
+                VcsKind::Git,
+            )
+            .await
+            .unwrap();
+        let other_workspace_id = WorkspaceId::new();
+        let bundle = AgentWorkExport {
+            change_sets: vec![test_change_set(other_workspace_id, ChangeSetId::new())],
+            contributions: Vec::new(),
+        };
+        let path = temp.path().join("mismatch.json");
+        write_json_file(&path, &serde_json::to_value(bundle).unwrap()).unwrap();
+
+        let mut output = Vec::new();
+        let error = run_with_writer(
+            AgentWorkCommand {
+                command: AgentWorkSubcommand::Import(AgentWorkImportArgs {
+                    store: store_args(temp.path(), Some(workspace.id)),
+                    file: path,
+                    dry_run: false,
+                }),
+            },
+            &mut output,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("selected workspace"));
+        assert!(manager
+            .workspace(workspace.id)
+            .await
+            .unwrap()
+            .list_workspace_change_sets(workspace.id)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    fn store_args(data_dir: &Path, workspace_id: Option<WorkspaceId>) -> AgentWorkStoreArgs {
+        AgentWorkStoreArgs {
+            data_dir: Some(data_dir.to_path_buf()),
+            workspace_id: workspace_id.map(|id| id.0.to_string()),
+        }
+    }
+
+    async fn seeded_work_store() -> (TempDir, Workspace, ChangeSetId, ContributionId) {
+        let temp = TempDir::new().unwrap();
+        let manager = StoreManager::open(temp.path()).await.unwrap();
+        let workspace = manager
+            .global()
+            .create_workspace("test".to_string(), "/tmp/test".to_string(), VcsKind::Git)
+            .await
+            .unwrap();
+        let store = manager.workspace(workspace.id).await.unwrap();
+        let change_set_id = ChangeSetId::new();
+        let contribution_id = ContributionId::new();
+        store
+            .upsert_change_set(&test_change_set(workspace.id, change_set_id.clone()))
+            .await
+            .unwrap();
+        store
+            .upsert_contribution(&test_contribution(
+                workspace.id,
+                change_set_id.clone(),
+                contribution_id.clone(),
+            ))
+            .await
+            .unwrap();
+        (temp, workspace, change_set_id, contribution_id)
+    }
+
+    fn test_change_set(workspace_id: WorkspaceId, id: ChangeSetId) -> ChangeSet {
+        ChangeSet {
+            id,
+            workspace_id,
+            source_worktree_id: None,
+            source: RecordSource::Manual,
+            origin: RecordOrigin::User,
+            fidelity: RecordFidelity::Declared,
+            trust: Default::default(),
+            title: Some("Test change set".to_string()),
+            summary: None,
+            description: None,
+            fingerprint: None,
+            base_revision: None,
+            head_revision: None,
+            target_branch: Some("main".to_string()),
+            pull_requests: Vec::new(),
+            source_records: Vec::new(),
+            issuer: None,
+            created_at: None,
+            updated_at: None,
+            schema_version: 1,
+        }
+    }
+
+    fn test_contribution(
+        workspace_id: WorkspaceId,
+        change_set_id: ChangeSetId,
+        id: ContributionId,
+    ) -> Contribution {
+        Contribution {
+            id,
+            workspace_id,
+            change_set_id: Some(change_set_id.clone()),
+            subject: ContributionEndpoint::External {
+                source: "test".to_string(),
+                identifier: Some("task-1".to_string()),
+                url: None,
+            },
+            target: ContributionEndpoint::ChangeSet { change_set_id },
+            role: ContributionRole::Related,
+            source: RecordSource::Manual,
+            origin: RecordOrigin::User,
+            fidelity: RecordFidelity::Declared,
+            trust: Default::default(),
+            summary: Some("Test contribution".to_string()),
+            fingerprint: None,
+            issuer: None,
+            metadata_json: None,
+            source_records: Vec::new(),
+            created_at: None,
+            updated_at: None,
+            schema_version: 1,
+        }
     }
 }

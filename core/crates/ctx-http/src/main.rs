@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Work(command) => {
-            agent_work_cli::run(command)?;
+            agent_work_cli::run(command).await?;
         }
         Commands::Serve { bind, data_dir } => {
             ctx_http::serve(bind, data_dir).await?;
