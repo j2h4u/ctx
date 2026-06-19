@@ -29,8 +29,32 @@ defineCtxPlugin({
 });
 
 defineDeferredContributions({
-  review_sections: [
-    // @ts-expect-error review_sections only accepts review_section deferred markers.
-    deferredContribution("toolbar_action", "Wrong deferred bucket."),
+  export_processors: [
+    // @ts-expect-error export_processors only accepts export_processor deferred markers.
+    deferredContribution("redaction_processor", "Wrong deferred bucket."),
   ],
+});
+
+defineCtxPlugin({
+  id: "example.invalid-toolbar-targets",
+  name: "Invalid Toolbar Targets",
+  version: "0.1.0",
+  contributes: {
+    toolbar_actions: [
+      {
+        id: "example.invalid-toolbar-targets.command",
+        name: "Null Command",
+        title: "Open",
+        // @ts-expect-error toolbar action command targets must be omitted or strings.
+        command: null,
+      },
+      {
+        id: "example.invalid-toolbar-targets.action",
+        name: "Null Action",
+        title: "Focus",
+        // @ts-expect-error toolbar action action targets must be omitted or approved action ids.
+        action: null,
+      },
+    ],
+  },
 });

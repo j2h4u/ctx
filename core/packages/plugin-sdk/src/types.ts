@@ -31,6 +31,12 @@ export type PluginContributions = {
   collectors?: CollectorContribution[];
   observers?: ObserverContribution[];
   ui_surfaces?: UiSurfaceContribution[];
+  templates?: WorkbenchTemplateContribution[];
+  toolbar_actions?: WorkbenchToolbarActionContribution[];
+  artifact_renderers?: ArtifactRendererContribution[];
+  card_renderers?: WorkbenchCardRendererContribution[];
+  detail_sections?: WorkbenchSectionContribution[];
+  review_sections?: WorkbenchSectionContribution[];
 };
 
 export type NamedEntrypointContribution = {
@@ -92,15 +98,46 @@ export type UiSurfaceContribution = NamedEntrypointContribution & {
   contexts?: string[];
 };
 
+export type DeclarativeWorkbenchContribution = {
+  id: NonEmptyString;
+  name: NonEmptyString;
+  description?: string | null;
+  contexts?: string[];
+  data_sources?: string[];
+};
+
+export type WorkbenchTemplateContribution = DeclarativeWorkbenchContribution & {
+  title: NonEmptyString;
+  template: NonEmptyString;
+};
+
+export type WorkbenchToolbarActionContribution =
+  DeclarativeWorkbenchContribution & {
+    title: NonEmptyString;
+    command?: NonEmptyString;
+    action?: ApprovedCtxActionId;
+    icon?: string | null;
+  };
+
+export type ArtifactRendererContribution = DeclarativeWorkbenchContribution & {
+  artifact_types: NonEmptyString[];
+  renderer: NonEmptyString;
+};
+
+export type WorkbenchCardRendererContribution =
+  DeclarativeWorkbenchContribution & {
+    card: NonEmptyString;
+    renderer: NonEmptyString;
+  };
+
+export type WorkbenchSectionContribution = DeclarativeWorkbenchContribution & {
+  section: NonEmptyString;
+  renderer: NonEmptyString;
+};
+
 export type DeferredContributionKind =
   | "redaction_processor"
-  | "export_processor"
-  | "workbench_template"
-  | "artifact_renderer"
-  | "card_section"
-  | "detail_section"
-  | "review_section"
-  | "toolbar_action";
+  | "export_processor";
 
 export type DeferredContribution<TKind extends DeferredContributionKind> = {
   kind: TKind;
@@ -112,12 +149,6 @@ export type DeferredContribution<TKind extends DeferredContributionKind> = {
 export type DeferredContributionCatalog = {
   redaction_processors?: DeferredContribution<"redaction_processor">[];
   export_processors?: DeferredContribution<"export_processor">[];
-  workbench_templates?: DeferredContribution<"workbench_template">[];
-  artifact_renderers?: DeferredContribution<"artifact_renderer">[];
-  card_sections?: DeferredContribution<"card_section">[];
-  detail_sections?: DeferredContribution<"detail_section">[];
-  review_sections?: DeferredContribution<"review_section">[];
-  toolbar_actions?: DeferredContribution<"toolbar_action">[];
 };
 
 export type PluginCompatibility = {

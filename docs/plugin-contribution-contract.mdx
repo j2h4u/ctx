@@ -20,19 +20,44 @@ Supported or explicitly deferred contribution types:
 | ACP providers | Supported |
 | Collectors/importers | Supported |
 | Observers | Supported |
-| Redaction/export processors | Supported or explicitly deferred |
+| Redaction/export processors | Deferred as SDK sidecar markers only |
 | Workbench panels | Supported through `ui_surfaces` |
-| Workbench templates | Supported or explicitly deferred |
-| Card renderers | Supported or explicitly deferred |
-| Detail sections | Supported or explicitly deferred |
-| Review sections | Supported or explicitly deferred |
-| Toolbar actions | Supported or explicitly deferred |
-| Artifact renderers | Supported or explicitly deferred |
+| Workbench templates | Supported as declarative host-owned manifest contributions |
+| Card renderers | Supported as declarative host-owned manifest contributions |
+| Detail sections | Supported as declarative host-owned manifest contributions |
+| Review sections | Supported as declarative host-owned manifest contributions |
+| Toolbar actions | Supported as declarative declared-plugin-command or approved-action references |
+| Artifact renderers | Supported as declarative host-owned manifest contributions |
 | Arbitrary webview/React UI | Deferred or gated behind explicit capability |
 
 Silent partial support is not allowed. If a contribution appears in the public
 manifest schema, the SDK must type it or the docs/tests must clearly mark it as
 deferred.
+
+This first declarative slice adds manifest buckets for host-owned Workbench
+contributions that do not load or execute plugin UI code:
+
+- `templates`;
+- `toolbar_actions`;
+- `artifact_renderers`;
+- `card_renderers`;
+- `detail_sections`;
+- `review_sections`.
+
+These declarations identify host-known templates, renderer IDs, sections, data
+sources, and action targets. Toolbar `command` targets must reference commands
+declared by the same plugin. They must not include `entrypoint`, JavaScript
+module paths, webview URLs, React component names, or arbitrary renderer code.
+
+`ui_surfaces` remains the bucket for plugin-contributed surface placements such
+as panels, sidebars, status bar entries, command palette entries, and settings.
+Those surfaces may reference plugin entrypoints and are therefore distinct from
+the host-owned declarative buckets above. Panels are intentionally not duplicated
+as a new `panels` bucket in this slice.
+
+Redaction and export processors remain deferred as SDK sidecar markers. They are
+not manifest fields until processor provenance, permission prompts, redaction
+defaults, and execution lifecycle are specified.
 
 ## Composability Rule
 
@@ -145,6 +170,12 @@ export default defineCtxPlugin({
   contributes: {
     commands: [],
     ui_surfaces: [],
+    templates: [],
+    toolbar_actions: [],
+    artifact_renderers: [],
+    card_renderers: [],
+    detail_sections: [],
+    review_sections: [],
   },
 });
 ```
@@ -152,6 +183,10 @@ export default defineCtxPlugin({
 Publishing to npm is not required for the local program. The package should be
 publishable later, but first it must work as a repo-local package with examples
 and tests.
+
+This slice only updates the public manifest/schema/SDK/Rust model/types
+contract. Daemon registry projection, Workbench rendering integration, and CLI
+display for the new buckets are deferred to the next slice.
 
 ## Worker Rule
 

@@ -24,17 +24,37 @@ test("review panel and command example compiles and validates", () => {
     reviewPanelCommandPlugin.contributes.ui_surfaces[0].surface,
     "panel",
   );
+  assert.equal(
+    reviewPanelCommandPlugin.contributes.templates[0].template,
+    "review-summary",
+  );
+  assert.equal(
+    reviewPanelCommandPlugin.contributes.toolbar_actions[0].command,
+    "example.review.open",
+  );
+  assert.equal(
+    reviewPanelCommandPlugin.contributes.artifact_renderers[0].renderer,
+    "host.diff-artifact",
+  );
+  assert.equal(
+    reviewPanelCommandPlugin.contributes.card_renderers[0].card,
+    "review.finding",
+  );
+  assert.equal(
+    reviewPanelCommandPlugin.contributes.detail_sections[0].section,
+    "diff-summary",
+  );
+  assert.equal(
+    reviewPanelCommandPlugin.contributes.review_sections[0].renderer,
+    "host.gate-state-section",
+  );
   assert.deepEqual(reviewImporterActions.actions, [
     "plugin.command.run",
     "note.attest",
   ]);
   assert.equal(
-    deferredReviewPluginContributions.review_sections[0].status,
+    deferredReviewPluginContributions.redaction_processors[0].status,
     "deferred",
-  );
-  assert.equal(
-    deferredReviewPluginContributions.artifact_renderers[0].kind,
-    "artifact_renderer",
   );
 });
 
@@ -221,17 +241,15 @@ test("entrypoint runtime fields are JSON-validated", () => {
   );
 });
 
-test("deferred contribution buckets are rejected when embedded in manifest", () => {
+test("processor contribution buckets are rejected when embedded in manifest", () => {
   const result = validateCtxPlugin({
-    id: "example.deferred-in-manifest",
-    name: "Deferred In Manifest",
+    id: "example.processors-in-manifest",
+    name: "Processors In Manifest",
     version: "0.1.0",
     contributes: {
-      commands: [{ id: "example.deferred-in-manifest.open", title: "Open" }],
-      workbench: {
-        templates: [],
-      },
-      artifact_renderers: [],
+      commands: [{ id: "example.processors-in-manifest.open", title: "Open" }],
+      redaction_processors: [],
+      export_processors: [],
     },
   });
 
@@ -240,6 +258,189 @@ test("deferred contribution buckets are rejected when embedded in manifest", () 
     result.diagnostics
       .filter((diagnostic) => diagnostic.code === "unknown_manifest_property")
       .map((diagnostic) => diagnostic.path),
-    ["contributes.workbench", "contributes.artifact_renderers"],
+    ["contributes.redaction_processors", "contributes.export_processors"],
+  );
+});
+
+test("declarative workbench contribution buckets validate in manifest", () => {
+  const result = validateCtxPlugin({
+    id: "example.declarative",
+    name: "Declarative",
+    version: "0.1.0",
+    contributes: {
+      templates: [
+        {
+          id: "example.declarative.template",
+          name: "Template",
+          title: "Template",
+          template: "host.template",
+        },
+      ],
+      toolbar_actions: [
+        {
+          id: "example.declarative.toolbar",
+          name: "Toolbar",
+          title: "Focus",
+          action: "work.focus",
+        },
+      ],
+      artifact_renderers: [
+        {
+          id: "example.declarative.artifact",
+          name: "Artifact",
+          artifact_types: ["application/json"],
+          renderer: "host.json-artifact",
+        },
+      ],
+      card_renderers: [
+        {
+          id: "example.declarative.card",
+          name: "Card",
+          card: "work.summary",
+          renderer: "host.work-summary-card",
+        },
+      ],
+      detail_sections: [
+        {
+          id: "example.declarative.detail",
+          name: "Detail",
+          section: "work-summary",
+          renderer: "host.work-summary-section",
+        },
+      ],
+      review_sections: [
+        {
+          id: "example.declarative.review",
+          name: "Review",
+          section: "gate-state",
+          renderer: "host.gate-state-section",
+        },
+      ],
+    },
+  });
+
+  assert.equal(result.ok, true, formatPluginDiagnostics(result.diagnostics));
+});
+
+test("declarative workbench contributions reject runtime-shaped fields", () => {
+  const result = validateCtxPlugin({
+    id: "example.bad-declarative",
+    name: "Bad Declarative",
+    version: "0.1.0",
+    contributes: {
+      toolbar_actions: [
+        {
+          id: "toolbar",
+          name: "Toolbar",
+          title: "Focus",
+          action: "not.approved",
+          entrypoint: "main",
+        },
+      ],
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(
+    result.diagnostics.map((diagnostic) => diagnostic.code),
+    [
+      "unknown_manifest_property",
+      "contribution_id_not_plugin_qualified",
+      "invalid_action_id",
+    ],
+  );
+});
+
+test("toolbar action targets reject null values", () => {
+  const withNullCommand = validateCtxPlugin({
+    id: "example.null-command",
+    name: "Null Command",
+    version: "0.1.0",
+    contributes: {
+      toolbar_actions: [
+        {
+          id: "example.null-command.toolbar",
+          name: "Toolbar",
+          title: "Open",
+          command: null,
+        },
+      ],
+    },
+  });
+  const withNullAction = validateCtxPlugin({
+    id: "example.null-action",
+    name: "Null Action",
+    version: "0.1.0",
+    contributes: {
+      toolbar_actions: [
+        {
+          id: "example.null-action.toolbar",
+          name: "Toolbar",
+          title: "Focus",
+          action: null,
+        },
+      ],
+    },
+  });
+
+  assert.equal(withNullCommand.ok, false);
+  assert.deepEqual(
+    withNullCommand.diagnostics.map((diagnostic) => diagnostic.code),
+    ["expected_string"],
+  );
+  assert.equal(withNullAction.ok, false);
+  assert.deepEqual(
+    withNullAction.diagnostics.map((diagnostic) => diagnostic.code),
+    ["invalid_action_id"],
+  );
+});
+
+test("toolbar action command targets must be non-empty declared commands", () => {
+  const withEmptyCommand = validateCtxPlugin({
+    id: "example.empty-command",
+    name: "Empty Command",
+    version: "0.1.0",
+    contributes: {
+      toolbar_actions: [
+        {
+          id: "example.empty-command.toolbar",
+          name: "Toolbar",
+          title: "Open",
+          command: "   ",
+        },
+      ],
+    },
+  });
+  const withUnknownCommand = validateCtxPlugin({
+    id: "example.unknown-command",
+    name: "Unknown Command",
+    version: "0.1.0",
+    contributes: {
+      commands: [
+        {
+          id: "example.unknown-command.open",
+          title: "Open",
+        },
+      ],
+      toolbar_actions: [
+        {
+          id: "example.unknown-command.toolbar",
+          name: "Toolbar",
+          title: "Open",
+          command: "example.unknown-command.missing",
+        },
+      ],
+    },
+  });
+
+  assert.equal(withEmptyCommand.ok, false);
+  assert.deepEqual(
+    withEmptyCommand.diagnostics.map((diagnostic) => diagnostic.code),
+    ["empty_string"],
+  );
+  assert.equal(withUnknownCommand.ok, false);
+  assert.deepEqual(
+    withUnknownCommand.diagnostics.map((diagnostic) => diagnostic.code),
+    ["unknown_command_reference"],
   );
 });

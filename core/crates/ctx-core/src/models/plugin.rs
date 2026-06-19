@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const PLUGIN_MANIFEST_SCHEMA_VERSION: i64 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginManifest {
     #[serde(default = "default_plugin_manifest_schema_version")]
     pub schema_version: i64,
@@ -28,6 +29,7 @@ impl PluginManifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginEntrypoint {
     pub id: String,
     #[serde(default)]
@@ -51,6 +53,7 @@ pub enum PluginEntrypointKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct PluginContributions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<PluginProviderContribution>,
@@ -64,6 +67,18 @@ pub struct PluginContributions {
     pub observers: Vec<PluginObserverContribution>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ui_surfaces: Vec<PluginUiSurfaceContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub templates: Vec<PluginWorkbenchTemplateContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub toolbar_actions: Vec<PluginWorkbenchToolbarActionContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_renderers: Vec<PluginArtifactRendererContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub card_renderers: Vec<PluginWorkbenchCardRendererContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detail_sections: Vec<PluginWorkbenchSectionContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_sections: Vec<PluginWorkbenchSectionContribution>,
 }
 
 impl PluginContributions {
@@ -74,10 +89,17 @@ impl PluginContributions {
             && self.collectors.is_empty()
             && self.observers.is_empty()
             && self.ui_surfaces.is_empty()
+            && self.templates.is_empty()
+            && self.toolbar_actions.is_empty()
+            && self.artifact_renderers.is_empty()
+            && self.card_renderers.is_empty()
+            && self.detail_sections.is_empty()
+            && self.review_sections.is_empty()
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginProviderContribution {
     pub id: String,
     pub name: String,
@@ -90,6 +112,7 @@ pub struct PluginProviderContribution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginRuntimeContribution {
     pub id: String,
     pub name: String,
@@ -102,6 +125,7 @@ pub struct PluginRuntimeContribution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginCommandContribution {
     pub id: String,
     pub title: String,
@@ -114,6 +138,7 @@ pub struct PluginCommandContribution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginCollectorContribution {
     pub id: String,
     pub name: String,
@@ -126,6 +151,7 @@ pub struct PluginCollectorContribution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginObserverContribution {
     pub id: String,
     pub name: String,
@@ -138,6 +164,7 @@ pub struct PluginObserverContribution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginUiSurfaceContribution {
     pub id: String,
     pub name: String,
@@ -160,7 +187,133 @@ pub enum PluginUiSurfaceKind {
     Settings,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginDeclarativeWorkbenchContribution {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contexts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginWorkbenchTemplateContribution {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contexts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_sources: Vec<String>,
+    pub title: String,
+    pub template: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginWorkbenchToolbarActionContribution {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contexts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_sources: Vec<String>,
+    pub title: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub command: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub action: Option<ApprovedCtxActionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ApprovedCtxActionId {
+    #[serde(rename = "work.focus")]
+    WorkFocus,
+    #[serde(rename = "task.start")]
+    TaskStart,
+    #[serde(rename = "ctx.command.run")]
+    CtxCommandRun,
+    #[serde(rename = "plugin.command.run")]
+    PluginCommandRun,
+    #[serde(rename = "work.export_redact")]
+    WorkExportRedact,
+    #[serde(rename = "artifact.attach")]
+    ArtifactAttach,
+    #[serde(rename = "note.attest")]
+    NoteAttest,
+    #[serde(rename = "gate.update")]
+    GateUpdate,
+    #[serde(rename = "provider.settings.open")]
+    ProviderSettingsOpen,
+    #[serde(rename = "provider.session.restart")]
+    ProviderSessionRestart,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginArtifactRendererContribution {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contexts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_sources: Vec<String>,
+    pub artifact_types: Vec<String>,
+    pub renderer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginWorkbenchCardRendererContribution {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contexts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_sources: Vec<String>,
+    pub card: String,
+    pub renderer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginWorkbenchSectionContribution {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contexts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_sources: Vec<String>,
+    pub section: String,
+    pub renderer: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct PluginCompatibility {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_ctx_version: Option<String>,
@@ -253,11 +406,31 @@ pub struct PluginExtensionRegistry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginManifestValidationError {
-    UnsupportedSchemaVersion { expected: i64, actual: i64 },
-    EmptyField { field: &'static str },
+    UnsupportedSchemaVersion {
+        expected: i64,
+        actual: i64,
+    },
+    EmptyField {
+        field: &'static str,
+    },
     EmptyPluginDefinition,
-    DuplicateId { field: &'static str, id: String },
-    UnknownEntrypoint { field: &'static str, id: String },
+    DuplicateId {
+        field: &'static str,
+        id: String,
+    },
+    InvalidPluginQualifiedId {
+        field: &'static str,
+        id: String,
+        plugin_id: String,
+    },
+    UnknownEntrypoint {
+        field: &'static str,
+        id: String,
+    },
+    UnknownCommand {
+        field: &'static str,
+        id: String,
+    },
 }
 
 pub fn validate_plugin_manifest(
@@ -346,6 +519,12 @@ pub fn validate_plugin_manifest(
             )
         },
     )?;
+    let command_ids: BTreeSet<String> = manifest
+        .contributes
+        .commands
+        .iter()
+        .map(|command| command.id.clone())
+        .collect();
     validate_named_contributions(
         "contributes.collectors",
         &manifest.contributes.collectors,
@@ -385,7 +564,178 @@ pub fn validate_plugin_manifest(
             )
         },
     )?;
+    validate_declarative_workbench_contributions(
+        "contributes.templates",
+        &manifest.contributes.templates,
+        &manifest.id,
+        &mut contribution_ids,
+        |contribution| {
+            (
+                contribution.id.as_str(),
+                contribution.name.as_str(),
+                vec![contribution.title.as_str(), contribution.template.as_str()],
+                Vec::new(),
+            )
+        },
+    )?;
+    validate_declarative_workbench_contributions(
+        "contributes.toolbar_actions",
+        &manifest.contributes.toolbar_actions,
+        &manifest.id,
+        &mut contribution_ids,
+        |contribution| {
+            (
+                contribution.id.as_str(),
+                contribution.name.as_str(),
+                vec![contribution.title.as_str()],
+                Vec::new(),
+            )
+        },
+    )?;
+    for contribution in &manifest.contributes.toolbar_actions {
+        if let Some(command) = contribution.command.as_deref() {
+            if command.trim().is_empty() {
+                return Err(PluginManifestValidationError::EmptyField {
+                    field: "contributes.toolbar_actions.command",
+                });
+            }
+            if !command_ids.contains(command) {
+                return Err(PluginManifestValidationError::UnknownCommand {
+                    field: "contributes.toolbar_actions",
+                    id: command.to_string(),
+                });
+            }
+        }
+        if contribution.command.is_none() && contribution.action.is_none() {
+            return Err(PluginManifestValidationError::EmptyField {
+                field: "contributes.toolbar_actions",
+            });
+        }
+    }
+    validate_declarative_workbench_contributions(
+        "contributes.artifact_renderers",
+        &manifest.contributes.artifact_renderers,
+        &manifest.id,
+        &mut contribution_ids,
+        |contribution| {
+            (
+                contribution.id.as_str(),
+                contribution.name.as_str(),
+                vec![contribution.renderer.as_str()],
+                vec![contribution.artifact_types.as_slice()],
+            )
+        },
+    )?;
+    validate_declarative_workbench_contributions(
+        "contributes.card_renderers",
+        &manifest.contributes.card_renderers,
+        &manifest.id,
+        &mut contribution_ids,
+        |contribution| {
+            (
+                contribution.id.as_str(),
+                contribution.name.as_str(),
+                vec![contribution.card.as_str(), contribution.renderer.as_str()],
+                Vec::new(),
+            )
+        },
+    )?;
+    validate_declarative_workbench_contributions(
+        "contributes.detail_sections",
+        &manifest.contributes.detail_sections,
+        &manifest.id,
+        &mut contribution_ids,
+        |contribution| {
+            (
+                contribution.id.as_str(),
+                contribution.name.as_str(),
+                vec![
+                    contribution.section.as_str(),
+                    contribution.renderer.as_str(),
+                ],
+                Vec::new(),
+            )
+        },
+    )?;
+    validate_declarative_workbench_contributions(
+        "contributes.review_sections",
+        &manifest.contributes.review_sections,
+        &manifest.id,
+        &mut contribution_ids,
+        |contribution| {
+            (
+                contribution.id.as_str(),
+                contribution.name.as_str(),
+                vec![
+                    contribution.section.as_str(),
+                    contribution.renderer.as_str(),
+                ],
+                Vec::new(),
+            )
+        },
+    )?;
 
+    Ok(())
+}
+
+fn deserialize_non_null_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Err(serde::de::Error::custom(
+            "expected omitted field or non-null value",
+        ));
+    }
+    T::deserialize(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
+}
+
+fn validate_declarative_workbench_contributions<T>(
+    field: &'static str,
+    contributions: &[T],
+    plugin_id: &str,
+    contribution_ids: &mut BTreeSet<String>,
+    fields: impl Fn(&T) -> (&str, &str, Vec<&str>, Vec<&[String]>),
+) -> Result<(), PluginManifestValidationError> {
+    for contribution in contributions {
+        let (id, name, required_strings, required_arrays) = fields(contribution);
+        if id.trim().is_empty() {
+            return Err(PluginManifestValidationError::EmptyField {
+                field: "contributes.id",
+            });
+        }
+        if name.trim().is_empty() {
+            return Err(PluginManifestValidationError::EmptyField {
+                field: "contributes.name",
+            });
+        }
+        if !id.starts_with(&format!("{plugin_id}.")) {
+            return Err(PluginManifestValidationError::InvalidPluginQualifiedId {
+                field,
+                id: id.to_string(),
+                plugin_id: plugin_id.to_string(),
+            });
+        }
+        if !contribution_ids.insert(id.to_string()) {
+            return Err(PluginManifestValidationError::DuplicateId {
+                field: "contributes.id",
+                id: id.to_string(),
+            });
+        }
+        if required_strings.iter().any(|value| value.trim().is_empty()) {
+            return Err(PluginManifestValidationError::EmptyField { field });
+        }
+        if required_arrays
+            .iter()
+            .any(|values| values.is_empty() || values.iter().any(|value| value.trim().is_empty()))
+        {
+            return Err(PluginManifestValidationError::EmptyField { field });
+        }
+    }
     Ok(())
 }
 
@@ -471,7 +821,7 @@ mod tests {
                     capabilities: vec!["workspace.exec".into()],
                 }],
                 commands: vec![PluginCommandContribution {
-                    id: "example.say_hello".into(),
+                    id: "example.agent-tools.say_hello".into(),
                     title: "Say Hello".into(),
                     description: Some("Run the example command.".into()),
                     category: Some("Example".into()),
@@ -498,6 +848,62 @@ mod tests {
                     description: None,
                     entrypoint: Some("main".into()),
                     contexts: vec!["workspace".into()],
+                }],
+                templates: vec![PluginWorkbenchTemplateContribution {
+                    id: "example.agent-tools.template".into(),
+                    name: "Example Template".into(),
+                    description: None,
+                    contexts: vec!["workspace".into()],
+                    data_sources: vec!["current Work summary".into()],
+                    title: "Example Template".into(),
+                    template: "host.example-template".into(),
+                }],
+                toolbar_actions: vec![PluginWorkbenchToolbarActionContribution {
+                    id: "example.agent-tools.toolbar".into(),
+                    name: "Example Toolbar Action".into(),
+                    description: None,
+                    contexts: vec!["workspace".into()],
+                    data_sources: Vec::new(),
+                    title: "Say Hello".into(),
+                    command: Some("example.agent-tools.say_hello".into()),
+                    action: None,
+                    icon: Some("message-circle".into()),
+                }],
+                artifact_renderers: vec![PluginArtifactRendererContribution {
+                    id: "example.agent-tools.artifact-renderer".into(),
+                    name: "Example Artifact Renderer".into(),
+                    description: None,
+                    contexts: Vec::new(),
+                    data_sources: Vec::new(),
+                    artifact_types: vec!["text/plain".into()],
+                    renderer: "host.text-artifact".into(),
+                }],
+                card_renderers: vec![PluginWorkbenchCardRendererContribution {
+                    id: "example.agent-tools.card-renderer".into(),
+                    name: "Example Card Renderer".into(),
+                    description: None,
+                    contexts: Vec::new(),
+                    data_sources: Vec::new(),
+                    card: "work.summary".into(),
+                    renderer: "host.work-summary-card".into(),
+                }],
+                detail_sections: vec![PluginWorkbenchSectionContribution {
+                    id: "example.agent-tools.detail-section".into(),
+                    name: "Example Detail Section".into(),
+                    description: None,
+                    contexts: Vec::new(),
+                    data_sources: Vec::new(),
+                    section: "work-summary".into(),
+                    renderer: "host.work-summary-section".into(),
+                }],
+                review_sections: vec![PluginWorkbenchSectionContribution {
+                    id: "example.agent-tools.review-section".into(),
+                    name: "Example Review Section".into(),
+                    description: None,
+                    contexts: Vec::new(),
+                    data_sources: Vec::new(),
+                    section: "gate-state".into(),
+                    renderer: "host.gate-state-section".into(),
                 }],
             },
             compatibility: PluginCompatibility {
@@ -528,6 +934,30 @@ mod tests {
             Some(&json!("panel"))
         );
         assert_eq!(
+            value.pointer("/contributes/templates/0/template"),
+            Some(&json!("host.example-template"))
+        );
+        assert_eq!(
+            value.pointer("/contributes/toolbar_actions/0/command"),
+            Some(&json!("example.agent-tools.say_hello"))
+        );
+        assert_eq!(
+            value.pointer("/contributes/artifact_renderers/0/artifact_types/0"),
+            Some(&json!("text/plain"))
+        );
+        assert_eq!(
+            value.pointer("/contributes/card_renderers/0/card"),
+            Some(&json!("work.summary"))
+        );
+        assert_eq!(
+            value.pointer("/contributes/detail_sections/0/section"),
+            Some(&json!("work-summary"))
+        );
+        assert_eq!(
+            value.pointer("/contributes/review_sections/0/renderer"),
+            Some(&json!("host.gate-state-section"))
+        );
+        assert_eq!(
             value.pointer("/compatibility/min_ctx_version"),
             Some(&json!("0.1.0"))
         );
@@ -535,6 +965,109 @@ mod tests {
         let round_trip: PluginManifest = serde_json::from_value(value).unwrap();
         assert_eq!(round_trip, manifest);
         assert_eq!(round_trip.validate(), Ok(()));
+    }
+
+    #[test]
+    fn plugin_manifest_rejects_null_toolbar_targets() {
+        let null_command = serde_json::from_value::<PluginManifest>(json!({
+            "id": "example.agent-tools",
+            "name": "Example Agent Tools",
+            "version": "0.1.0",
+            "contributes": {
+                "toolbar_actions": [
+                    {
+                        "id": "example.agent-tools.toolbar",
+                        "name": "Toolbar",
+                        "title": "Focus",
+                        "command": null,
+                        "action": "work.focus"
+                    }
+                ]
+            }
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(null_command.contains("expected omitted field or non-null value"));
+
+        let null_action = serde_json::from_value::<PluginManifest>(json!({
+            "id": "example.agent-tools",
+            "name": "Example Agent Tools",
+            "version": "0.1.0",
+            "contributes": {
+                "toolbar_actions": [
+                    {
+                        "id": "example.agent-tools.toolbar",
+                        "name": "Toolbar",
+                        "title": "Focus",
+                        "command": "example.agent-tools.focus",
+                        "action": null
+                    }
+                ]
+            }
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(null_action.contains("expected omitted field or non-null value"));
+    }
+
+    #[test]
+    fn plugin_manifest_rejects_unknown_manifest_fields() {
+        let top_level = serde_json::from_value::<PluginManifest>(json!({
+            "id": "example.agent-tools",
+            "name": "Example Agent Tools",
+            "version": "0.1.0",
+            "unexpected": true
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(top_level.contains("unknown field"));
+
+        let processor_bucket = serde_json::from_value::<PluginManifest>(json!({
+            "id": "example.agent-tools",
+            "name": "Example Agent Tools",
+            "version": "0.1.0",
+            "contributes": {
+                "redaction_processors": []
+            }
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(processor_bucket.contains("unknown field"));
+
+        let runtime_shaped_declarative = serde_json::from_value::<PluginManifest>(json!({
+            "id": "example.agent-tools",
+            "name": "Example Agent Tools",
+            "version": "0.1.0",
+            "contributes": {
+                "templates": [
+                    {
+                        "id": "example.agent-tools.template",
+                        "name": "Template",
+                        "title": "Template",
+                        "template": "host.template",
+                        "entrypoint": "main"
+                    }
+                ]
+            }
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(runtime_shaped_declarative.contains("unknown field"));
+    }
+
+    #[test]
+    fn plugin_manifest_validation_rejects_unknown_toolbar_command() {
+        let mut manifest = minimal_plugin_manifest();
+        manifest.contributes.toolbar_actions[0].command =
+            Some("example.agent-tools.missing".into());
+
+        assert_eq!(
+            manifest.validate(),
+            Err(PluginManifestValidationError::UnknownCommand {
+                field: "contributes.toolbar_actions",
+                id: "example.agent-tools.missing".into(),
+            })
+        );
     }
 
     #[test]

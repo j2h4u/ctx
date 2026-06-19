@@ -27,6 +27,12 @@ export type PluginContributions = {
   collectors?: PluginCollectorContribution[];
   observers?: PluginObserverContribution[];
   ui_surfaces?: PluginUiSurfaceContribution[];
+  templates?: PluginWorkbenchTemplateContribution[];
+  toolbar_actions?: PluginWorkbenchToolbarActionContribution[];
+  artifact_renderers?: PluginArtifactRendererContribution[];
+  card_renderers?: PluginWorkbenchCardRendererContribution[];
+  detail_sections?: PluginWorkbenchSectionContribution[];
+  review_sections?: PluginWorkbenchSectionContribution[];
 };
 
 export type PluginProviderContribution = {
@@ -84,6 +90,58 @@ export type PluginUiSurfaceContribution = {
   entrypoint?: string | null;
   contexts?: string[];
 };
+
+export type PluginDeclarativeWorkbenchContribution = {
+  id: string;
+  name: string;
+  description?: string | null;
+  contexts?: string[];
+  data_sources?: string[];
+};
+
+export type PluginWorkbenchTemplateContribution =
+  PluginDeclarativeWorkbenchContribution & {
+    title: string;
+    template: string;
+  };
+
+export type ApprovedCtxActionId =
+  | "work.focus"
+  | "task.start"
+  | "ctx.command.run"
+  | "plugin.command.run"
+  | "work.export_redact"
+  | "artifact.attach"
+  | "note.attest"
+  | "gate.update"
+  | "provider.settings.open"
+  | "provider.session.restart";
+
+export type PluginWorkbenchToolbarActionContribution =
+  PluginDeclarativeWorkbenchContribution & {
+    title: string;
+    command?: string;
+    action?: ApprovedCtxActionId;
+    icon?: string | null;
+  };
+
+export type PluginArtifactRendererContribution =
+  PluginDeclarativeWorkbenchContribution & {
+    artifact_types: string[];
+    renderer: string;
+  };
+
+export type PluginWorkbenchCardRendererContribution =
+  PluginDeclarativeWorkbenchContribution & {
+    card: string;
+    renderer: string;
+  };
+
+export type PluginWorkbenchSectionContribution =
+  PluginDeclarativeWorkbenchContribution & {
+    section: string;
+    renderer: string;
+  };
 
 export type PluginCompatibility = {
   min_ctx_version?: string | null;

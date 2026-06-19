@@ -21,12 +21,23 @@ export default defineCtxPlugin({
         contexts: ["review"],
       }),
     ],
+    review_sections: [
+      {
+        id: "example.review.gates",
+        name: "Gate State",
+        section: "gate-state",
+        renderer: "host.gate-state-section",
+      },
+    ],
   },
 });
 ```
 
 The SDK is manifest-first and intentionally narrow. It types supported
-manifest contributions and exposes deferred contribution markers for areas that
-are named in the contribution contract but do not yet have runtime execution
-semantics. Deferred markers and importer action requests are sidecar SDK values,
-not additional manifest schema fields.
+manifest contributions, including host-owned declarative Workbench buckets such
+as `templates`, `toolbar_actions`, `artifact_renderers`, `card_renderers`,
+`detail_sections`, and `review_sections`.
+
+Deferred markers remain sidecar SDK values, not additional manifest schema
+fields. Redaction and export processors are deferred sidecars in this slice.
+Arbitrary React/webview execution remains deferred or capability-gated.

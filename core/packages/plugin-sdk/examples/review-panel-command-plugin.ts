@@ -47,6 +47,61 @@ const reviewPanelCommandPlugin = defineCtxPlugin({
         contexts: ["review", "change-set"],
       }),
     ],
+    templates: [
+      {
+        id: "example.review.summary-template",
+        name: "Review Summary Template",
+        title: "Review Summary",
+        template: "review-summary",
+        contexts: ["review"],
+        data_sources: ["change-set/diff-summary", "plugin-diagnostics"],
+      },
+    ],
+    toolbar_actions: [
+      {
+        id: "example.review.open-action",
+        name: "Open Review Panel Action",
+        title: "Open Review",
+        command: "example.review.open",
+        contexts: ["review"],
+      },
+    ],
+    artifact_renderers: [
+      {
+        id: "example.review.patch-artifact-renderer",
+        name: "Patch Artifact Renderer",
+        artifact_types: ["text/x-diff"],
+        renderer: "host.diff-artifact",
+        contexts: ["review"],
+      },
+    ],
+    card_renderers: [
+      {
+        id: "example.review.finding-card-renderer",
+        name: "Finding Card Renderer",
+        card: "review.finding",
+        renderer: "host.review-finding-card",
+        data_sources: ["check/gate-state"],
+      },
+    ],
+    detail_sections: [
+      {
+        id: "example.review.diff-detail-section",
+        name: "Diff Detail Section",
+        section: "diff-summary",
+        renderer: "host.diff-summary-section",
+        data_sources: ["change-set/diff-summary"],
+      },
+    ],
+    review_sections: [
+      {
+        id: "example.review.gate-review-section",
+        name: "Gate Review Section",
+        section: "gate-state",
+        renderer: "host.gate-state-section",
+        data_sources: ["check/gate-state"],
+      },
+    ],
   },
 });
 
@@ -66,42 +121,6 @@ export const deferredReviewPluginContributions = defineDeferredContributions({
     deferredContribution(
       "export_processor",
       "Export processor execution is deferred until export permissions and redaction defaults are fixed.",
-    ),
-  ],
-  workbench_templates: [
-    deferredContribution(
-      "workbench_template",
-      "Workbench templates are deferred because they are not present in the current v1 manifest schema.",
-    ),
-  ],
-  artifact_renderers: [
-    deferredContribution(
-      "artifact_renderer",
-      "Artifact renderers are deferred because renderer runtime semantics are not present in the current v1 manifest schema.",
-    ),
-  ],
-  card_sections: [
-    deferredContribution(
-      "card_section",
-      "Card section rendering is deferred until host section lifecycle and data binding semantics are fixed.",
-    ),
-  ],
-  detail_sections: [
-    deferredContribution(
-      "detail_section",
-      "Detail section rendering is deferred until host section lifecycle and data binding semantics are fixed.",
-    ),
-  ],
-  review_sections: [
-    deferredContribution(
-      "review_section",
-      "Review section rendering is deferred until the host owns section lifecycle and data binding semantics.",
-    ),
-  ],
-  toolbar_actions: [
-    deferredContribution(
-      "toolbar_action",
-      "Toolbar action placement is deferred until host action provenance and permission prompts are defined.",
     ),
   ],
 });

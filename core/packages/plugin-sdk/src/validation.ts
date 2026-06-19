@@ -15,6 +15,18 @@ const UI_SURFACE_KINDS = new Set([
   "command_palette",
   "settings",
 ]);
+const APPROVED_CTX_ACTION_IDS = new Set([
+  "work.focus",
+  "task.start",
+  "ctx.command.run",
+  "plugin.command.run",
+  "work.export_redact",
+  "artifact.attach",
+  "note.attest",
+  "gate.update",
+  "provider.settings.open",
+  "provider.session.restart",
+]);
 
 export class CtxPluginValidationError extends Error {
   readonly diagnostics: PluginDefinitionDiagnostic[];
@@ -76,6 +88,12 @@ export function validateCtxPlugin(plugin: unknown): PluginValidationResult {
         "collectors",
         "observers",
         "ui_surfaces",
+        "templates",
+        "toolbar_actions",
+        "artifact_renderers",
+        "card_renderers",
+        "detail_sections",
+        "review_sections",
       ],
       "contributes",
       diagnostics,
@@ -98,13 +116,19 @@ export function validateCtxPlugin(plugin: unknown): PluginValidationResult {
       diagnostics,
       { stringArrayFields: ["capabilities"] },
     );
+    const commandContributions = optionalArray(
+      contributes.commands,
+      "contributes.commands",
+      diagnostics,
+    );
     validateCommandContributions(
-      optionalArray(contributes.commands, "contributes.commands", diagnostics),
+      commandContributions,
       manifest.id,
       entrypointIds,
       contributionIds,
       diagnostics,
     );
+    const commandIds = declaredContributionIds(commandContributions);
     validateNamedContributionList(
       optionalArray(contributes.collectors, "contributes.collectors", diagnostics),
       "contributes.collectors",
@@ -136,6 +160,62 @@ export function validateCtxPlugin(plugin: unknown): PluginValidationResult {
         stringArrayFields: ["contexts"],
         validateSurfaceKind: true,
       },
+    );
+    validateDeclarativeWorkbenchContributions(
+      optionalArray(contributes.templates, "contributes.templates", diagnostics),
+      "contributes.templates",
+      ["id", "name", "description", "contexts", "data_sources", "title", "template"],
+      ["title", "template"],
+      manifest.id,
+      contributionIds,
+      diagnostics,
+    );
+    validateToolbarActionContributions(
+      optionalArray(contributes.toolbar_actions, "contributes.toolbar_actions", diagnostics),
+      manifest.id,
+      commandIds,
+      contributionIds,
+      diagnostics,
+    );
+    validateDeclarativeWorkbenchContributions(
+      optionalArray(contributes.artifact_renderers, "contributes.artifact_renderers", diagnostics),
+      "contributes.artifact_renderers",
+      ["id", "name", "description", "contexts", "data_sources", "artifact_types", "renderer"],
+      ["renderer"],
+      manifest.id,
+      contributionIds,
+      diagnostics,
+      {
+        stringArrayFields: ["artifact_types"],
+        requiredStringArrayFields: ["artifact_types"],
+      },
+    );
+    validateDeclarativeWorkbenchContributions(
+      optionalArray(contributes.card_renderers, "contributes.card_renderers", diagnostics),
+      "contributes.card_renderers",
+      ["id", "name", "description", "contexts", "data_sources", "card", "renderer"],
+      ["card", "renderer"],
+      manifest.id,
+      contributionIds,
+      diagnostics,
+    );
+    validateDeclarativeWorkbenchContributions(
+      optionalArray(contributes.detail_sections, "contributes.detail_sections", diagnostics),
+      "contributes.detail_sections",
+      ["id", "name", "description", "contexts", "data_sources", "section", "renderer"],
+      ["section", "renderer"],
+      manifest.id,
+      contributionIds,
+      diagnostics,
+    );
+    validateDeclarativeWorkbenchContributions(
+      optionalArray(contributes.review_sections, "contributes.review_sections", diagnostics),
+      "contributes.review_sections",
+      ["id", "name", "description", "contexts", "data_sources", "section", "renderer"],
+      ["section", "renderer"],
+      manifest.id,
+      contributionIds,
+      diagnostics,
     );
   }
 
@@ -363,6 +443,144 @@ type NamedContributionOptions = {
   validateSurfaceKind?: boolean;
 };
 
+type DeclarativeWorkbenchContributionOptions = {
+  stringArrayFields?: readonly string[];
+  requiredStringArrayFields?: readonly string[];
+};
+
+function validateDeclarativeWorkbenchContributions(
+  contributions: readonly unknown[],
+  pathPrefix: string,
+  allowedKeys: readonly string[],
+  requiredStringFields: readonly string[],
+  pluginId: unknown,
+  contributionIds: Set<string>,
+  diagnostics: PluginDefinitionDiagnostic[],
+  options: DeclarativeWorkbenchContributionOptions = {},
+): void {
+  for (const [index, value] of contributions.entries()) {
+    const path = `${pathPrefix}[${index}]`;
+    const contribution = asRecord(value, path, diagnostics);
+    if (!contribution) continue;
+
+    validateAllowedKeys(contribution, allowedKeys, path, diagnostics);
+    validateRequiredString(contribution.id, `${path}.id`, diagnostics);
+    validateRequiredString(contribution.name, `${path}.name`, diagnostics);
+    validateOptionalNullableString(
+      contribution.description,
+      `${path}.description`,
+      diagnostics,
+    );
+    validateOptionalStringArray(contribution.contexts, `${path}.contexts`, diagnostics);
+    validateOptionalStringArray(
+      contribution.data_sources,
+      `${path}.data_sources`,
+      diagnostics,
+    );
+    validatePluginQualifiedId(
+      contribution.id,
+      pluginId,
+      `${path}.id`,
+      "contribution_id_not_plugin_qualified",
+      "Contribution id",
+      diagnostics,
+    );
+    trackUnique(
+      contributionIds,
+      contribution.id,
+      `${path}.id`,
+      "duplicate_contribution_id",
+      diagnostics,
+    );
+    for (const field of requiredStringFields) {
+      validateRequiredString(contribution[field], `${path}.${field}`, diagnostics);
+    }
+    for (const field of options.stringArrayFields ?? []) {
+      validateOptionalStringArray(
+        contribution[field],
+        `${path}.${field}`,
+        diagnostics,
+      );
+    }
+    for (const field of options.requiredStringArrayFields ?? []) {
+      validateRequiredStringArray(
+        contribution[field],
+        `${path}.${field}`,
+        diagnostics,
+      );
+    }
+  }
+}
+
+function validateToolbarActionContributions(
+  contributions: readonly unknown[],
+  pluginId: unknown,
+  commandIds: ReadonlySet<string>,
+  contributionIds: Set<string>,
+  diagnostics: PluginDefinitionDiagnostic[],
+): void {
+  validateDeclarativeWorkbenchContributions(
+    contributions,
+    "contributes.toolbar_actions",
+    [
+      "id",
+      "name",
+      "description",
+      "contexts",
+      "data_sources",
+      "title",
+      "command",
+      "action",
+      "icon",
+    ],
+    ["title"],
+    pluginId,
+    contributionIds,
+    diagnostics,
+  );
+
+  for (const [index, value] of contributions.entries()) {
+    const path = `contributes.toolbar_actions[${index}]`;
+    const contribution = isRecord(value) ? value : null;
+    if (!contribution) continue;
+
+    validateOptionalNonEmptyString(contribution.command, `${path}.command`, diagnostics);
+    validateOptionalNullableString(contribution.icon, `${path}.icon`, diagnostics);
+    if (
+      typeof contribution.command === "string" &&
+      contribution.command.trim().length > 0 &&
+      !commandIds.has(contribution.command)
+    ) {
+      diagnostics.push({
+        severity: "error",
+        code: "unknown_command_reference",
+        message: "Toolbar action command must reference a declared plugin command.",
+        path: `${path}.command`,
+      });
+    }
+    if (
+      contribution.action !== undefined &&
+      (typeof contribution.action !== "string" ||
+        !APPROVED_CTX_ACTION_IDS.has(contribution.action))
+    ) {
+      diagnostics.push({
+        severity: "error",
+        code: "invalid_action_id",
+        message: "Toolbar action must reference an approved ctx action id.",
+        path: `${path}.action`,
+      });
+    }
+    if (contribution.command === undefined && contribution.action === undefined) {
+      diagnostics.push({
+        severity: "error",
+        code: "missing_toolbar_action_target",
+        message: "Toolbar action must reference a plugin command or approved ctx action.",
+        path,
+      });
+    }
+  }
+}
+
 function validateNamedContributionList(
   contributions: readonly unknown[],
   pathPrefix: string,
@@ -514,6 +732,47 @@ function validateOptionalNullableString(
   }
 }
 
+function validateOptionalString(
+  value: unknown,
+  path: string,
+  diagnostics: PluginDefinitionDiagnostic[],
+): void {
+  if (value === undefined) return;
+  if (typeof value !== "string") {
+    diagnostics.push({
+      severity: "error",
+      code: "expected_string",
+      message: "Expected a string.",
+      path,
+    });
+  }
+}
+
+function validateOptionalNonEmptyString(
+  value: unknown,
+  path: string,
+  diagnostics: PluginDefinitionDiagnostic[],
+): void {
+  if (value === undefined) return;
+  if (typeof value !== "string") {
+    diagnostics.push({
+      severity: "error",
+      code: "expected_string",
+      message: "Expected a string.",
+      path,
+    });
+    return;
+  }
+  if (value.trim().length === 0) {
+    diagnostics.push({
+      severity: "error",
+      code: "empty_string",
+      message: "Expected a non-empty string.",
+      path,
+    });
+  }
+}
+
 function validateOptionalStringArray(
   value: unknown,
   path: string,
@@ -539,6 +798,23 @@ function validateOptionalStringArray(
       });
     }
   }
+}
+
+function validateRequiredStringArray(
+  value: unknown,
+  path: string,
+  diagnostics: PluginDefinitionDiagnostic[],
+): void {
+  if (!Array.isArray(value) || value.length === 0) {
+    diagnostics.push({
+      severity: "error",
+      code: "expected_array",
+      message: "Expected a non-empty array of strings.",
+      path,
+    });
+    return;
+  }
+  validateOptionalStringArray(value, path, diagnostics);
 }
 
 function validateOptionalStringRecord(
@@ -636,6 +912,17 @@ function trackUnique(
   seen.add(value);
 }
 
+function declaredContributionIds(contributions: readonly unknown[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const contribution of contributions) {
+    if (!isRecord(contribution)) continue;
+    if (typeof contribution.id === "string" && contribution.id.trim().length > 0) {
+      ids.add(contribution.id);
+    }
+  }
+  return ids;
+}
+
 function optionalArray(
   value: unknown,
   path: string,
@@ -693,5 +980,11 @@ function hasRuntimeShape(plugin: ObjectRecord): boolean {
     contributes.collectors,
     contributes.observers,
     contributes.ui_surfaces,
+    contributes.templates,
+    contributes.toolbar_actions,
+    contributes.artifact_renderers,
+    contributes.card_renderers,
+    contributes.detail_sections,
+    contributes.review_sections,
   ].some((value) => Array.isArray(value) && value.length > 0);
 }
