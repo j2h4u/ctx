@@ -1,4 +1,13 @@
-import type { PluginExtensionRegistry, PluginInventoryItem } from "@ctx/types";
+import type {
+  PluginArtifactRendererContribution,
+  PluginContributionRegistration,
+  PluginExtensionRegistry,
+  PluginInventoryItem,
+  PluginWorkbenchCardRendererContribution,
+  PluginWorkbenchSectionContribution,
+  PluginWorkbenchTemplateContribution,
+  PluginWorkbenchToolbarActionContribution,
+} from "@ctx/types";
 import { useEffect, useSyncExternalStore } from "react";
 import {
   getPluginExtensions,
@@ -36,6 +45,15 @@ const pluginRegistryStore = createDaemonResourceStore<string, PluginRegistryStat
 
 let pluginRegistryWriteGeneration = 0;
 
+type PluginDeclarativeExtensionRegistry = PluginExtensionRegistry & {
+  templates?: PluginContributionRegistration<PluginWorkbenchTemplateContribution>[];
+  toolbar_actions?: PluginContributionRegistration<PluginWorkbenchToolbarActionContribution>[];
+  artifact_renderers?: PluginContributionRegistration<PluginArtifactRendererContribution>[];
+  card_renderers?: PluginContributionRegistration<PluginWorkbenchCardRendererContribution>[];
+  detail_sections?: PluginContributionRegistration<PluginWorkbenchSectionContribution>[];
+  review_sections?: PluginContributionRegistration<PluginWorkbenchSectionContribution>[];
+};
+
 const normalizeInventory = (inventory: PluginInventoryResponse): PluginInventoryResponse => ({
   revision: inventory.revision,
   roots: [...(inventory.roots ?? [])].sort((left, right) => left.localeCompare(right)),
@@ -44,27 +62,32 @@ const normalizeInventory = (inventory: PluginInventoryResponse): PluginInventory
   ),
 });
 
-const normalizeRegistry = (registry: PluginExtensionRegistry): PluginExtensionRegistry => ({
-  revision: registry.revision,
-  providers: [...(registry.providers ?? [])].sort((left, right) =>
-    left.contribution.id.localeCompare(right.contribution.id) || left.plugin_id.localeCompare(right.plugin_id)
-  ),
-  runtimes: [...(registry.runtimes ?? [])].sort((left, right) =>
-    left.contribution.id.localeCompare(right.contribution.id) || left.plugin_id.localeCompare(right.plugin_id)
-  ),
-  commands: [...(registry.commands ?? [])].sort((left, right) =>
-    left.contribution.id.localeCompare(right.contribution.id) || left.plugin_id.localeCompare(right.plugin_id)
-  ),
-  collectors: [...(registry.collectors ?? [])].sort((left, right) =>
-    left.contribution.id.localeCompare(right.contribution.id) || left.plugin_id.localeCompare(right.plugin_id)
-  ),
-  observers: [...(registry.observers ?? [])].sort((left, right) =>
-    left.contribution.id.localeCompare(right.contribution.id) || left.plugin_id.localeCompare(right.plugin_id)
-  ),
-  ui_surfaces: [...(registry.ui_surfaces ?? [])].sort((left, right) =>
-    left.contribution.id.localeCompare(right.contribution.id) || left.plugin_id.localeCompare(right.plugin_id)
-  ),
-});
+const sortContributionRegistrations = <T extends { plugin_id: string; contribution: { id: string } }>(
+  registrations: readonly T[] | undefined,
+): T[] =>
+  [...(registrations ?? [])].sort(
+    (left, right) =>
+      left.contribution.id.localeCompare(right.contribution.id) || left.plugin_id.localeCompare(right.plugin_id),
+  );
+
+const normalizeRegistry = (registry: PluginExtensionRegistry): PluginExtensionRegistry => {
+  const declarativeRegistry = registry as PluginDeclarativeExtensionRegistry;
+  return {
+    revision: registry.revision,
+    providers: sortContributionRegistrations(registry.providers),
+    runtimes: sortContributionRegistrations(registry.runtimes),
+    commands: sortContributionRegistrations(registry.commands),
+    collectors: sortContributionRegistrations(registry.collectors),
+    observers: sortContributionRegistrations(registry.observers),
+    ui_surfaces: sortContributionRegistrations(registry.ui_surfaces),
+    templates: sortContributionRegistrations(declarativeRegistry.templates),
+    toolbar_actions: sortContributionRegistrations(declarativeRegistry.toolbar_actions),
+    artifact_renderers: sortContributionRegistrations(declarativeRegistry.artifact_renderers),
+    card_renderers: sortContributionRegistrations(declarativeRegistry.card_renderers),
+    detail_sections: sortContributionRegistrations(declarativeRegistry.detail_sections),
+    review_sections: sortContributionRegistrations(declarativeRegistry.review_sections),
+  } as PluginDeclarativeExtensionRegistry;
+};
 
 const loadPluginRegistryState = async (): Promise<PluginRegistryState> => {
   const [rawInventory, extensionResponse] = await Promise.all([

@@ -3,7 +3,9 @@ import type { PluginExtensionRegistry } from "@ctx/types";
 import {
   isWorkbenchPluginTemplateId,
   parseWorkbenchPluginTemplateId,
+  projectPluginWorkbenchDeclarativeContributions,
   projectPluginWorkbenchContributions,
+  projectWorkbenchDeclarativeContributionProjection,
   projectWorkbenchContributionProjection,
   toWorkbenchPluginTemplateId,
 } from "./pluginWorkbenchContributionProjection";
@@ -118,6 +120,298 @@ describe("pluginWorkbenchContributionProjection", () => {
         compatibility: { kind: "unsupported_surface", surface: "command_palette" },
       }),
     ]);
+  });
+
+  it("projects declarative Workbench buckets as source-labeled inert candidates", () => {
+    const registry = {
+      revision: 9,
+      templates: [
+        {
+          plugin_id: "review.tools",
+          plugin_name: "Review Tools",
+          plugin_version: "0.3.0",
+          plugin_path: "/plugins/review/ctx-plugin.json",
+          plugin_revision: "rev-review",
+          contribution: {
+            id: "summary",
+            name: "Review Summary Template",
+            title: "Review Summary",
+            template: "review",
+            contexts: ["review", " review ", ""],
+            data_sources: ["change-set/diff-summary", "change-set/diff-summary"],
+          },
+        },
+      ],
+      toolbar_actions: [
+        {
+          plugin_id: "review.tools",
+          plugin_name: "Review Tools",
+          plugin_version: "0.3.0",
+          plugin_path: "/plugins/review/ctx-plugin.json",
+          contribution: {
+            id: "open",
+            name: "Open Review Panel Action",
+            title: "Open Review",
+            command: "review.open",
+            icon: "panel-top",
+            contexts: ["review"],
+          },
+        },
+      ],
+      artifact_renderers: [
+        {
+          plugin_id: "review.tools",
+          plugin_name: "Review Tools",
+          plugin_version: "0.3.0",
+          plugin_path: "/plugins/review/ctx-plugin.json",
+          contribution: {
+            id: "patch",
+            name: "Patch Artifact Renderer",
+            artifact_types: ["text/x-diff", " text/x-diff "],
+            renderer: "host.diff-artifact",
+          },
+        },
+      ],
+      card_renderers: [
+        {
+          plugin_id: "review.tools",
+          plugin_name: "Review Tools",
+          plugin_version: "0.3.0",
+          plugin_path: "/plugins/review/ctx-plugin.json",
+          contribution: {
+            id: "finding",
+            name: "Finding Card Renderer",
+            card: "review.finding",
+            renderer: "host.review-finding-card",
+          },
+        },
+      ],
+      detail_sections: [
+        {
+          plugin_id: "review.tools",
+          plugin_name: "Review Tools",
+          plugin_version: "0.3.0",
+          plugin_path: "/plugins/review/ctx-plugin.json",
+          contribution: {
+            id: "diff",
+            name: "Diff Detail Section",
+            section: "diff-summary",
+            renderer: "host.diff-summary-section",
+          },
+        },
+      ],
+      review_sections: [
+        {
+          plugin_id: "review.tools",
+          plugin_name: "Review Tools",
+          plugin_version: "0.3.0",
+          plugin_path: "/plugins/review/ctx-plugin.json",
+          contribution: {
+            id: "gate",
+            name: "Gate Review Section",
+            section: "gate-state",
+            renderer: "host.gate-state-section",
+          },
+        },
+      ],
+    } as unknown as PluginExtensionRegistry;
+
+    const projection = projectWorkbenchDeclarativeContributionProjection({
+      loadState: { kind: "ready" },
+      registry,
+    });
+
+    expect(projection.kind).toBe("ready");
+    expect(projection.buckets.templates[0]).toMatchObject({
+      id: "templates:review.tools/summary",
+      title: "Review Summary",
+      template: "review",
+      contexts: ["review"],
+      dataSources: ["change-set/diff-summary"],
+      source: {
+        pluginId: "review.tools",
+        pluginName: "Review Tools",
+        pluginVersion: "0.3.0",
+        pluginPath: "/plugins/review/ctx-plugin.json",
+        pluginRevision: "rev-review",
+        label: "Review Tools 0.3.0",
+      },
+      compatibility: { kind: "compatible" },
+    });
+    expect(projection.buckets.toolbarActions[0]).toMatchObject({
+      id: "toolbar_actions:review.tools/open",
+      title: "Open Review",
+      icon: "panel-top",
+      intent: { kind: "plugin_command", command: "review.open" },
+    });
+    expect(projection.buckets.artifactRenderers[0]).toMatchObject({
+      artifactTypes: ["text/x-diff"],
+      renderer: "host.diff-artifact",
+    });
+    expect(projection.buckets.cardRenderers[0]).toMatchObject({
+      card: "review.finding",
+      renderer: "host.review-finding-card",
+    });
+    expect(projection.buckets.detailSections[0]).toMatchObject({
+      section: "diff-summary",
+      renderer: "host.diff-summary-section",
+    });
+    expect(projection.buckets.reviewSections[0]).toMatchObject({
+      section: "gate-state",
+      renderer: "host.gate-state-section",
+    });
+    expect(projection.buckets.toolbarActions[0]).toEqual(
+      JSON.parse(JSON.stringify(projection.buckets.toolbarActions[0])),
+    );
+  });
+
+  it("filters malformed declarative records and marks unsafe metadata invalid", () => {
+    const registry = {
+      revision: 1,
+      templates: [
+        {
+          plugin_id: "broken.tools",
+          plugin_name: "Broken Tools",
+          plugin_version: "0.1.0",
+          plugin_path: "/plugins/broken/ctx-plugin.json",
+          contribution: {
+            id: "blank-title",
+            name: "Blank Title",
+            title: "   ",
+            template: "review",
+          },
+        },
+        {
+          plugin_id: "missing-meta.tools",
+          plugin_name: "Missing Metadata Tools",
+          plugin_version: " ",
+          plugin_path: "/plugins/missing/ctx-plugin.json",
+          contribution: {
+            id: "review-template",
+            name: "Review Template",
+            title: "Review",
+            template: "review",
+          },
+        },
+      ],
+      artifact_renderers: [
+        {
+          plugin_id: "broken.tools",
+          plugin_name: "Broken Tools",
+          plugin_version: "0.1.0",
+          plugin_path: "/plugins/broken/ctx-plugin.json",
+          contribution: {
+            id: "missing-artifact-type",
+            name: "Missing Artifact Type",
+            artifact_types: [],
+            renderer: "host.diff-artifact",
+          },
+        },
+      ],
+    } as unknown as PluginExtensionRegistry;
+
+    expect(projectPluginWorkbenchDeclarativeContributions(registry)).toEqual([
+      expect.objectContaining({
+        id: "templates:missing-meta.tools/review-template",
+        compatibility: { kind: "invalid", reasons: ["missing_plugin_version"] },
+      }),
+    ]);
+  });
+
+  it("marks unknown declarative template and renderer IDs as unsupported data", () => {
+    const registry = {
+      revision: 1,
+      templates: [
+        {
+          plugin_id: "review.tools",
+          plugin_name: "Review Tools",
+          plugin_version: "0.3.0",
+          plugin_path: "/plugins/review/ctx-plugin.json",
+          contribution: {
+            id: "summary",
+            name: "Review Summary Template",
+            title: "Review Summary",
+            template: "review-summary",
+          },
+        },
+      ],
+      review_sections: [
+        {
+          plugin_id: "review.tools",
+          plugin_name: "Review Tools",
+          plugin_version: "0.3.0",
+          plugin_path: "/plugins/review/ctx-plugin.json",
+          contribution: {
+            id: "custom",
+            name: "Custom Review Section",
+            section: "custom",
+            renderer: "plugin.custom-renderer",
+          },
+        },
+      ],
+    } as unknown as PluginExtensionRegistry;
+
+    expect(projectPluginWorkbenchDeclarativeContributions(registry)).toEqual([
+      expect.objectContaining({
+        bucket: "review_sections",
+        renderer: "plugin.custom-renderer",
+        compatibility: { kind: "unsupported_renderer", renderer: "plugin.custom-renderer" },
+      }),
+      expect.objectContaining({
+        bucket: "templates",
+        template: "review-summary",
+        compatibility: { kind: "unsupported_template", template: "review-summary" },
+      }),
+    ]);
+  });
+
+  it("returns safe declarative fallback states while the registry loads or fails", () => {
+    expect(projectWorkbenchDeclarativeContributionProjection({ loadState: { kind: "loading" } })).toEqual({
+      kind: "loading",
+      candidates: [],
+      buckets: {
+        templates: [],
+        toolbarActions: [],
+        artifactRenderers: [],
+        cardRenderers: [],
+        detailSections: [],
+        reviewSections: [],
+      },
+      fallback: { kind: "registry_loading" },
+    });
+
+    expect(
+      projectWorkbenchDeclarativeContributionProjection({
+        loadState: { kind: "error", message: "registry unavailable" },
+      }),
+    ).toEqual({
+      kind: "error",
+      message: "registry unavailable",
+      candidates: [],
+      buckets: {
+        templates: [],
+        toolbarActions: [],
+        artifactRenderers: [],
+        cardRenderers: [],
+        detailSections: [],
+        reviewSections: [],
+      },
+      fallback: { kind: "registry_error", message: "registry unavailable" },
+    });
+
+    expect(projectWorkbenchDeclarativeContributionProjection({ loadState: { kind: "ready" } })).toEqual({
+      kind: "empty",
+      candidates: [],
+      buckets: {
+        templates: [],
+        toolbarActions: [],
+        artifactRenderers: [],
+        cardRenderers: [],
+        detailSections: [],
+        reviewSections: [],
+      },
+      fallback: null,
+    });
   });
 
   it("resolves loading, empty, error, ready, and fallback projection states", () => {
