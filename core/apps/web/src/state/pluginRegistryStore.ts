@@ -1,13 +1,4 @@
-import type {
-  PluginArtifactRendererContribution,
-  PluginContributionRegistration,
-  PluginExtensionRegistry,
-  PluginInventoryItem,
-  PluginWorkbenchCardRendererContribution,
-  PluginWorkbenchSectionContribution,
-  PluginWorkbenchTemplateContribution,
-  PluginWorkbenchToolbarActionContribution,
-} from "@ctx/types";
+import type { PluginExtensionRegistry, PluginInventoryItem } from "@ctx/types";
 import { useEffect, useSyncExternalStore } from "react";
 import {
   getPluginExtensions,
@@ -45,15 +36,6 @@ const pluginRegistryStore = createDaemonResourceStore<string, PluginRegistryStat
 
 let pluginRegistryWriteGeneration = 0;
 
-type PluginDeclarativeExtensionRegistry = PluginExtensionRegistry & {
-  templates?: PluginContributionRegistration<PluginWorkbenchTemplateContribution>[];
-  toolbar_actions?: PluginContributionRegistration<PluginWorkbenchToolbarActionContribution>[];
-  artifact_renderers?: PluginContributionRegistration<PluginArtifactRendererContribution>[];
-  card_renderers?: PluginContributionRegistration<PluginWorkbenchCardRendererContribution>[];
-  detail_sections?: PluginContributionRegistration<PluginWorkbenchSectionContribution>[];
-  review_sections?: PluginContributionRegistration<PluginWorkbenchSectionContribution>[];
-};
-
 const normalizeInventory = (inventory: PluginInventoryResponse): PluginInventoryResponse => ({
   revision: inventory.revision,
   roots: [...(inventory.roots ?? [])].sort((left, right) => left.localeCompare(right)),
@@ -71,7 +53,6 @@ const sortContributionRegistrations = <T extends { plugin_id: string; contributi
   );
 
 const normalizeRegistry = (registry: PluginExtensionRegistry): PluginExtensionRegistry => {
-  const declarativeRegistry = registry as PluginDeclarativeExtensionRegistry;
   return {
     revision: registry.revision,
     providers: sortContributionRegistrations(registry.providers),
@@ -80,13 +61,13 @@ const normalizeRegistry = (registry: PluginExtensionRegistry): PluginExtensionRe
     collectors: sortContributionRegistrations(registry.collectors),
     observers: sortContributionRegistrations(registry.observers),
     ui_surfaces: sortContributionRegistrations(registry.ui_surfaces),
-    templates: sortContributionRegistrations(declarativeRegistry.templates),
-    toolbar_actions: sortContributionRegistrations(declarativeRegistry.toolbar_actions),
-    artifact_renderers: sortContributionRegistrations(declarativeRegistry.artifact_renderers),
-    card_renderers: sortContributionRegistrations(declarativeRegistry.card_renderers),
-    detail_sections: sortContributionRegistrations(declarativeRegistry.detail_sections),
-    review_sections: sortContributionRegistrations(declarativeRegistry.review_sections),
-  } as PluginDeclarativeExtensionRegistry;
+    templates: sortContributionRegistrations(registry.templates),
+    toolbar_actions: sortContributionRegistrations(registry.toolbar_actions),
+    artifact_renderers: sortContributionRegistrations(registry.artifact_renderers),
+    card_renderers: sortContributionRegistrations(registry.card_renderers),
+    detail_sections: sortContributionRegistrations(registry.detail_sections),
+    review_sections: sortContributionRegistrations(registry.review_sections),
+  };
 };
 
 const loadPluginRegistryState = async (): Promise<PluginRegistryState> => {

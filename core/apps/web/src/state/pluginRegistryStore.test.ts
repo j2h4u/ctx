@@ -85,6 +85,132 @@ describe("pluginRegistryStore", () => {
     expect(store.getPluginRegistrySnapshot()).toEqual(loaded);
   });
 
+  it("preserves and sorts declarative extension registry buckets", async () => {
+    vi.mocked(getPlugins).mockResolvedValue({
+      revision: 4,
+      roots: [],
+      plugins: [],
+    });
+    vi.mocked(getPluginExtensions).mockResolvedValue({
+      registry: {
+        revision: 4,
+        templates: [
+          {
+            plugin_id: "zeta.tools",
+            plugin_name: "Zeta Tools",
+            plugin_version: "0.2.0",
+            plugin_path: "/plugins/zeta/ctx-plugin.json",
+            contribution: {
+              id: "zeta.tools.template",
+              name: "Zeta Template",
+              title: "Zeta",
+              template: "review-summary",
+            },
+          },
+          {
+            plugin_id: "alpha.tools",
+            plugin_name: "Alpha Tools",
+            plugin_version: "0.1.0",
+            plugin_path: "/plugins/alpha/ctx-plugin.json",
+            contribution: {
+              id: "alpha.tools.template",
+              name: "Alpha Template",
+              title: "Alpha",
+              template: "review-summary",
+            },
+          },
+        ],
+        toolbar_actions: [
+          {
+            plugin_id: "alpha.tools",
+            plugin_name: "Alpha Tools",
+            plugin_version: "0.1.0",
+            plugin_path: "/plugins/alpha/ctx-plugin.json",
+            contribution: {
+              id: "alpha.tools.open",
+              name: "Open Review",
+              title: "Open Review",
+              command: "alpha.tools.command",
+            },
+          },
+        ],
+        artifact_renderers: [
+          {
+            plugin_id: "alpha.tools",
+            plugin_name: "Alpha Tools",
+            plugin_version: "0.1.0",
+            plugin_path: "/plugins/alpha/ctx-plugin.json",
+            contribution: {
+              id: "alpha.tools.artifact",
+              name: "JSON Artifact",
+              artifact_types: ["application/json"],
+              renderer: "host.json-artifact",
+            },
+          },
+        ],
+        card_renderers: [
+          {
+            plugin_id: "alpha.tools",
+            plugin_name: "Alpha Tools",
+            plugin_version: "0.1.0",
+            plugin_path: "/plugins/alpha/ctx-plugin.json",
+            contribution: {
+              id: "alpha.tools.card",
+              name: "Work Summary Card",
+              card: "work.summary",
+              renderer: "host.work-summary-card",
+            },
+          },
+        ],
+        detail_sections: [
+          {
+            plugin_id: "alpha.tools",
+            plugin_name: "Alpha Tools",
+            plugin_version: "0.1.0",
+            plugin_path: "/plugins/alpha/ctx-plugin.json",
+            contribution: {
+              id: "alpha.tools.detail",
+              name: "Work Summary Detail",
+              section: "work-summary",
+              renderer: "host.work-summary-section",
+            },
+          },
+        ],
+        review_sections: [
+          {
+            plugin_id: "alpha.tools",
+            plugin_name: "Alpha Tools",
+            plugin_version: "0.1.0",
+            plugin_path: "/plugins/alpha/ctx-plugin.json",
+            contribution: {
+              id: "alpha.tools.review",
+              name: "Gate State",
+              section: "gate-state",
+              renderer: "host.gate-state-section",
+            },
+          },
+        ],
+      },
+    });
+    const store = await loadStore();
+
+    const loaded = await store.loadPluginRegistry();
+
+    expect(loaded.registry.templates?.map((entry) => entry.contribution.id)).toEqual([
+      "alpha.tools.template",
+      "zeta.tools.template",
+    ]);
+    expect(loaded.registry.toolbar_actions?.[0]?.contribution.command).toBe("alpha.tools.command");
+    expect(loaded.registry.artifact_renderers?.[0]?.contribution.renderer).toBe("host.json-artifact");
+    expect(loaded.registry.card_renderers?.[0]?.contribution.renderer).toBe("host.work-summary-card");
+    expect(loaded.registry.detail_sections?.[0]?.contribution.renderer).toBe("host.work-summary-section");
+    expect(loaded.registry.review_sections?.[0]?.contribution.renderer).toBe("host.gate-state-section");
+    expect(store.getPluginRegistrySnapshot().registry.templates?.map((entry) => entry.contribution.id)).toEqual([
+      "alpha.tools.template",
+      "zeta.tools.template",
+    ]);
+  });
+
   it("reloads plugins then refreshes the active extension registry", async () => {
     vi.mocked(reloadPlugins).mockResolvedValue({
       revision: 3,

@@ -216,15 +216,6 @@ export type ProjectWorkbenchDeclarativeContributionProjectionOptions = {
   registry?: PluginExtensionRegistry | null;
 };
 
-type PluginDeclarativeExtensionRegistry = PluginExtensionRegistry & {
-  templates?: PluginContributionRegistration<PluginWorkbenchTemplateContribution>[];
-  toolbar_actions?: PluginContributionRegistration<PluginWorkbenchToolbarActionContribution>[];
-  artifact_renderers?: PluginContributionRegistration<PluginArtifactRendererContribution>[];
-  card_renderers?: PluginContributionRegistration<PluginWorkbenchCardRendererContribution>[];
-  detail_sections?: PluginContributionRegistration<PluginWorkbenchSectionContribution>[];
-  review_sections?: PluginContributionRegistration<PluginWorkbenchSectionContribution>[];
-};
-
 const WORKBENCH_COMPATIBLE_SURFACES = new Set<PluginUiSurfaceKind>([
   "panel",
   "sidebar",
@@ -233,13 +224,23 @@ const WORKBENCH_COMPATIBLE_SURFACES = new Set<PluginUiSurfaceKind>([
 
 const DEFAULT_FALLBACK_TEMPLATE_ID: WorkbenchBuiltinTemplateId = "classic";
 
-const SUPPORTED_DECLARATIVE_TEMPLATES = new Set<string>(["classic", "kanban", "multipane", "review"]);
+const SUPPORTED_DECLARATIVE_TEMPLATES = new Set<string>([
+  "classic",
+  "kanban",
+  "multipane",
+  "review",
+  "review-summary",
+]);
 
 const SUPPORTED_DECLARATIVE_RENDERERS = new Set<string>([
   "host.diff-artifact",
+  "host.json-artifact",
   "host.review-finding-card",
+  "host.text-artifact",
   "host.diff-summary-section",
   "host.gate-state-section",
+  "host.work-summary-card",
+  "host.work-summary-section",
 ]);
 
 const normalizeText = (value: string | null | undefined): string => String(value ?? "").trim();
@@ -338,30 +339,29 @@ export const projectPluginWorkbenchContributions = (
 export const projectPluginWorkbenchDeclarativeContributions = (
   registry: PluginExtensionRegistry,
 ): WorkbenchDeclarativeContributionCandidate[] => {
-  const declarativeRegistry = registry as PluginDeclarativeExtensionRegistry;
   const candidates: WorkbenchDeclarativeContributionCandidate[] = [];
 
-  for (const registration of declarativeRegistry.templates ?? []) {
+  for (const registration of registry.templates ?? []) {
     const candidate = projectWorkbenchTemplateContribution(registration);
     if (candidate) candidates.push(candidate);
   }
-  for (const registration of declarativeRegistry.toolbar_actions ?? []) {
+  for (const registration of registry.toolbar_actions ?? []) {
     const candidate = projectWorkbenchToolbarActionContribution(registration);
     if (candidate) candidates.push(candidate);
   }
-  for (const registration of declarativeRegistry.artifact_renderers ?? []) {
+  for (const registration of registry.artifact_renderers ?? []) {
     const candidate = projectWorkbenchArtifactRendererContribution(registration);
     if (candidate) candidates.push(candidate);
   }
-  for (const registration of declarativeRegistry.card_renderers ?? []) {
+  for (const registration of registry.card_renderers ?? []) {
     const candidate = projectWorkbenchCardRendererContribution(registration);
     if (candidate) candidates.push(candidate);
   }
-  for (const registration of declarativeRegistry.detail_sections ?? []) {
+  for (const registration of registry.detail_sections ?? []) {
     const candidate = projectWorkbenchSectionContribution("detail_sections", registration);
     if (candidate) candidates.push(candidate);
   }
-  for (const registration of declarativeRegistry.review_sections ?? []) {
+  for (const registration of registry.review_sections ?? []) {
     const candidate = projectWorkbenchSectionContribution("review_sections", registration);
     if (candidate) candidates.push(candidate);
   }

@@ -331,7 +331,7 @@ describe("pluginWorkbenchContributionProjection", () => {
             id: "summary",
             name: "Review Summary Template",
             title: "Review Summary",
-            template: "review-summary",
+            template: "custom-review-template",
           },
         },
       ],
@@ -359,8 +359,8 @@ describe("pluginWorkbenchContributionProjection", () => {
       }),
       expect.objectContaining({
         bucket: "templates",
-        template: "review-summary",
-        compatibility: { kind: "unsupported_template", template: "review-summary" },
+        template: "custom-review-template",
+        compatibility: { kind: "unsupported_template", template: "custom-review-template" },
       }),
     ]);
   });
