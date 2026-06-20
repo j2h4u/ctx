@@ -363,3 +363,59 @@ These baseline results must be rerun after subsequent implementation phases.
   - Result: passed, 8 Node tests. Added coverage that local-build E2E launches
     resolve `scripts/dev/cargo-safe.sh` when available, preserve explicit
     override and opt-out behavior, and keep Bazel runtime launches Cargo-free.
+
+## Plugin CLI And Work Validation Follow-Ups
+
+- Manager validation for plugin-manifest parity:
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh fmt --package ctx-http`
+  - Result: passed through the host Cargo lock and low-I/O wrapper.
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh test --manifest-path Cargo.toml --locked -p ctx-http --bin ctx agent_work_cli -- --test-threads=1`
+  - Result: passed, 24 tests after `1d3ce74`.
+- Manager validation for strict public Work schema checks:
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh fmt --package ctx-http`
+  - Result: passed through the host Cargo lock and low-I/O wrapper.
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh test --manifest-path Cargo.toml --locked -p ctx-http --bin ctx agent_work_cli -- --test-threads=1`
+  - Result: passed, 27 tests after `dd5a4ec`.
+
+## Workbench Contribution Visual Follow-Up
+
+- Manager focused web validation:
+  - `pnpm -C core/apps/web exec vitest run src/pages/workbenchShell/WorkbenchPageShellView.test.tsx src/pages/workbenchShell/WorkbenchTemplates.test.tsx src/pages/workbenchShell/pluginWorkbenchContributionProjection.test.ts src/state/pluginRegistryStore.test.ts`
+  - Result: passed, 30 tests.
+  - `pnpm -C core/apps/web typecheck`
+  - Result: passed.
+- Manager full Workbench visual validation:
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 CTX_E2E_BROWSER=chromium CTX_E2E_BROWSER_CHANNEL=chrome CTX_E2E_DISABLE_VIDEO=1 CTX_E2E_WORKERS=1 pnpm -C core/apps/web exec playwright test -c playwright.visual.config.ts e2e/visual-workbench-templates.spec.ts`
+  - Result: passed, 14 tests before plugin contribution visual coverage.
+  - Screenshot set manually sampled under `/tmp/ctx-3c22f3412cbc/volatile/tmp/ctx-e2e-visual-data-4091804/argos-screenshots`.
+- Manager plugin contribution visual validation:
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 CTX_E2E_BROWSER=chromium CTX_E2E_BROWSER_CHANNEL=chrome CTX_E2E_DISABLE_VIDEO=1 CTX_E2E_WORKERS=1 pnpm -C core/apps/web exec playwright test -c playwright.visual.config.ts e2e/visual-workbench-templates.spec.ts -g "plugin contribution panel"`
+  - Result: passed, 2 tests after the contribution-row layout fix.
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 CTX_E2E_BROWSER=chromium CTX_E2E_BROWSER_CHANNEL=chrome CTX_E2E_DISABLE_VIDEO=1 CTX_E2E_WORKERS=1 pnpm -C core/apps/web exec playwright test -c playwright.visual.config.ts e2e/visual-workbench-templates.spec.ts`
+  - Result: passed, 16 tests after `d630872`.
+  - Screenshot set manually sampled under `/tmp/ctx-3c22f3412cbc/volatile/tmp/ctx-e2e-visual-data-42467/argos-screenshots`.
+
+## Public Local Boundary And Shift-Left Gates
+
+- Manager public-route validation:
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh fmt --package ctx-http`
+  - Result: passed through the host Cargo lock and low-I/O wrapper.
+  - `CTX_CARGO_MEMORY_MAX_GIB=24 CTX_CARGO_JOBS=1 CTX_RUST_TEST_THREADS=1 scripts/dev/cargo-safe.sh test --manifest-path Cargo.toml --locked -p ctx-http --lib org_policy_routes -- --test-threads=1`
+  - Result: passed, 2 tests after `fa30b3f`.
+- Manager schema/type gate validation:
+  - `node schemas/validate-json-schemas.mjs $(rg --files schemas | rg '\\.schema\\.json$')`
+  - Result: compiled 7 JSON schemas with AJV 2020.
+  - `node --test schemas/validate-json-schemas.test.mjs`
+  - Result: passed, 4 tests.
+  - `core/scripts/dev/check-local.sh quick`
+  - Result: passed schema compile, `@ctx/types` typecheck, and web typecheck.
+  - `.buildkite/run-bazel.sh test //schemas:json_syntax_test //schemas:validate_json_schemas_unit_test //core/packages/ctx-types:typecheck`
+  - Result: passed, 3 targets from cache.
+- Manager stale hosted dependency cleanup validation:
+  - `pnpm -C core install --lockfile-only`
+  - Result: passed; removed unused Supabase JavaScript client lock entries.
+  - `core/scripts/dev/check-local.sh quick`
+  - Result: passed schema compile, `@ctx/types` typecheck, and web typecheck
+    after `d910367`.
+  - `git diff --check`
+  - Result: passed.

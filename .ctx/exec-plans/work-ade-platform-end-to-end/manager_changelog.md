@@ -159,3 +159,43 @@ Record each local commit or integrated worker handoff here.
     `CTX_E2E_CARGO_BIN` override or `CTX_E2E_DISABLE_CARGO_SAFE=1` opt-out.
   - Documents the managed-Playwright Cargo path in the local development
     validation notes.
+- `3ac804e` - Record E2E cargo safety integration.
+  - Records the managed Playwright Cargo safety fix in the execution-plan
+    changelog, validation log, and SDLC review ledger.
+- `9bac206` - Update plugin contribution contract status.
+  - Marks the declarative plugin contribution contract and inert Workbench
+    projection status in public docs.
+- `6105306` - Wire plugin route integration test.
+  - Adds route-level coverage for plugin inventory/registry/reload/command
+    surfaces so the daemon plugin API is exercised outside pure model tests.
+- `e53643a` - Surface workbench contribution projections.
+  - Renders source-labeled plugin contribution candidates in the Workbench
+    shell using host-owned projection data only.
+- `a927091` - Fix agent work export import safety.
+  - Tightens local Work export/import safety around redaction, workspace
+    matching, and transactional store import semantics.
+- `1d3ce74` - Align work CLI plugin validation.
+  - Removes duplicate ad hoc plugin-manifest shape checks from `ctx work
+    validate` and delegates to the shared strict Rust plugin manifest model.
+  - Adds coverage that declarative Workbench contribution manifests validate
+    through the Work CLI path.
+- `d630872` - Add Workbench contribution visual coverage.
+  - Seeds a local visual-test plugin and adds Playwright coverage for plugin
+    contribution panels in desktop-tight and narrow Kanban layouts.
+  - Adjusts contribution row layout so source labels and captions remain
+    readable in constrained panels.
+- `fa30b3f` - Unexpose org policy routes from public local API.
+  - Removes organization policy, daemon enrollment, and policy snapshot route
+    registrations from the public local HTTP API.
+  - Rewrites route tests to assert those endpoints are unavailable in the
+    public local app and updates public docs toward local-first scope.
+- `a58ed7d` - Strengthen schema and type validation gates.
+  - Adds AJV Draft 2020-12 schema compilation with local `$ref` preflight,
+    schema unit tests, Bazel schema tests, ctx-types Bazel typecheck, and a
+    quick local validation mode.
+- `dd5a4ec` - Tighten work CLI schema validation.
+  - Makes `ctx work validate` reject unknown public Work fields and invalid
+    enum/reference shapes locally instead of only checking shallow JSON shape.
+- `d910367` - Remove stale Supabase web dependency.
+  - Removes unused `@supabase/supabase-js` package metadata and Bazel data
+    labels from the public web app after verifying no JavaScript imports remain.

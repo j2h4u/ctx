@@ -195,3 +195,41 @@ Record adversarial test coverage reviews and gaps.
 - Remaining gaps: daemon-connected reload/apply, in-flight command behavior,
   plugin dev process management, plugin logs, and ADE-visible diagnostics need
   separate tests when those lifecycle features are implemented.
+
+## Workbench Contribution Visual Coverage Review
+
+- Added Playwright visual coverage that seeds a real local plugin under the E2E
+  data directory, reloads the plugin inventory through `/api/plugins/reload`,
+  and renders source-labeled plugin contribution panels from host-owned
+  projection data.
+- Covered desktop-tight contribution panel behavior and narrow Kanban behavior,
+  including no-horizontal-overflow assertions and detail panel visibility.
+- Re-ran the full Workbench visual template suite after the contribution-row
+  layout fix: 16 Playwright visual tests passed.
+- Remaining gaps: source-labeled command surfaces are covered by unit tests but
+  not yet by browser screenshots; plugin diagnostics and daemon-connected hot
+  reload state screenshots should be added when those surfaces become UI.
+
+## Public Boundary And Shift-Left Coverage Review
+
+- Added public route coverage asserting org-policy/enrollment/policy snapshot
+  endpoints are not exposed by the local public HTTP app.
+- Added AJV Draft 2020-12 schema compilation, local `$ref` preflight, schema
+  unit tests, Bazel schema tests, and Bazel `@ctx/types` typecheck coverage.
+- Added `check-local.sh quick` so schema/type gates can be run before broader
+  Rust/web validation.
+- Removed unused Supabase JavaScript client dependency and validated the quick
+  gate afterward.
+- Remaining gaps: lower-level org-policy compatibility code is not removed from
+  Rust crates yet; treat that as a future private-extraction migration rather
+  than a public-route blocker.
+
+## Strict Work CLI Validation Review
+
+- Added negative binary-unit coverage for invalid Work enum values, unknown
+  aggregate fields, and incomplete plugin contribution endpoints.
+- Re-ran the full `agent_work_cli` binary-unit filter after tightening local
+  validation: 27 tests passed through the safe Cargo wrapper.
+- Remaining gap: schema and Rust validation are still parallel implementations;
+  the final done-ness review should decide whether the current schema compile
+  plus CLI negative coverage is sufficient for this branch.

@@ -38,6 +38,20 @@ Record process, worktree, validation, and agent-workflow reviews.
   The manager stopped that run and changed local-build E2E server launches to
   resolve `scripts/dev/cargo-safe.sh` by default on Unix when present, while
   preserving Bazel-runfiles mode and adding explicit override/opt-out env vars.
+- Follow-up process rule: before any Rust validation, the manager checks for
+  active `cargo`, `rustc`, `rust-lld`, or `/tmp/ctx-cargo.lock` processes and
+  runs local Rust gates with `CTX_CARGO_MEMORY_MAX_GIB=24`, `CTX_CARGO_JOBS=1`,
+  and `CTX_RUST_TEST_THREADS=1`.
+
+## Shift-Left Gate Review
+
+- The branch now has a `check-local.sh quick` mode for schema compilation,
+  `@ctx/types` typecheck, and web typecheck. This gives workers a cheap
+  contract gate before they attempt heavier Rust, web, or visual runs.
+- Bazel coverage now includes schema compile tests and `@ctx/types` typecheck
+  in addition to JSON syntax checks.
+- Local dependency cleanup must be followed by the quick gate and, where Bazel
+  data labels change, a targeted Bazel check before final done-ness review.
 
 ## Contract Base
 

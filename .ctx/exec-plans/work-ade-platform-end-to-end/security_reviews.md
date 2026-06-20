@@ -127,3 +127,30 @@ Record plugin, import/export, path, redaction, and capability security reviews.
   executable UI/webview contributions, and plugin dev-mode process management
   need separate permission, provenance, redaction, and lifecycle review before
   local-done.
+
+## Public Local Boundary Follow-Up
+
+- Public HTTP route registration no longer mounts organization policy, daemon
+  enrollment, hosted policy snapshot, or workspace org-policy overlay routes.
+  The remaining route tests assert those public local endpoints are unavailable.
+- The public docs now describe ctx as a local-first ADE and avoid positioning
+  hosted/team control-plane product surfaces as part of this public local done
+  scope.
+- Unused `@supabase/supabase-js` web dependency metadata and Bazel data labels
+  were removed after verifying there are no JavaScript imports.
+- Residual risk: lower-level org-policy crates, route contracts, and daemon
+  route handles still exist as internal compatibility code. They are not mounted
+  in the public HTTP API, but a future private extraction should remove or gate
+  them more aggressively once compatibility and migration impact are understood.
+
+## Strict Public Work Validation Follow-Up
+
+- `ctx work validate` now rejects unknown fields and invalid enum/reference
+  shapes for public Work aggregates, export envelopes, source records, git
+  fingerprints, PR references, change sets, contributions, and plugin
+  contribution endpoints.
+- This keeps local validation closer to the public schema contract without
+  introducing hosted/team policy or enforcement behavior.
+- Residual risk: validation logic still exists in both schemas and Rust. The
+  schema compilation gate and focused CLI tests reduce drift, but a generated
+  validator or shared conformance fixture suite would be stronger.

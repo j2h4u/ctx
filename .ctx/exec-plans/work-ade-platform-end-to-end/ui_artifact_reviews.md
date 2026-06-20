@@ -24,7 +24,12 @@ Record screenshot/video artifacts and visual review findings.
 - Dense task list: desktop-wide screenshot was manually viewed and accepted for
   task-list density and empty main content. Artifact:
   `/tmp/ctx-3c22f3412cbc/volatile/tmp/ctx-e2e-visual-data-3762676/argos-screenshots/workbench-template-classic-dense-task-list-dark-desktop-wide.png`.
-- Plugin-contributed panel/template.
+- Plugin-contributed panel/template: desktop-tight and narrow Kanban screenshots
+  were manually viewed after the contribution-row layout fix. Source labels,
+  captions, and badges remain readable, and the narrow layout uses intentional
+  panel scrolling rather than horizontal overflow. Artifacts:
+  `/tmp/ctx-3c22f3412cbc/volatile/tmp/ctx-e2e-visual-data-42467/argos-screenshots/workbench-contributions-panel-ready-dark-desktop-tight.png`,
+  `/tmp/ctx-3c22f3412cbc/volatile/tmp/ctx-e2e-visual-data-42467/argos-screenshots/workbench-contributions-kanban-narrow-dark.png`.
 - Source-labeled command surfaces.
 - Plugin provider diagnostics.
 - Hot reload add/change/remove states.
