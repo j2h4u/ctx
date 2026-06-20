@@ -2,9 +2,14 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   applyDaemonDesktopConnection,
+  createWorkspace,
   type ExecutionLaunchSnapshot,
   getHealth,
+  idToString,
   listWorkspaces,
+  repoInit,
+  repoStagingPath,
+  updateWorkspaceExecutionConfig,
 } from "../../api/client";
 import {
   desktopConnectLocal,
@@ -337,6 +342,51 @@ export default function LauncherPage() {
     navigate("/workspace-setup");
   };
 
+  const onScratchWorkspace = async () => {
+    setError(null);
+    setBusy(true);
+    setOpeningRecentKey(null);
+    setLaunchSnapshot(null);
+    try {
+      if (isDesktop) {
+        setBusyDetail("Connecting daemon...");
+        const info = await desktopConnectLocal();
+        setConnection(info);
+        applyConnection(info);
+      }
+      setBusyDetail("Waiting for daemon...");
+      await waitForDaemonReady(15000);
+      setBusyDetail("Creating scratch workspace...");
+      const staging = await repoStagingPath();
+      const init = await repoInit({ path: staging.path, allow_existing: true });
+      const rootPath = String(init.path ?? "").trim() || staging.path;
+      const workspace = await createWorkspace(rootPath, "Scratch Workspace", "local", "launcher", "host");
+      const workspaceId = idToString(workspace.id);
+      setBusyDetail("Saving settings...");
+      await updateWorkspaceExecutionConfig(workspaceId, {
+        environment: "host",
+        network_mode: null,
+        allowlist: null,
+      });
+      try {
+        await upsertLauncherRecent({
+          kind: "local",
+          label: String(workspace.name ?? "").trim() || "Scratch Workspace",
+          root_path: String(workspace.root_path ?? "").trim() || rootPath,
+          execution_environment: "host",
+          updated_at_ms: Date.now(),
+        });
+      } catch {
+        // best-effort only; do not block workspace open on recents persistence
+      }
+      navigate(`/workspaces/${workspaceId}`, { replace: true });
+    } catch (e: unknown) {
+      setError(errorMessage(e));
+    } finally {
+      resetBusyState();
+    }
+  };
+
   const displayRecents = recents;
 
   return (
@@ -344,6 +394,16 @@ export default function LauncherPage() {
       <LauncherBrand fullScreen>
         <div className="launcher-panel">
           <div className="launcher-actions">
+            <button type="button" className="launcher-action" onClick={onScratchWorkspace} disabled={busy}>
+              <span className="launcher-action-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M4 4h16v16H4z" />
+                  <path d="M8 9h8" />
+                  <path d="M8 13h5" />
+                </svg>
+              </span>
+              <span className="launcher-action-label">Scratch Workspace</span>
+            </button>
             <button type="button" className="launcher-action" onClick={onNewWorkspace} disabled={busy}>
               <span className="launcher-action-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">

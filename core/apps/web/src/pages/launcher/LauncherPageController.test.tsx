@@ -3,11 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import LauncherPage from "./LauncherPageController";
 import { loadLauncherRecents, upsertLauncherRecent } from "../../state/launcherRecentsStore";
 import {
+  createWorkspace,
   getHealth,
   getWorkspaceExecutionConfig,
   idToString,
   listWorkspaces,
+  repoInit,
+  repoStagingPath,
   repoStatus,
+  updateWorkspaceExecutionConfig,
 } from "../../api/client";
 import {
   desktopConnectLocal,
@@ -36,11 +40,15 @@ vi.mock("../../api/client", async () => {
   return {
     ...actual,
     applyDaemonDesktopConnection: vi.fn(),
+    createWorkspace: vi.fn(),
     getHealth: vi.fn(),
     getWorkspaceExecutionConfig: vi.fn(),
     idToString: vi.fn((value: unknown) => String(value ?? "")),
     listWorkspaces: vi.fn(),
+    repoInit: vi.fn(),
+    repoStagingPath: vi.fn(),
     repoStatus: vi.fn(),
+    updateWorkspaceExecutionConfig: vi.fn(),
   };
 });
 
@@ -78,11 +86,19 @@ describe("LauncherPage recents", () => {
     vi.mocked(loadLauncherRecents).mockResolvedValue([]);
     vi.mocked(upsertLauncherRecent).mockResolvedValue([]);
     vi.mocked(listWorkspaces).mockResolvedValue([]);
+    vi.mocked(repoStagingPath).mockResolvedValue({ path: "/home/fixture/.ctx/workspaces/staging/scratch-1" } as never);
+    vi.mocked(repoInit).mockResolvedValue({ path: "/home/fixture/.ctx/workspaces/staging/scratch-1" } as never);
     vi.mocked(repoStatus).mockImplementation((async (req: { path: string }) => ({
       canonical_path: req.path,
       is_repo: true,
     })) as never);
+    vi.mocked(createWorkspace).mockResolvedValue({
+      id: "ws-scratch",
+      name: "Scratch Workspace",
+      root_path: "/home/fixture/.ctx/workspaces/staging/scratch-1",
+    } as never);
     vi.mocked(getWorkspaceExecutionConfig).mockResolvedValue({ environment: "host" } as never);
+    vi.mocked(updateWorkspaceExecutionConfig).mockResolvedValue({ ok: true } as never);
     vi.mocked(startWorkspaceSetupLaunchHandoff).mockResolvedValue({
       job_id: "job-ready",
       workspace_id: "ws-test",
@@ -122,6 +138,63 @@ describe("LauncherPage recents", () => {
     expect(await screen.findByText("ctx-monorepo")).toBeInTheDocument();
     expect(screen.getByText("~/code/ctx-monorepo")).toBeInTheDocument();
     expect(loadLauncherRecents).toHaveBeenCalled();
+  });
+
+  it("creates and opens a scratch workspace from the launcher", async () => {
+    vi.mocked(desktopConnectLocal).mockResolvedValue({
+      kind: "local",
+      base_url: "http://127.0.0.1:4399",
+      token: "test-token",
+    } as never);
+
+    render(<LauncherPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /scratch workspace/i }));
+
+    await waitFor(() => {
+      expect(repoStagingPath).toHaveBeenCalled();
+      expect(repoInit).toHaveBeenCalledWith({
+        path: "/home/fixture/.ctx/workspaces/staging/scratch-1",
+        allow_existing: true,
+      });
+      expect(createWorkspace).toHaveBeenCalledWith(
+        "/home/fixture/.ctx/workspaces/staging/scratch-1",
+        "Scratch Workspace",
+        "local",
+        "launcher",
+        "host",
+      );
+      expect(updateWorkspaceExecutionConfig).toHaveBeenCalledWith("ws-scratch", {
+        environment: "host",
+        network_mode: null,
+        allowlist: null,
+      });
+      expect(upsertLauncherRecent).toHaveBeenCalledWith(expect.objectContaining({
+        kind: "local",
+        label: "Scratch Workspace",
+        root_path: "/home/fixture/.ctx/workspaces/staging/scratch-1",
+        execution_environment: "host",
+        updated_at_ms: expect.any(Number),
+      }));
+      expect(navigateMock).toHaveBeenCalledWith("/workspaces/ws-scratch", { replace: true });
+    });
+  });
+
+  it("does not navigate when scratch workspace creation fails", async () => {
+    vi.mocked(desktopConnectLocal).mockResolvedValue({
+      kind: "local",
+      base_url: "http://127.0.0.1:4399",
+      token: "test-token",
+    } as never);
+    vi.mocked(repoInit).mockRejectedValueOnce(new Error("scratch init failed"));
+
+    render(<LauncherPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /scratch workspace/i }));
+
+    expect(await screen.findByText("scratch init failed")).toBeInTheDocument();
+    expect(createWorkspace).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it("renders all recent workspaces in a scrollable recents list", async () => {
