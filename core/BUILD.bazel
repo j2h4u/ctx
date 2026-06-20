@@ -23,7 +23,10 @@ filegroup(
 js_library(
     name = "tsconfig_json",
     srcs = ["tsconfig.json"],
-    visibility = ["//core/packages/plugin-sdk:__pkg__"],
+    visibility = [
+        "//core/packages/ctx-types:__pkg__",
+        "//core/packages/plugin-sdk:__pkg__",
+    ],
 )
 
 filegroup(
@@ -208,6 +211,7 @@ WEB_TESTS = [
     "//core/apps/web:playwright_runtime_script_tests",
     "//core/apps/web:pretext_measurement_unit_tests",
     "//core/apps/web:typecheck",
+    "//core/packages/ctx-types:typecheck",
     "//core/apps/web:unit_tests_non_pretext",
     "//core/packages/plugin-sdk:typecheck",
     "//core/packages/plugin-sdk:unit_tests",
@@ -217,6 +221,7 @@ WEB_TESTS = [
 
 SCHEMA_TESTS = [
     "//schemas:json_syntax_test",
+    "//schemas:validate_json_schemas_unit_test",
     "//core/apps/web:desktop_ipc_corpus",
     "//core/crates/ctx-desktop-ipc:typescript_check_test",
     "//core/crates/ctx-provider-matrix:unit_tests",

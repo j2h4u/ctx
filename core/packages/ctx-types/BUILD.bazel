@@ -1,9 +1,35 @@
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//core/packages/ctx-types:typescript/package_json.bzl", tsc_bin = "bin")
 load("@aspect_rules_js//npm:defs.bzl", "npm_package")
 
 package(default_visibility = ["//visibility:public"])
+
+CTX_TYPES_LOCAL_SOURCES = glob(["src/**/*"]) + [
+    "package.json",
+    "tsconfig.json",
+]
+
+CTX_TYPES_DATA = CTX_TYPES_LOCAL_SOURCES + [
+    "//core:tsconfig_json",
+]
+
+npm_link_all_packages()
 
 npm_package(
     name = "pkg",
     srcs = glob(["src/**/*"]) + ["package.json"],
     package = "@ctx/types",
+)
+
+tsc_bin.tsc_test(
+    name = "typecheck",
+    args = [
+        "--noEmit",
+        "--incremental",
+        "false",
+    ],
+    data = CTX_TYPES_DATA + [
+        ":node_modules/typescript",
+    ],
+    chdir = package_name(),
 )

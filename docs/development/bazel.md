@@ -40,8 +40,9 @@ Gate contents:
   test.
 - `//:all-rust` delegates to `//core:all-rust` and adds the existing
   `ctx-http` integration suites to the Rust validation surface.
-- `//:all-web` delegates to `//core:all-web` and runs web lint, typecheck,
-  Playwright runtime-script tests, Vitest shards, and package unit tests.
+- `//:all-web` delegates to `//core:all-web` and runs web lint, web and
+  package typechecks including `@ctx/types`, Playwright runtime-script tests,
+  Vitest shards, and package unit tests.
 - `//:schemas` delegates to `//core:schemas` and runs the checked-in schema and
   generated-binding validation targets that currently exist.
 - `//:e2e-premerge` delegates to `//core:e2e-premerge` and runs the required
@@ -59,3 +60,8 @@ under `core/crates/` without `BUILD.bazel` files are not included until those
 packages gain Bazel targets.
 
 Local execution requires a Bazel launcher compatible with `.bazelversion`.
+
+For local shell checks, `core/scripts/dev/check-local.sh quick` runs schema
+syntax plus TypeScript hygiene for `@ctx/types` and the web app. The default
+`core/scripts/dev/check-local.sh` mode is `full`, which runs those quick checks
+before the broader Rust and web local-done checks.

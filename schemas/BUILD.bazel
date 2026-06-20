@@ -10,6 +10,18 @@ filegroup(
 js_test(
     name = "json_syntax_test",
     entry_point = "validate-json-schemas.mjs",
-    data = [":json_schemas"],
+    data = [
+        ":json_schemas",
+        "//core:node_modules/ajv",
+    ],
     args = ["$(locations :json_schemas)"],
+)
+
+js_test(
+    name = "validate_json_schemas_unit_test",
+    entry_point = "validate-json-schemas.test.mjs",
+    data = [
+        "validate-json-schemas.mjs",
+        "//core:node_modules/ajv",
+    ],
 )
