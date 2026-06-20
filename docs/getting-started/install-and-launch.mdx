@@ -1,6 +1,6 @@
 ---
 title: "Install and Launch"
-description: "Install ctx, open the app, and verify first-run health"
+description: "Install ctx, choose the CLI or desktop path, and verify first-run health"
 ---
 
 ## Before you install
@@ -8,8 +8,8 @@ description: "Install ctx, open the app, and verify first-run health"
 Have these ready:
 
 - a machine with the repository you want to use
-- at least one provider account or API key you plan to connect
-- container support on that machine if you want to start with sandboxed runs
+- at least one installed provider harness or provider account if you plan to run tasks in the Workbench
+- container support only if you want ADE-managed containerized runs
 
 Install ctx with the official installer:
 
@@ -17,17 +17,50 @@ Install ctx with the official installer:
 curl -fsSL ctx.rs/install | sh
 ```
 
-## First launch
+## Local data root
+
+ctx stores private state under `CTX_DATA_ROOT` or `~/.ctx` by default. This is
+where the workspace registry, local stores, objects, plugin state, and logs live.
+
+Repo-local `.ctx` files are explicit opt-in or legacy `ctx init` behavior. They
+are not the default location for Work setup.
+
+## CLI health check
+
+Use this path if you want to inspect local Work records or validate schemas
+without opening the desktop app:
+
+```bash
+ctx setup workspace .
+ctx work schema
+ctx work list
+```
+
+`ctx setup workspace .` registers the current repository in the user-local ctx
+data root. By default it also installs ctx-owned `git` and `gh` capture shims
+under `${CTX_DATA_ROOT:-~/.ctx}/bin`; add that directory to `PATH` only when you
+want best-effort command capture.
+
+`ctx work list` reads the selected data root. If more than one workspace is
+registered and ctx cannot infer the workspace from cwd, pass `--workspace-id`.
+If you want a non-default data root, pass `--data-dir` or set `CTX_DATA_ROOT`.
+
+The current CLI supports setup, schema, validation, list, show, import, export,
+inspect, redaction-preview, best-effort command capture, notes, recent context,
+and explicit PR linking.
+
+## Desktop first launch
 
 1. Open the ctx app.
 2. Open **Settings** and confirm the app loads without daemon or connection errors.
-3. Go to **Harness Authentication** and connect one provider.
+3. Go to **Harness Authentication** and connect one provider or confirm an installed harness on `PATH`.
 4. Return to the workbench and add a workspace.
 5. Run one small task to confirm the full loop works.
 
 ## Healthy first run signals
 
 - Settings opens and saves normally.
+- `ctx work schema` prints the known local Work schemas.
 - You can add/open a workspace.
 - You can create a task.
 - You can start a session with a connected harness.
@@ -37,6 +70,6 @@ curl -fsSL ctx.rs/install | sh
 
 - App does not launch cleanly: rerun the installer, then relaunch ctx.
 - Provider setup does not complete: reconnect the provider from **Harness Authentication** and rerun a small test prompt.
-- Sandbox is not ready yet: validate the rest of your setup first, then return to sandbox configuration once the machine is ready.
+- Containerized ADE runs are not ready yet: validate the rest of your setup first, then return to sandbox configuration once the machine is ready.
 
 If you are still blocked, use [Troubleshooting](/troubleshooting/get-support).

@@ -1,11 +1,14 @@
 ---
 title: "Public Schemas"
-description: "Versioned JSON schemas for ctx agent work, transcripts, events, tool calls, and plugins"
+description: "Versioned JSON schemas for ctx Work compatibility records, transcripts, events, tool calls, and plugins"
 ---
 
-The public schema surface uses ctx agent-work names. Agent work records are
-exposed as `AgentWork`, `ChangeSet`, `Contribution`, and
-`ContributionEndpoint`; hosted service internals are not part of these schema
+The public product noun is Work. The current v1 schema compatibility surface
+still uses `agent-work` names for files and types, so records are exposed as
+`AgentWork`, `ChangeSet`, `Contribution`, and `ContributionEndpoint`.
+
+Treat `agent-work` as compatibility naming for this branch, not as a second
+public vocabulary. Hosted/team service internals are not part of these schema
 names.
 
 ## Schemas
@@ -29,15 +32,19 @@ names.
 ## Versioning
 
 These schemas describe public v1 wire shapes. Records that carry
-`schema_version` currently use `1`, matching the Rust model defaults for agent
-work and plugin manifests. `ChangeSet` and `Contribution` may also carry
-`source_records` entries that preserve source record hashes for imported or
-projected agent work.
+`schema_version` currently use `1`, matching the Rust model defaults for Work
+compatibility records and plugin manifests. `ChangeSet` and `Contribution` may
+also carry `source_records` entries that preserve source record hashes for
+imported or projected Work.
 
 The schemas include fields that are useful for local provenance, such as
 `repo_root` and artifact `absolute_path`. Shareable export or sync producers
 should omit or redact host-local paths unless the user explicitly opts into
 preserving them.
+
+Source record hashes are useful for detecting changed imported records and
+preserving provenance across import/export. They are not a hosted, tamper-proof
+audit guarantee by themselves.
 
 ## Compatibility
 

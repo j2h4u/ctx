@@ -1,20 +1,41 @@
 ---
 title: "Add a Workspace"
-description: "Open your repository in ctx and prepare it for tasks"
+description: "Register a workspace for local Work records and optional Workbench tasks"
 ---
 
 ## Overview
 
-A workspace is the repository root ctx operates on, whether that repository lives on your local machine or on a remote host you control.
+A workspace is the top-level project ctx records Work for. It can be one repo,
+a directory that contains multiple repos, or a scratch workspace created under
+the ctx data root.
 
-This is your main unit for settings, tasks, sessions, and review.
+This is the main unit for settings, tasks, sessions, Work records, and review.
+The desktop Workbench and `ctx work` CLI read from the same local workspace
+registry under `CTX_DATA_ROOT` or `~/.ctx`.
 
 ## Local workspace flow
 
 1. Open the workspace list in the app.
-2. Add your repository root.
+2. Add your repository root or the parent directory for a multi-repo workspace.
 3. Open the workspace.
 4. Verify settings before starting a real task.
+
+For CLI-only Work record inspection, register or select the workspace in the
+same data root and then use:
+
+```bash
+ctx work list
+ctx work export --output work.json
+```
+
+If the data root contains more than one workspace, pass `--workspace-id`.
+
+## Scratch workspace
+
+A scratch workspace is an empty git repo under the user-local ctx data root. It
+is useful for trying the Workbench without pointing ctx at an existing checkout.
+It is not sandboxed by default. Container isolation is an ADE execution mode you
+choose separately for containerized runs.
 
 ## Remote workspace flow
 
@@ -32,14 +53,15 @@ Before you start, make sure the repo already exists on that machine and your SSH
 
 - Provider/harness authentication
 - Model defaults
-- Execution mode (host/container)
-- Network egress policy
+- Execution mode for ADE runs (host/container)
+- Network egress policy for containerized ADE runs
 - Worktree bootstrap setup if each task needs repeatable setup
 - Merge queue settings only if you plan to run parallel tasks and land changes through the queue
 
 ## Workspace sanity checks
 
 - Workspace path is correct.
+- The workspace appears in `ctx work list` when using the same data root.
 - You can create a task in this workspace.
 - Session runs can start.
 - Diff review works after a test edit.

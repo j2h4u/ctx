@@ -1,0 +1,101 @@
+---
+title: "Work Records"
+description: "Local ctx Work records, storage defaults, and the current ctx work CLI surface"
+---
+
+# Work Records
+
+Work is the local record ctx keeps around coding-agent activity. A useful record
+can include the objective, transcript, commands, tool activity, change sets,
+artifacts, checks, and pull-request links that explain how a change happened.
+
+The desktop Workbench, `ctx setup`, and the `ctx work` CLI use the same local
+workspace registry and record model. The Workbench is the richer run and review
+surface. The CLI is the terminal surface for setup, schemas, validation,
+import/export, capture, PR linking, and local record inspection.
+
+## Local Storage
+
+By default, ctx stores private state under the prepared data root:
+
+```text
+${CTX_DATA_ROOT:-~/.ctx}
+```
+
+That data root contains the workspace registry, local stores, objects, plugin
+state, and logs. Repo-local `.ctx` files are explicit opt-in or legacy `ctx init`
+behavior; they are not the default Work setup location.
+
+Use shareable exports when you want to move records. Safe exports should redact
+host-local roots, raw transcript-like payloads, and obvious secrets unless you
+intentionally choose a full local export for trusted import on the same machine
+or another trusted machine.
+
+## Current CLI Surface
+
+Use `ctx setup` to register workspaces in the user-local data root:
+
+```bash
+ctx setup workspace .
+ctx setup scratch
+ctx setup status
+ctx setup uninstall
+```
+
+By default setup installs ctx-owned `git` and `gh` shims under
+`${CTX_DATA_ROOT:-~/.ctx}/bin`. Put that directory on `PATH` when you want
+best-effort command capture. The shims forward to the real command first,
+preserve its exit code, then record low-trust command context if ctx capture
+succeeds. `ctx setup uninstall` removes only ctx-owned shims.
+
+The current `ctx work` CLI supports local store and file operations plus narrow
+capture/enrichment commands:
+
+```bash
+ctx work schema
+ctx work list
+ctx work show <id>
+ctx work capture command --tool git --exit-code 0 -- git status
+ctx work link-pr https://github.com/owner/repo/pull/123
+ctx work note "Validated the linked PR locally"
+ctx work recent
+ctx work export --output work.json
+ctx work import work.json --dry-run
+ctx work validate work.json
+ctx work inspect work.json
+ctx work redaction-preview work.json
+```
+
+If `--workspace-id` is omitted, ctx first tries to select the registered
+workspace that contains the current working directory. If that is ambiguous, use
+`--workspace-id`. Use `--data-dir` to point at a specific ctx data root; if
+omitted, ctx uses `CTX_DATA_ROOT`, then `~/.ctx`.
+
+Best-effort shim capture can observe command argv, cwd, Git facts, exit status,
+and deterministic PR references such as explicit GitHub PR URLs or
+`gh pr view 123 --repo owner/repo`. It cannot infer every intent or every PR
+created by a command. Use `ctx work link-pr` when the PR URL is known.
+
+## Record Shape
+
+The v1 compatibility schema still uses `agent-work` names for files, API types,
+and schema IDs. Public product copy should say Work. Treat `agent-work` as the
+compatibility namespace until the migration can be done as one planned change.
+
+The most important record types are:
+
+- `AgentWork`: a workspace aggregate that contains change sets and contributions.
+- `ChangeSet`: a coherent Git diff, patch, commit, or PR-bound unit of review.
+- `Contribution`: a relationship or event that connects sessions, runs,
+  artifacts, checks, change sets, and pull requests.
+
+Command captures and imported observations are useful context, but they are not
+tamper-proof audit by themselves. Records should preserve source, fidelity, and
+trust distinctions so local evidence is not overstated.
+
+## Related Pages
+
+- [Work Model](/agent-work-model)
+- [Public Schemas](/reference/schemas)
+- [Work Source Of Truth Contract](/work-source-of-truth-contract)
+- [Work Namespace Compatibility](/work-namespace-compatibility)

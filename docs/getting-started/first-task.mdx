@@ -1,11 +1,17 @@
 ---
 title: "Run Your First Task"
-description: "Complete your first end-to-end task in the GUI"
+description: "Complete your first Workbench task and inspect the resulting Work record"
 ---
 
 ## Overview
 
-Use this first task to validate your full loop: prompt -> run -> diff review -> revise/finalize.
+Use this first task to validate the Workbench loop: prompt -> run -> Work record
+-> diff review -> revise/finalize.
+
+If you are starting from the terminal, begin with [Work Records](/work-records)
+to register a workspace, inspect schemas and local records, enable best-effort
+`git`/`gh` capture, or link a PR. This page focuses on the desktop Workbench
+task flow.
 
 ## Recommended first task type
 
@@ -22,9 +28,10 @@ Pick a small, low-risk change:
 3. Choose harness/model in composer.
 4. Send a focused first prompt with acceptance criteria.
 5. Let the session run to completion.
-6. Review the diff carefully.
+6. Review the transcript, artifacts, and diff carefully.
 7. If behavior matters more than code shape, ask for an artifact such as a screenshot or short report.
-8. Request revision or finalize.
+8. Check the local Work record with `ctx work list` or `ctx work export` if you want a CLI view.
+9. Request revision or finalize.
 
 ## First prompt template
 
@@ -53,6 +60,7 @@ Output: summarize the changed files and rationale.
 
 - Diff matches task scope.
 - No unrelated file churn.
+- The Work record keeps the useful context: prompt, transcript, artifacts, diff, checks, and source-control links when available.
 - Requested validation is addressed.
 - You can decide confidently in review.
 

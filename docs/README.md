@@ -6,7 +6,9 @@ This directory contains selected ctx documentation for GitHub browsing.
 
 - [Overview](index.mdx)
 - [Install and Launch](getting-started/install-and-launch.mdx)
+- [Work Records](work-records.mdx)
 - [Workbench Tour](workbench/tour.mdx)
+- [Work Model](agent-work-model.mdx)
 - [Work and ADE Extension Decisions](work-ade-extension-decisions.mdx)
 - [Work Namespace Compatibility](work-namespace-compatibility.mdx)
 - [Work Source Of Truth Contract](work-source-of-truth-contract.mdx)
@@ -19,7 +21,7 @@ This directory contains selected ctx documentation for GitHub browsing.
 ## Sections
 
 - `getting-started/`: onboarding and first-run flows
-- `workbench/`: core day-to-day GUI surfaces
+- `workbench/`: optional desktop GUI surfaces over local Work records
 - `settings/`: provider, safety, and update configuration
 - `worktrees-runtime/`: worktree concepts and runtime behavior
 - `examples/`: design examples and local implementation boundary sketches

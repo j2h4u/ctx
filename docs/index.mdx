@@ -1,25 +1,30 @@
 ---
-title: "ctx is an Agentic Development Environment (ADE)"
+title: "ctx records Work from coding agents"
 sidebarTitle: "Overview"
-description: "Any coding agent. Containerized workspaces. Unified transcripts and review."
+description: "Local Work records for coding agents, with an optional desktop workbench."
 mode: "wide"
 ---
 
 <div className="not-prose ctx-home-title-block">
   <div className="ctx-home-title-heading" role="heading" aria-level={1}>
     <span className="ctx-home-title-wordmark">ctx</span>
-    <span>is an Agentic Development Environment (ADE)</span>
+    <span>records Work from coding agents</span>
   </div>
-  <p className="ctx-home-title-tagline">Any coding agent. Containerized workspaces. Unified transcripts and review.</p>
+  <p className="ctx-home-title-tagline">Local prompts, transcripts, commands, diffs, PRs, artifacts, and checks in one inspectable record system.</p>
 </div>
 
-ctx is a local-first Agentic Development Environment (ADE) for engineers using multiple coding agents.
-It gives you one interface for the real Claude Code, Codex, Cursor, and more, with containerized disk
-and network isolation, one review surface, and durable local transcripts.
+ctx is a local Work record system for coding agents. It keeps the context around
+agent-produced changes together: the objective, provider session, transcript,
+commands, artifacts, diff, pull-request links, and validation evidence.
 
-Use ctx on your own machine or against a remote devbox or VPS you control. For normal local
-workflows, you do not need a ctx account, and you can bring your own providers, models, and
-credentials.
+The desktop ctx Workbench is an optional Agentic Development Environment (ADE)
+over those same records. Use the Workbench when you want a GUI for running,
+supervising, reviewing, and landing tasks. Use `ctx work` when you want local
+schema, validation, import/export, and record inspection from the terminal.
+
+ctx stores private state under `CTX_DATA_ROOT` or `~/.ctx` by default. Repo-local
+`.ctx` files are explicit opt-in or legacy `ctx init` behavior, not the default
+Work setup path.
 
 <div className="ctx-clean-frame">
   <Frame>
@@ -41,37 +46,47 @@ credentials.
 
 ## What ctx helps you do
 
-- Use Claude Code, Codex, Cursor, and other coding agents in one interface.
-- Run agents in isolated containers with explicit disk and network controls.
-- Let agents work with bounded autonomy instead of constant approval prompts.
-- Keep tasks, sessions, diffs, transcripts, and artifacts in one review surface.
-- Run work locally or on remote machines you control.
-- Keep parallel tasks isolated in separate worktrees and land them cleanly with the agent merge queue.
+- Keep coding-agent Work records local, durable, and inspectable.
+- Link prompts, transcripts, tool activity, commands, diffs, PRs, artifacts, and checks.
+- Review agent changes with the context that produced them.
+- Reuse prior task context with future agents and human reviewers.
+- Use installed harnesses on `PATH` where possible, with managed provider setup as an optional path.
+- Open the same records in the desktop Workbench when a GUI run and review surface is useful.
+- Run ADE-managed sessions in host or containerized modes; container disk/network controls apply to those ADE/containerized runs.
 
-## Why standardize on the environment
+## Status
 
-- You can use the agents you prefer without fragmenting your workflow.
-- Local runtime defaults and review loops stay consistent across agents.
-- Review, provenance, and task history stay in one place instead of being scattered across tools.
-- You can change harnesses and models over time without rebuilding your workspace around each one.
+| Area | Status |
+| --- | --- |
+| Desktop Workbench for tasks, sessions, transcripts, artifacts, diffs, worktrees, and review | Works now |
+| User-local data root under `CTX_DATA_ROOT` or `~/.ctx` | Works now |
+| `ctx work` schema/list/show/import/export/validate/inspect/redaction-preview | Works now |
+| `ctx setup` workspace/scratch/status/uninstall | Works now |
+| Best-effort `git`/`gh` shim capture and explicit `ctx work link-pr` | Works now locally |
+| Plugin manifest validation/list/reload local scan | Works now |
+| Declarative host-owned Workbench plugin contributions | Experimental |
+| ACP provider plugin direction | Experimental |
+| Hosted/team sync, organization policy, or tamper-proof hosted audit | Not in this public local slice |
+| Arbitrary executable plugin UI or webview runtime | Deferred |
 
 ## Get started
 
-Use one small, low-risk task to validate the whole loop end to end: install, connect a provider,
-open a workspace, run a task, and review the diff before you finalize changes.
+Use one small, low-risk task to validate the whole loop end to end: install,
+connect a provider, open a workspace, run a task, and review the resulting Work
+record before you finalize changes.
 
 <CardGroup cols={2}>
   <Card title="Install and launch" icon="download" href="/getting-started/install-and-launch">
-    Get ctx running and confirm the app is healthy on first launch.
+    Install ctx, choose the CLI or desktop path, and confirm local health.
   </Card>
-  <Card title="Connect a provider" icon="plug" href="/getting-started/connect-provider">
-    Connect one harness or provider before you try real task work.
+  <Card title="Work records" icon="database" href="/work-records">
+    Understand the local record model and the current `ctx work` CLI surface.
   </Card>
   <Card title="Add a workspace" icon="folder-open" href="/getting-started/add-workspace">
-    Open a local repo or connect to a remote host you already control.
+    Register a local repo or connect to a remote host you already control.
   </Card>
   <Card title="Run your first task" icon="rocket" href="/getting-started/first-task">
-    Validate the full loop: prompt, run, review, revise, finalize.
+    Validate the Workbench loop: prompt, run, review, revise, finalize.
   </Card>
 </CardGroup>
 
@@ -83,9 +98,10 @@ open a workspace, run a task, and review the diff before you finalize changes.
 
 ## Learn more
 
+- [Work records](/work-records)
 - [Workbench tour](/workbench/tour)
+- [Work Model](/agent-work-model)
+- [Plugin Contribution Contract](/plugin-contribution-contract)
 - [Containerization](/containerization)
-- [Agent Merge Queue Overview](/agent-merge-queue-overview)
-- [What is a worktree?](/what-is-a-worktree)
 - [ADE vs CLI](/ade-vs-cli)
 - [ADE vs IDE](/ade-vs-ide)

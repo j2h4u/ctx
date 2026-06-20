@@ -5,8 +5,13 @@ description: "Typed contribution, capability, data binding, action, and hot-relo
 
 # Plugin Contribution Contract
 
-Plugins are installable bundles that contribute composable ctx surfaces. They
-are not a replacement for the Work model, the ADE state model, or ACP.
+Plugins are installable bundles that contribute local ctx capabilities. They
+are not a replacement for the Work model, the Workbench state model, or ACP.
+
+The current public slice is narrow: manifest validation, local list/reload
+scans, command and provider-adapter registration, and declarative host-owned
+Workbench contributions. Executable plugin UI and arbitrary webviews are
+deferred.
 
 ## Contribution Types
 
@@ -16,19 +21,19 @@ Supported or explicitly deferred contribution types:
 
 | Contribution | First-pass expectation |
 | --- | --- |
-| Commands | Supported |
-| ACP providers | Supported |
-| Collectors/importers | Supported |
-| Observers | Supported |
+| Commands | Supported as declared local plugin commands |
+| ACP providers | Supported as the provider plugin direction |
+| Collectors/importers | Contracted through Work event payloads; implementation scope may be incremental |
+| Observers | Contracted through Work event payloads; implementation scope may be incremental |
 | Redaction/export processors | Deferred as SDK sidecar markers only |
-| Workbench panels | Supported through `ui_surfaces` |
+| Workbench panels | Deferred for executable UI; `ui_surfaces` remains a placement contract |
 | Workbench templates | Supported as declarative host-owned manifest contributions |
 | Card renderers | Supported as declarative host-owned manifest contributions |
 | Detail sections | Supported as declarative host-owned manifest contributions |
 | Review sections | Supported as declarative host-owned manifest contributions |
 | Toolbar actions | Supported as declarative declared-plugin-command or approved-action references |
 | Artifact renderers | Supported as declarative host-owned manifest contributions |
-| Arbitrary webview/React UI | Deferred or gated behind explicit capability |
+| Arbitrary webview/React UI | Deferred |
 
 Silent partial support is not allowed. If a contribution appears in the public
 manifest schema, the SDK must type it or the docs/tests must clearly mark it as
@@ -74,16 +79,16 @@ Supported host renderer IDs:
 - `host.work-summary-card`: Work summary card;
 - `host.work-summary-section`: Work summary detail section.
 
-Unsupported template or renderer IDs are still valid data, but the ADE must
-render them as unsupported source-labeled contributions instead of executing
-plugin code or silently dropping them. New host IDs should be added with schema,
-SDK, Rust model, frontend projection, and visual coverage.
+Unsupported template or renderer IDs are still valid data, but the Workbench
+must render them as unsupported source-labeled contributions instead of
+executing plugin code or silently dropping them. New host IDs should be added
+with schema, SDK, Rust model, frontend projection, and visual coverage.
 
-`ui_surfaces` remains the bucket for plugin-contributed surface placements such
-as panels, sidebars, status bar entries, command palette entries, and settings.
-Those surfaces may reference plugin entrypoints and are therefore distinct from
-the host-owned declarative buckets above. Panels are intentionally not duplicated
-as a new `panels` bucket in this slice.
+`ui_surfaces` remains the compatibility bucket for plugin-contributed surface
+placements such as panels, sidebars, status bar entries, command palette entries,
+and settings. Surfaces that reference plugin entrypoints are distinct from the
+host-owned declarative buckets above and are not the headline of this slice.
+Panels are intentionally not duplicated as a new `panels` bucket here.
 
 Redaction and export processors remain deferred as SDK sidecar markers. They are
 not manifest fields until processor provenance, permission prompts, redaction
@@ -94,8 +99,8 @@ defaults, and execution lifecycle are specified.
 Workbench primitives are the composable internal units. Plugins contribute
 configuration, bindings, renderers, and actions over those primitives.
 
-A plugin should not mutate the store directly or replace the whole ADE shell in
-the first pass.
+A plugin should not mutate the store directly or replace the whole Workbench
+shell in the first pass.
 
 Collector/importer plugins may produce Work event payloads, but they must submit
 them through approved ctx import/capture actions. They must not receive direct
@@ -153,7 +158,7 @@ Local plugins are powerful local code. The first-pass trust model is:
 - dev-mode execution is source-labeled;
 - command entrypoints, cwd, args, and env are validated;
 - host process execution requires a visible plugin identity;
-- arbitrary UI/webview execution is deferred or capability-gated;
+- arbitrary UI/webview execution is deferred;
 - plugin stdout/stderr may be sensitive and must be bounded/redacted where
   displayed or exported;
 - duplicate plugin IDs, provider IDs, and command IDs follow the collision rules
@@ -182,7 +187,7 @@ Plugin reload must handle:
 - collector restart from cursor/checkpoint;
 - provider removal without deleting historical Work;
 - registry generation changes;
-- diagnostics visible in CLI and ADE.
+- diagnostics visible in CLI and Workbench.
 
 UI reload must not kill daemon-owned active sessions.
 
@@ -208,7 +213,7 @@ offline diagnostics from daemon/UI hot reload. The root order is:
 - `<prepared CTX_DATA_ROOT or ~/.ctx>/plugins`.
 
 The daemon-owned hot-reload path remains responsible for active-session safety,
-local provider-adapter registry updates, last-good preservation, and ADE
+local provider-adapter registry updates, last-good preservation, and Workbench
 updates. This is local daemon state only; it does not include hosted/team sync.
 Future CLI commands that mutate a running daemon should use a different,
 explicit verb or option so local scanner behavior stays unsurprising.

@@ -1,14 +1,17 @@
 ---
-title: "Agent Work Model"
-description: "Public vocabulary for tasks, sessions, runs, worktrees, changes, reviews, artifacts, checks, and gates"
+title: "Work Model"
+description: "Public vocabulary for Work records: tasks, sessions, runs, worktrees, changes, reviews, artifacts, checks, and gates"
 ---
 
-ctx models agent work around human review.
+ctx models Work around human review.
 
 The core idea is simple: a person delegates a **task**, an agent works in one or
 more **sessions** and **runs**, ctx keeps the resulting **change sets** and
-**artifacts** reviewable, and the work may eventually connect to one or more
+**artifacts** reviewable, and the Work may eventually connect to one or more
 **pull requests**.
+
+Some v1 schemas and code paths still use `agent-work` names for compatibility.
+Public product copy should say Work.
 
 ## Core terms
 
@@ -129,9 +132,9 @@ The operational record for active work should stay close to tasks, sessions,
 runs, change sets, artifacts, checks, and pull requests.
 
 Projects may also choose to maintain a transcript archive or data lake for
-longer-term search, audit, metrics, or model-improvement workflows. That
-archive should be treated as an optional downstream projection of the agent-work
-model, not as the source of truth for active review.
+longer-term search, analytics, metrics, or model-improvement workflows. That
+archive should be treated as an optional downstream projection of the Work model,
+not as the source of truth for active review.
 
 ## Old-session imports
 
