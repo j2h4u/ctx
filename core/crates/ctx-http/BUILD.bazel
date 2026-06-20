@@ -490,6 +490,8 @@ rust_binary(
         "src/logging/heap_profiler.rs",
         "src/logging.rs",
         "src/main.rs",
+        "src/plugin_cli.rs",
+        "src/setup_cli.rs",
     ],
     compile_data = [
         "//schemas:json_schemas",
@@ -894,6 +896,14 @@ sh_test(
     timeout = "long",
 )
 
+sh_test(
+    name = "bin_tests_setup_help",
+    srcs = ["tests/bin_smoke.sh"],
+    args = ["$(location :ctx)", "setup-help"],
+    data = [":ctx"],
+    timeout = "long",
+)
+
 test_suite(
     name = "bin_tests",
     tests = [
@@ -903,6 +913,7 @@ test_suite(
         ":bin_tests_root_help",
         ":bin_tests_self_update_help",
         ":bin_tests_serve_help",
+        ":bin_tests_setup_help",
     ],
 )
 

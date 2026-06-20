@@ -52,6 +52,7 @@ pub(crate) fn init_logging_for_command(
             Some(data_root.join("logs"))
         }
         Commands::Work(_)
+        | Commands::Setup(_)
         | Commands::Plugin(_)
         | Commands::Init { .. }
         | Commands::SelfUpdate { .. } => None,

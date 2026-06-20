@@ -5,6 +5,7 @@ mod agent_work_cli;
 mod cli;
 mod logging;
 mod plugin_cli;
+mod setup_cli;
 
 use cli::{Cli, Commands};
 
@@ -22,6 +23,7 @@ async fn main() -> Result<()> {
             ),
         ),
         Commands::Work(_)
+        | Commands::Setup(_)
         | Commands::Plugin(_)
         | Commands::Init { .. }
         | Commands::SelfUpdate { .. } => None,
@@ -58,6 +60,9 @@ async fn main() -> Result<()> {
         }
         Commands::Plugin(command) => {
             plugin_cli::run(command).await?;
+        }
+        Commands::Setup(command) => {
+            setup_cli::run(command).await?;
         }
         Commands::Serve { bind, data_dir } => {
             ctx_http::serve(bind, data_dir).await?;

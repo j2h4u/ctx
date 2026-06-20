@@ -1,16 +1,22 @@
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand, ValueEnum};
 use ctx_core::ids::{ChangeSetId, ContributionId, WorkspaceId};
 use ctx_core::models::PluginManifest;
-use ctx_core::models::{ChangeSet, Contribution};
+use ctx_core::models::{
+    ChangeSet, Contribution, ContributionEndpoint, ContributionRole, GitFingerprint,
+    PullRequestLink, PullRequestLinkKind, PullRequestRef, RecordFidelity, RecordOrigin,
+    RecordSource, RecordTrust, Sha256DigestValue, Workspace,
+};
 use ctx_store::{Store, StoreManager};
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use url::Url;
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentWorkCommand {
@@ -33,7 +39,13 @@ pub(crate) enum AgentWorkSubcommand {
     /// Show a local Work record.
     Show(AgentWorkShowArgs),
     /// Capture local Work records.
-    Capture(AgentWorkStoreArgs),
+    Capture(AgentWorkCaptureArgs),
+    /// Link a pull request URL to a local Work change set.
+    LinkPr(AgentWorkLinkPrArgs),
+    /// Add a local note to the Work graph.
+    Note(AgentWorkNoteArgs),
+    /// Show recent local Work context.
+    Recent(AgentWorkRecentArgs),
     /// Export local Work records.
     Export(AgentWorkExportArgs),
     /// Import local Work records.
@@ -121,6 +133,82 @@ pub(crate) struct AgentWorkImportArgs {
     pub(crate) dry_run: bool,
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct AgentWorkCaptureArgs {
+    #[command(subcommand)]
+    pub(crate) command: AgentWorkCaptureSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum AgentWorkCaptureSubcommand {
+    /// Record an already-forwarded git or gh command invocation.
+    Command(AgentWorkCaptureCommandArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentWorkCaptureCommandArgs {
+    #[command(flatten)]
+    pub(crate) store: AgentWorkStoreArgs,
+    /// Captured command.
+    #[arg(long, value_enum)]
+    pub(crate) tool: AgentWorkCaptureTool,
+    /// Exit code from the real command.
+    #[arg(long, default_value_t = 0)]
+    pub(crate) exit_code: i32,
+    /// Working directory for the captured command. Defaults to the current directory.
+    #[arg(long)]
+    pub(crate) cwd: Option<PathBuf>,
+    /// Read original command arguments as NUL-delimited values from stdin.
+    #[arg(long)]
+    pub(crate) argv0_stdin: bool,
+    /// Original command arguments after `--`.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub(crate) argv: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentWorkLinkPrArgs {
+    #[command(flatten)]
+    pub(crate) store: AgentWorkStoreArgs,
+    /// Existing change set id to link. If omitted, ctx records a new local change set from cwd.
+    #[arg(long)]
+    pub(crate) change_set_id: Option<String>,
+    /// Pull request URL, for example https://github.com/owner/repo/pull/123.
+    pub(crate) url: String,
+    /// Optional PR title.
+    #[arg(long)]
+    pub(crate) title: Option<String>,
+    /// Optional PR state.
+    #[arg(long)]
+    pub(crate) state: Option<String>,
+    /// Working directory used when creating a new local change set.
+    #[arg(long)]
+    pub(crate) cwd: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentWorkNoteArgs {
+    #[command(flatten)]
+    pub(crate) store: AgentWorkStoreArgs,
+    /// Attach the note to this change set.
+    #[arg(long)]
+    pub(crate) change_set_id: Option<String>,
+    /// Note text.
+    pub(crate) summary: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentWorkRecentArgs {
+    #[command(flatten)]
+    pub(crate) store: AgentWorkStoreArgs,
+    /// Maximum records per kind.
+    #[arg(long, default_value_t = 5)]
+    pub(crate) limit: usize,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum AgentWorkSchemaKind {
     WorkBundle,
@@ -138,6 +226,13 @@ pub(crate) enum AgentWorkRecordKind {
     All,
     ChangeSet,
     Contribution,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AgentWorkCaptureTool {
+    Git,
+    Gh,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
@@ -194,6 +289,15 @@ impl AgentWorkRecordKind {
 
     fn includes_contributions(self) -> bool {
         matches!(self, Self::All | Self::Contribution)
+    }
+}
+
+impl AgentWorkCaptureTool {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Git => "git",
+            Self::Gh => "gh",
+        }
     }
 }
 
@@ -286,8 +390,17 @@ async fn run_with_writer(command: AgentWorkCommand, writer: &mut dyn Write) -> R
         AgentWorkSubcommand::Show(args) => {
             show_work_record(args, writer).await?;
         }
-        AgentWorkSubcommand::Capture(_args) => {
-            not_implemented("capture")?;
+        AgentWorkSubcommand::Capture(args) => {
+            capture_work(args, writer).await?;
+        }
+        AgentWorkSubcommand::LinkPr(args) => {
+            link_pull_request(args, writer).await?;
+        }
+        AgentWorkSubcommand::Note(args) => {
+            add_work_note(args, writer).await?;
+        }
+        AgentWorkSubcommand::Recent(args) => {
+            show_recent_work(args, writer).await?;
         }
         AgentWorkSubcommand::Export(args) => {
             export_work_records(args, writer).await?;
@@ -299,17 +412,610 @@ async fn run_with_writer(command: AgentWorkCommand, writer: &mut dyn Write) -> R
     Ok(())
 }
 
-fn not_implemented(command: &str) -> Result<()> {
-    bail!(
-        "{}",
-        durable_diagnostic(
-            DiagnosticSeverity::Error,
-            &format!("ctx.work.{command}.not_implemented"),
-            &format!(
-                "ctx work {command} needs live daemon/session capture semantics and is not available as an offline store command yet; use `ctx work list`, `ctx work show`, `ctx work export`, `ctx work import`, `ctx work validate`, or `ctx work redaction-preview` for local Work records"
-            ),
-        )
-    )
+async fn capture_work(args: AgentWorkCaptureArgs, writer: &mut dyn Write) -> Result<()> {
+    match args.command {
+        AgentWorkCaptureSubcommand::Command(args) => capture_command(args, writer).await,
+    }
+}
+
+async fn capture_command(args: AgentWorkCaptureCommandArgs, writer: &mut dyn Write) -> Result<()> {
+    let AgentWorkCaptureCommandArgs {
+        store,
+        tool,
+        exit_code,
+        cwd,
+        argv0_stdin,
+        argv,
+    } = args;
+    let argv = if argv0_stdin {
+        read_nul_delimited_argv_from_stdin()?
+    } else {
+        argv
+    };
+    let cwd = cwd.unwrap_or(std::env::current_dir()?);
+    let context = open_work_store_for_path(&store, Some(&cwd)).await?;
+    let facts = git_facts(&cwd);
+    let pr = if tool == AgentWorkCaptureTool::Gh {
+        find_pull_request_ref(&argv)
+    } else {
+        None
+    };
+    let metadata = json!({
+        "kind": "ctx.work.command_capture",
+        "tool": tool.as_str(),
+        "argv": redact_argv(&argv),
+        "exit_code": exit_code,
+        "cwd": cwd.to_string_lossy(),
+        "repo_root": facts.repo_root,
+        "branch": facts.branch,
+        "head_sha": facts.head_sha,
+        "classification": classify_captured_command(tool, &argv),
+        "pull_request": pr.as_ref(),
+    });
+    let target = pr
+        .clone()
+        .map(|pull_request| ContributionEndpoint::PullRequest { pull_request })
+        .unwrap_or(ContributionEndpoint::Workspace {
+            workspace_id: context.workspace_id,
+        });
+    let contribution = Contribution {
+        id: ContributionId::new(),
+        workspace_id: context.workspace_id,
+        change_set_id: None,
+        subject: ContributionEndpoint::System {
+            label: Some(args.tool.as_str().to_string()),
+        },
+        target,
+        role: ContributionRole::Context,
+        source: if tool == AgentWorkCaptureTool::Gh {
+            RecordSource::PullRequest
+        } else {
+            RecordSource::External
+        },
+        origin: RecordOrigin::System,
+        fidelity: RecordFidelity::Declared,
+        trust: RecordTrust::Low,
+        summary: Some(format!(
+            "{} {} exited {}",
+            tool.as_str(),
+            argv.first().map(String::as_str).unwrap_or("(no args)"),
+            exit_code
+        )),
+        fingerprint: None,
+        issuer: Some("ctx work capture command".to_string()),
+        metadata_json: Some(metadata),
+        source_records: Vec::new(),
+        created_at: None,
+        updated_at: None,
+        schema_version: AGENT_WORK_SCHEMA_VERSION,
+    };
+    let contribution = context.store.upsert_contribution(&contribution).await?;
+    writeln!(writer, "captured: {}", contribution.id)?;
+    write_diagnostic(
+        writer,
+        DiagnosticSeverity::Info,
+        "ctx.work.capture.command.completed",
+        &format!(
+            "captured {} command for workspace {}",
+            tool.as_str(),
+            context.workspace_id.0
+        ),
+    )?;
+    Ok(())
+}
+
+async fn link_pull_request(args: AgentWorkLinkPrArgs, writer: &mut dyn Write) -> Result<()> {
+    let cwd = args.cwd.unwrap_or(std::env::current_dir()?);
+    let context = open_work_store_for_path(&args.store, Some(&cwd)).await?;
+    let pr = parse_github_pull_request_url(&args.url)?;
+    let mut change_set = match args.change_set_id {
+        Some(id) => context
+            .store
+            .get_workspace_change_set(context.workspace_id, ChangeSetId::from_id(id.clone()))
+            .await?
+            .with_context(|| format!("change set {id} not found"))?,
+        None => {
+            if let Some(change_set) =
+                find_change_set_for_pull_request(&context.store, context.workspace_id, &pr).await?
+            {
+                change_set
+            } else {
+                build_change_set_from_cwd(context.workspace_id, &cwd, Some(&pr)).await
+            }
+        }
+    };
+    let link = PullRequestLink {
+        kind: PullRequestLinkKind::Result,
+        pull_request: pr.clone(),
+        url: Some(args.url.clone()),
+        title: args.title.clone(),
+        state: args.state.clone(),
+    };
+    upsert_pull_request_link(&mut change_set, link);
+    let change_set = context.store.upsert_change_set(&change_set).await?;
+    let contribution =
+        upsert_pr_link_contribution(&context.store, context.workspace_id, &change_set, &pr).await?;
+
+    writeln!(writer, "change_set: {}", change_set.id)?;
+    writeln!(
+        writer,
+        "pull_request: {}/{}/#{}",
+        pr.owner, pr.repo, pr.number
+    )?;
+    writeln!(writer, "contribution: {}", contribution.id)?;
+    write_diagnostic(
+        writer,
+        DiagnosticSeverity::Info,
+        "ctx.work.link_pr.completed",
+        &format!("linked PR {} to change set {}", args.url, change_set.id),
+    )?;
+    Ok(())
+}
+
+async fn add_work_note(args: AgentWorkNoteArgs, writer: &mut dyn Write) -> Result<()> {
+    let context = open_work_store(&args.store).await?;
+    let target = if let Some(change_set_id) = args.change_set_id {
+        ContributionEndpoint::ChangeSet {
+            change_set_id: ChangeSetId::from_id(change_set_id),
+        }
+    } else {
+        ContributionEndpoint::Workspace {
+            workspace_id: context.workspace_id,
+        }
+    };
+    let contribution = Contribution {
+        id: ContributionId::new(),
+        workspace_id: context.workspace_id,
+        change_set_id: match &target {
+            ContributionEndpoint::ChangeSet { change_set_id } => Some(change_set_id.clone()),
+            _ => None,
+        },
+        subject: ContributionEndpoint::Agent {
+            session_id: None,
+            run_id: None,
+            label: Some("agent".to_string()),
+        },
+        target,
+        role: ContributionRole::Context,
+        source: RecordSource::Manual,
+        origin: RecordOrigin::Agent,
+        fidelity: RecordFidelity::Declared,
+        trust: RecordTrust::Medium,
+        summary: Some(ctx_core::redaction::redact_sensitive(&args.summary)),
+        fingerprint: None,
+        issuer: Some("ctx work note".to_string()),
+        metadata_json: Some(json!({
+            "kind": "ctx.work.note",
+        })),
+        source_records: Vec::new(),
+        created_at: None,
+        updated_at: None,
+        schema_version: AGENT_WORK_SCHEMA_VERSION,
+    };
+    let contribution = context.store.upsert_contribution(&contribution).await?;
+    writeln!(writer, "contribution: {}", contribution.id)?;
+    write_diagnostic(
+        writer,
+        DiagnosticSeverity::Info,
+        "ctx.work.note.completed",
+        &format!("added Work note {}", contribution.id),
+    )?;
+    Ok(())
+}
+
+async fn show_recent_work(args: AgentWorkRecentArgs, writer: &mut dyn Write) -> Result<()> {
+    let context = open_work_store(&args.store).await?;
+    let bundle = load_work_export(&context.store, context.workspace_id).await?;
+    let change_sets = bundle
+        .change_sets
+        .into_iter()
+        .rev()
+        .take(args.limit)
+        .collect::<Vec<_>>();
+    let contributions = bundle
+        .contributions
+        .into_iter()
+        .rev()
+        .take(args.limit)
+        .collect::<Vec<_>>();
+    if args.json {
+        serde_json::to_writer_pretty(
+            &mut *writer,
+            &json!({
+                "workspace_id": context.workspace_id,
+                "change_sets": change_sets,
+                "contributions": contributions,
+            }),
+        )?;
+        writeln!(writer)?;
+    } else {
+        writeln!(writer, "workspace: {}", context.workspace_id.0)?;
+        writeln!(writer, "recent_change_sets: {}", change_sets.len())?;
+        for change_set in &change_sets {
+            writeln!(
+                writer,
+                "- {}{}",
+                change_set.id,
+                optional_title_suffix(change_set.title.as_deref())
+            )?;
+        }
+        writeln!(writer, "recent_contributions: {}", contributions.len())?;
+        for contribution in &contributions {
+            writeln!(
+                writer,
+                "- {}{}",
+                contribution.id,
+                optional_title_suffix(contribution.summary.as_deref())
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Default)]
+struct GitFacts {
+    repo_root: Option<String>,
+    branch: Option<String>,
+    head_sha: Option<String>,
+}
+
+async fn build_change_set_from_cwd(
+    workspace_id: WorkspaceId,
+    cwd: &Path,
+    pr: Option<&PullRequestRef>,
+) -> ChangeSet {
+    let facts = git_facts(cwd);
+    let fingerprint = git_fingerprint(cwd);
+    let title = pr
+        .map(|pr| format!("GitHub PR {}/{}#{}", pr.owner, pr.repo, pr.number))
+        .or_else(|| {
+            facts
+                .branch
+                .as_ref()
+                .map(|branch| format!("Local changes on {branch}"))
+        })
+        .unwrap_or_else(|| "Local Work change set".to_string());
+    let mut change_set = ChangeSet {
+        id: ChangeSetId::new(),
+        workspace_id,
+        source_worktree_id: None,
+        source: RecordSource::Worktree,
+        origin: RecordOrigin::System,
+        fidelity: if fingerprint.is_some() {
+            RecordFidelity::Diff
+        } else {
+            RecordFidelity::Declared
+        },
+        trust: RecordTrust::Low,
+        title: Some(title),
+        summary: Some("Created by local ctx Work CLI linking.".to_string()),
+        description: None,
+        fingerprint,
+        base_revision: None,
+        head_revision: facts.head_sha,
+        target_branch: facts.branch,
+        pull_requests: Vec::new(),
+        source_records: Vec::new(),
+        issuer: Some("ctx work link-pr".to_string()),
+        created_at: None,
+        updated_at: None,
+        schema_version: AGENT_WORK_SCHEMA_VERSION,
+    };
+    if let Some(pr) = pr {
+        upsert_pull_request_link(
+            &mut change_set,
+            PullRequestLink {
+                kind: PullRequestLinkKind::Result,
+                pull_request: pr.clone(),
+                url: pr.url.clone(),
+                title: pr.title.clone(),
+                state: None,
+            },
+        );
+    }
+    change_set
+}
+
+fn git_facts(cwd: &Path) -> GitFacts {
+    GitFacts {
+        repo_root: git_output(cwd, &["rev-parse", "--show-toplevel"]),
+        branch: git_output(cwd, &["branch", "--show-current"]),
+        head_sha: git_output(cwd, &["rev-parse", "HEAD"]),
+    }
+}
+
+fn git_fingerprint(cwd: &Path) -> Option<GitFingerprint> {
+    let facts = git_facts(cwd);
+    facts.repo_root.as_ref()?;
+    let patch = git_output_lossy(cwd, &["diff", "--binary"]).unwrap_or_default();
+    let status =
+        git_output_lossy(cwd, &["status", "--porcelain=v1", "--branch"]).unwrap_or_default();
+    let untracked =
+        git_output_lossy(cwd, &["ls-files", "--others", "--exclude-standard"]).unwrap_or_default();
+    let mut changed_paths = Vec::new();
+    for args in [
+        ["diff", "--name-only"].as_slice(),
+        ["diff", "--cached", "--name-only"].as_slice(),
+    ] {
+        if let Some(output) = git_output_lossy(cwd, args) {
+            changed_paths.extend(output.lines().map(ToOwned::to_owned));
+        }
+    }
+    changed_paths.extend(untracked.lines().map(ToOwned::to_owned));
+    changed_paths.sort();
+    changed_paths.dedup();
+    let changed_paths = changed_paths.join("\n");
+    let dirty = status.lines().any(|line| !line.starts_with("##"));
+
+    Some(GitFingerprint {
+        repo_root: facts.repo_root,
+        head_sha: facts.head_sha,
+        branch: facts.branch,
+        patch_sha256: Sha256DigestValue::from_bytes(patch.as_bytes()),
+        status_sha256: Sha256DigestValue::from_bytes(status.as_bytes()),
+        untracked_sha256: Sha256DigestValue::from_bytes(untracked.as_bytes()),
+        changed_paths_sha256: Sha256DigestValue::from_bytes(changed_paths.as_bytes()),
+        dirty,
+    })
+}
+
+fn git_output(cwd: &Path, args: &[&str]) -> Option<String> {
+    git_output_lossy(cwd, args).map(|output| output.trim().to_string())
+}
+
+fn git_output_lossy(cwd: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn read_nul_delimited_argv_from_stdin() -> Result<Vec<String>> {
+    let mut bytes = Vec::new();
+    io::stdin()
+        .read_to_end(&mut bytes)
+        .context("reading captured argv from stdin")?;
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+    parse_nul_delimited_argv(&bytes)
+}
+
+fn parse_nul_delimited_argv(bytes: &[u8]) -> Result<Vec<String>> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8(part.to_vec()).context("captured argv stdin must be UTF-8"))
+        .collect()
+}
+
+fn classify_captured_command(tool: AgentWorkCaptureTool, argv: &[String]) -> String {
+    match tool {
+        AgentWorkCaptureTool::Git => argv
+            .iter()
+            .find(|arg| !arg.starts_with('-'))
+            .map(|arg| format!("git.{arg}"))
+            .unwrap_or_else(|| "git.unknown".to_string()),
+        AgentWorkCaptureTool::Gh => match argv {
+            [area, action, ..] if area == "pr" => format!("gh.pr.{action}"),
+            [area, action, ..] => format!("gh.{area}.{action}"),
+            [area] => format!("gh.{area}"),
+            [] => "gh.unknown".to_string(),
+        },
+    }
+}
+
+fn redact_argv(argv: &[String]) -> Vec<String> {
+    let mut redact_next = false;
+    argv.iter()
+        .map(|arg| {
+            if redact_next {
+                redact_next = false;
+                return "[redacted:secret]".to_string();
+            }
+            let lower = arg.to_ascii_lowercase();
+            let sensitive = lower.contains("token")
+                || lower.contains("secret")
+                || lower.contains("password")
+                || lower.contains("passwd")
+                || lower.contains("api-key")
+                || lower.contains("apikey");
+            if sensitive && arg.starts_with('-') {
+                if arg.contains('=') {
+                    let flag = arg.split_once('=').map(|(flag, _)| flag).unwrap_or(arg);
+                    format!("{flag}=[redacted:secret]")
+                } else {
+                    redact_next = true;
+                    arg.clone()
+                }
+            } else {
+                ctx_core::redaction::redact_sensitive(arg)
+            }
+        })
+        .collect()
+}
+
+fn find_pull_request_ref(argv: &[String]) -> Option<PullRequestRef> {
+    for arg in argv {
+        if let Ok(pr) = parse_github_pull_request_url(arg) {
+            return Some(pr);
+        }
+        if let Some(pr) = parse_github_pull_request_refish(arg) {
+            return Some(pr);
+        }
+    }
+
+    if argv.first().map(String::as_str) != Some("pr") {
+        return None;
+    }
+    let repo = find_repo_arg(argv)?;
+    let number = argv
+        .iter()
+        .skip(2)
+        .find_map(|arg| arg.parse::<i64>().ok())?;
+    let (owner, repo) = parse_owner_repo(repo)?;
+    Some(PullRequestRef {
+        provider: "github".to_string(),
+        owner,
+        repo,
+        number,
+        id: None,
+        url: None,
+        title: None,
+    })
+}
+
+fn find_repo_arg(argv: &[String]) -> Option<&str> {
+    for (index, arg) in argv.iter().enumerate() {
+        if arg == "--repo" || arg == "-R" {
+            return argv.get(index + 1).map(String::as_str);
+        }
+        if let Some(value) = arg.strip_prefix("--repo=") {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn parse_github_pull_request_url(value: &str) -> Result<PullRequestRef> {
+    let url = Url::parse(value).with_context(|| format!("`{value}` is not a URL"))?;
+    let host = url.host_str().unwrap_or_default();
+    if host != "github.com" && host != "www.github.com" {
+        bail!("only github.com pull request URLs are supported locally today");
+    }
+    let segments = url
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())
+        .unwrap_or_default();
+    if segments.len() < 4 || segments[2] != "pull" {
+        bail!("expected GitHub PR URL shaped like https://github.com/owner/repo/pull/123");
+    }
+    let number = segments[3]
+        .parse::<i64>()
+        .with_context(|| format!("pull request number `{}` must be an integer", segments[3]))?;
+    Ok(PullRequestRef {
+        provider: "github".to_string(),
+        owner: segments[0].to_string(),
+        repo: segments[1].trim_end_matches(".git").to_string(),
+        number,
+        id: None,
+        url: Some(value.to_string()),
+        title: None,
+    })
+}
+
+fn parse_github_pull_request_refish(value: &str) -> Option<PullRequestRef> {
+    let (owner_repo, number) = value.split_once('#')?;
+    let (owner, repo) = parse_owner_repo(owner_repo)?;
+    Some(PullRequestRef {
+        provider: "github".to_string(),
+        owner,
+        repo,
+        number: number.parse().ok()?,
+        id: None,
+        url: None,
+        title: None,
+    })
+}
+
+fn parse_owner_repo(value: &str) -> Option<(String, String)> {
+    let cleaned = value.trim().trim_end_matches(".git");
+    let mut parts = cleaned.split('/');
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim();
+    if owner.is_empty() || repo.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    Some((owner.to_string(), repo.to_string()))
+}
+
+fn upsert_pull_request_link(change_set: &mut ChangeSet, link: PullRequestLink) {
+    if let Some(existing) = change_set
+        .pull_requests
+        .iter_mut()
+        .find(|existing| same_pull_request(&existing.pull_request, &link.pull_request))
+    {
+        existing.kind = link.kind;
+        existing.url = link.url.or_else(|| existing.url.clone());
+        existing.title = link.title.or_else(|| existing.title.clone());
+        existing.state = link.state.or_else(|| existing.state.clone());
+    } else {
+        change_set.pull_requests.push(link);
+    }
+}
+
+async fn upsert_pr_link_contribution(
+    store: &Store,
+    workspace_id: WorkspaceId,
+    change_set: &ChangeSet,
+    pr: &PullRequestRef,
+) -> Result<Contribution> {
+    let contributions = store.list_workspace_contributions(workspace_id).await?;
+    if let Some(existing) = contributions.into_iter().find(|contribution| {
+        contribution.change_set_id.as_ref() == Some(&change_set.id)
+            && matches!(
+                &contribution.target,
+                ContributionEndpoint::PullRequest { pull_request }
+                    if same_pull_request(pull_request, pr)
+            )
+    }) {
+        return Ok(existing);
+    }
+
+    let contribution = Contribution {
+        id: ContributionId::new(),
+        workspace_id,
+        change_set_id: Some(change_set.id.clone()),
+        subject: ContributionEndpoint::ChangeSet {
+            change_set_id: change_set.id.clone(),
+        },
+        target: ContributionEndpoint::PullRequest {
+            pull_request: pr.clone(),
+        },
+        role: ContributionRole::Result,
+        source: RecordSource::PullRequest,
+        origin: RecordOrigin::Agent,
+        fidelity: RecordFidelity::Declared,
+        trust: RecordTrust::Medium,
+        summary: Some(format!(
+            "Linked PR {}/{}#{} to change set {}",
+            pr.owner, pr.repo, pr.number, change_set.id
+        )),
+        fingerprint: change_set.fingerprint.clone(),
+        issuer: Some("ctx work link-pr".to_string()),
+        metadata_json: Some(json!({
+            "kind": "ctx.work.pr_link",
+        })),
+        source_records: Vec::new(),
+        created_at: None,
+        updated_at: None,
+        schema_version: AGENT_WORK_SCHEMA_VERSION,
+    };
+    store.upsert_contribution(&contribution).await
+}
+
+async fn find_change_set_for_pull_request(
+    store: &Store,
+    workspace_id: WorkspaceId,
+    pr: &PullRequestRef,
+) -> Result<Option<ChangeSet>> {
+    let change_sets = store.list_workspace_change_sets(workspace_id).await?;
+    Ok(change_sets.into_iter().find(|change_set| {
+        change_set
+            .pull_requests
+            .iter()
+            .any(|link| same_pull_request(&link.pull_request, pr))
+    }))
+}
+
+fn same_pull_request(a: &PullRequestRef, b: &PullRequestRef) -> bool {
+    a.provider == b.provider && a.owner == b.owner && a.repo == b.repo && a.number == b.number
 }
 
 async fn list_work_records(args: AgentWorkListArgs, writer: &mut dyn Write) -> Result<()> {
@@ -627,11 +1333,19 @@ struct WorkStoreContext {
 }
 
 async fn open_work_store(args: &AgentWorkStoreArgs) -> Result<WorkStoreContext> {
+    let cwd = std::env::current_dir().ok();
+    open_work_store_for_path(args, cwd.as_deref()).await
+}
+
+async fn open_work_store_for_path(
+    args: &AgentWorkStoreArgs,
+    cwd: Option<&Path>,
+) -> Result<WorkStoreContext> {
     let data_root = resolve_data_root(args.data_dir.as_deref())?;
     let manager = StoreManager::open(&data_root)
         .await
         .with_context(|| format!("opening ctx store at {}", data_root.display()))?;
-    let workspace_id = resolve_workspace_id(&manager, args.workspace_id.as_deref()).await?;
+    let workspace_id = resolve_workspace_id(&manager, args.workspace_id.as_deref(), cwd).await?;
     let store = manager
         .workspace(workspace_id)
         .await
@@ -660,6 +1374,7 @@ fn resolve_data_root(data_dir: Option<&Path>) -> Result<PathBuf> {
 async fn resolve_workspace_id(
     manager: &StoreManager,
     workspace_id: Option<&str>,
+    cwd: Option<&Path>,
 ) -> Result<WorkspaceId> {
     if let Some(workspace_id) = workspace_id {
         return parse_workspace_id(workspace_id);
@@ -670,6 +1385,11 @@ async fn resolve_workspace_id(
         .list_workspaces()
         .await
         .context("listing local ctx workspaces")?;
+    if let Some(cwd) = cwd {
+        if let Some(workspace) = workspace_for_cwd(&workspaces, cwd) {
+            return Ok(workspace.id);
+        }
+    }
     match workspaces.as_slice() {
         [workspace] => Ok(workspace.id),
         [] => bail!("no ctx workspaces are registered in the selected data root"),
@@ -682,6 +1402,26 @@ async fn resolve_workspace_id(
             bail!("multiple ctx workspaces are registered; pass --workspace-id. Available: {available}")
         }
     }
+}
+
+fn workspace_for_cwd<'a>(workspaces: &'a [Workspace], cwd: &Path) -> Option<&'a Workspace> {
+    let cwd = normalize_existing_path(cwd);
+    workspaces
+        .iter()
+        .filter_map(|workspace| {
+            let root = normalize_existing_path(Path::new(&workspace.root_path));
+            if cwd.starts_with(&root) {
+                Some((root.components().count(), workspace))
+            } else {
+                None
+            }
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .map(|(_, workspace)| workspace)
+}
+
+fn normalize_existing_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn parse_workspace_id(value: &str) -> Result<WorkspaceId> {
@@ -894,7 +1634,18 @@ fn read_json_file(path: &PathBuf) -> Result<Value> {
 fn write_json_file(path: &Path, value: &Value) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value).context("serializing JSON output")?;
     bytes.push(b'\n');
-    std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| {
+            format!(
+                "creating {}; refusing to overwrite existing files or follow symlinks",
+                path.display()
+            )
+        })?;
+    file.write_all(&bytes)
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 fn infer_schema_kind(value: &Value) -> Result<AgentWorkSchemaKind> {
@@ -2444,27 +3195,265 @@ mod tests {
         assert!(!diagnostic.contains("message: first line\nsecond line"));
     }
 
+    #[test]
+    fn parse_nul_delimited_argv_preserves_secret_values_off_process_args() {
+        let argv =
+            parse_nul_delimited_argv(b"api\0-H\0Authorization: Bearer secret-token\0").unwrap();
+
+        assert_eq!(
+            argv,
+            vec![
+                "api".to_string(),
+                "-H".to_string(),
+                "Authorization: Bearer secret-token".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn write_json_file_refuses_to_overwrite_existing_output() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("work.json");
+        write_json_file(&path, &json!({"ok": true})).unwrap();
+
+        let error = write_json_file(&path, &json!({"ok": false}))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("refusing to overwrite"));
+    }
+
+    #[test]
+    fn pull_request_parsing_accepts_urls_and_gh_repo_number_args() {
+        let pr = parse_github_pull_request_url("https://github.com/ctxrs/ctx/pull/123").unwrap();
+        assert_eq!(pr.provider, "github");
+        assert_eq!(pr.owner, "ctxrs");
+        assert_eq!(pr.repo, "ctx");
+        assert_eq!(pr.number, 123);
+
+        let argv = vec![
+            "pr".to_string(),
+            "view".to_string(),
+            "456".to_string(),
+            "--repo".to_string(),
+            "ctxrs/ctx".to_string(),
+        ];
+        let pr = find_pull_request_ref(&argv).unwrap();
+        assert_eq!(pr.owner, "ctxrs");
+        assert_eq!(pr.repo, "ctx");
+        assert_eq!(pr.number, 456);
+    }
+
     #[tokio::test]
-    async fn capture_returns_actionable_not_implemented_diagnostic() {
+    async fn capture_command_records_local_contribution_without_workspace_id() {
+        let data = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        init_git_repo(repo.path());
+        let nested = repo.path().join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let manager = StoreManager::open(data.path()).await.unwrap();
+        let workspace = manager
+            .global()
+            .create_workspace(
+                "repo".to_string(),
+                repo.path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                VcsKind::Git,
+            )
+            .await
+            .unwrap();
+
         let mut output = Vec::new();
-        let error = run_with_writer(
+        run_with_writer(
             AgentWorkCommand {
-                command: AgentWorkSubcommand::Capture(AgentWorkStoreArgs {
-                    data_dir: None,
-                    workspace_id: None,
+                command: AgentWorkSubcommand::Capture(AgentWorkCaptureArgs {
+                    command: AgentWorkCaptureSubcommand::Command(AgentWorkCaptureCommandArgs {
+                        store: store_args(data.path(), None),
+                        tool: AgentWorkCaptureTool::Gh,
+                        exit_code: 0,
+                        cwd: Some(nested),
+                        argv0_stdin: false,
+                        argv: vec![
+                            "pr".to_string(),
+                            "view".to_string(),
+                            "456".to_string(),
+                            "--repo".to_string(),
+                            "ctxrs/ctx".to_string(),
+                            "--token".to_string(),
+                            "ghp_123456789012345678901234".to_string(),
+                        ],
+                    }),
                 }),
             },
             &mut output,
         )
         .await
-        .unwrap_err()
-        .to_string();
+        .unwrap();
 
-        assert!(error.contains("needs live daemon/session capture semantics"));
-        assert!(error.contains("ctx work list"));
-        assert!(error.contains("ctx work export"));
-        assert!(error.contains("ctx work validate"));
-        assert!(error.contains("enforcement: none_local_diagnostic_only"));
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("captured:"));
+        let store = manager.workspace(workspace.id).await.unwrap();
+        let contributions = store
+            .list_workspace_contributions(workspace.id)
+            .await
+            .unwrap();
+        assert_eq!(contributions.len(), 1);
+        let contribution = &contributions[0];
+        assert!(matches!(
+            contribution.target,
+            ContributionEndpoint::PullRequest { .. }
+        ));
+        let metadata = contribution.metadata_json.as_ref().unwrap();
+        assert_eq!(metadata["classification"], "gh.pr.view");
+        assert_eq!(metadata["argv"][6], "[redacted:secret]");
+        assert_eq!(metadata["pull_request"]["number"], 456);
+    }
+
+    #[tokio::test]
+    async fn link_pr_upserts_change_set_link_and_contribution_idempotently() {
+        let (source_dir, workspace, change_set_id, _) = seeded_work_store().await;
+        let store_args = store_args(source_dir.path(), Some(workspace.id));
+        let url = "https://github.com/ctxrs/ctx/pull/789".to_string();
+
+        for _ in 0..2 {
+            run_with_writer(
+                AgentWorkCommand {
+                    command: AgentWorkSubcommand::LinkPr(AgentWorkLinkPrArgs {
+                        store: store_args.clone(),
+                        change_set_id: Some(change_set_id.0.clone()),
+                        url: url.clone(),
+                        title: Some("Work-first productization".to_string()),
+                        state: Some("open".to_string()),
+                        cwd: None,
+                    }),
+                },
+                &mut Vec::new(),
+            )
+            .await
+            .unwrap();
+        }
+
+        let manager = StoreManager::open(source_dir.path()).await.unwrap();
+        let store = manager.workspace(workspace.id).await.unwrap();
+        let change_set = store
+            .get_workspace_change_set(workspace.id, change_set_id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(change_set.pull_requests.len(), 1);
+        assert_eq!(change_set.pull_requests[0].pull_request.number, 789);
+        let pr_contributions = store
+            .list_workspace_contributions(workspace.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|contribution| {
+                contribution.change_set_id.as_ref() == Some(&change_set_id)
+                    && matches!(
+                        contribution.target,
+                        ContributionEndpoint::PullRequest { .. }
+                    )
+            })
+            .count();
+        assert_eq!(pr_contributions, 1);
+    }
+
+    #[tokio::test]
+    async fn link_pr_without_change_set_id_reuses_existing_pr_change_set() {
+        let data = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        init_git_repo(repo.path());
+        let manager = StoreManager::open(data.path()).await.unwrap();
+        let workspace = manager
+            .global()
+            .create_workspace(
+                "repo".to_string(),
+                repo.path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                VcsKind::Git,
+            )
+            .await
+            .unwrap();
+        let store_args = store_args(data.path(), Some(workspace.id));
+        let url = "https://github.com/ctxrs/ctx/pull/321".to_string();
+
+        for _ in 0..2 {
+            run_with_writer(
+                AgentWorkCommand {
+                    command: AgentWorkSubcommand::LinkPr(AgentWorkLinkPrArgs {
+                        store: store_args.clone(),
+                        change_set_id: None,
+                        url: url.clone(),
+                        title: None,
+                        state: None,
+                        cwd: Some(repo.path().to_path_buf()),
+                    }),
+                },
+                &mut Vec::new(),
+            )
+            .await
+            .unwrap();
+        }
+
+        let store = manager.workspace(workspace.id).await.unwrap();
+        let change_sets = store
+            .list_workspace_change_sets(workspace.id)
+            .await
+            .unwrap();
+        assert_eq!(change_sets.len(), 1);
+        assert_eq!(change_sets[0].pull_requests.len(), 1);
+        assert_eq!(change_sets[0].pull_requests[0].pull_request.number, 321);
+    }
+
+    #[tokio::test]
+    async fn workspace_resolution_prefers_registered_root_containing_cwd() {
+        let data = TempDir::new().unwrap();
+        let root_a = TempDir::new().unwrap();
+        let root_b = TempDir::new().unwrap();
+        let nested_b = root_b.path().join("repo/subdir");
+        std::fs::create_dir_all(&nested_b).unwrap();
+        let manager = StoreManager::open(data.path()).await.unwrap();
+        let workspace_a = manager
+            .global()
+            .create_workspace(
+                "a".to_string(),
+                root_a
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                VcsKind::Git,
+            )
+            .await
+            .unwrap();
+        let workspace_b = manager
+            .global()
+            .create_workspace(
+                "b".to_string(),
+                root_b
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                VcsKind::Git,
+            )
+            .await
+            .unwrap();
+
+        let resolved = resolve_workspace_id(&manager, None, Some(&nested_b))
+            .await
+            .unwrap();
+
+        assert_ne!(resolved, workspace_a.id);
+        assert_eq!(resolved, workspace_b.id);
     }
 
     #[tokio::test]
@@ -2679,7 +3668,7 @@ mod tests {
 
         let mut exported = read_json_file(&export_path).unwrap();
         exported["redaction"]["import_safe"] = json!(true);
-        write_json_file(&export_path, &exported).unwrap();
+        std::fs::write(&export_path, serde_json::to_vec_pretty(&exported).unwrap()).unwrap();
 
         let target_dir = TempDir::new().unwrap();
         let target_manager = StoreManager::open(target_dir.path()).await.unwrap();
@@ -3017,5 +4006,15 @@ mod tests {
             updated_at: None,
             schema_version: 1,
         }
+    }
+
+    fn init_git_repo(path: &Path) {
+        let status = Command::new("git")
+            .arg("init")
+            .arg("--quiet")
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 }

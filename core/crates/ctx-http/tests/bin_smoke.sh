@@ -16,6 +16,7 @@ case "$smoke_case" in
     printf '%s\n' "$root_help" | grep -F "ctx daemon and CLI" >/dev/null
     printf '%s\n' "$root_help" | grep -F "serve" >/dev/null
     printf '%s\n' "$root_help" | grep -F "init" >/dev/null
+    printf '%s\n' "$root_help" | grep -F "setup" >/dev/null
     printf '%s\n' "$root_help" | grep -F "work" >/dev/null
     printf '%s\n' "$root_help" | grep -F "self-update" >/dev/null
     ;;
@@ -54,6 +55,12 @@ JSON
       exit 1
     fi
     grep -E 'traversal|dot-dot' "$tmpdir/bad-work-bundle.out" >/dev/null
+    ;;
+  setup-help)
+    setup_help="$("$ctx_copy" setup --help)"
+    printf '%s\n' "$setup_help" | grep -F "workspace" >/dev/null
+    printf '%s\n' "$setup_help" | grep -F "scratch" >/dev/null
+    printf '%s\n' "$setup_help" | grep -F "uninstall" >/dev/null
     ;;
   serve-help)
     serve_help="$("$ctx_copy" serve --help)"
