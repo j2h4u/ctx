@@ -223,3 +223,9 @@ Record each local commit or integrated worker handoff here.
     active draft preservation.
   - Updates the mobile-narrow visual helper to exercise the actual mobile shell
     instead of a squeezed desktop viewport.
+- `3d74b92` - Record final local validation for Work ADE branch.
+  - Records final local validation evidence, accepted deferrals, review notes,
+    and plugin contribution contract status before the dedicated done-ness
+    review.
+  - Leaves push, PR, merge, hosted/team services, production release, and
+    remote Buildkite execution out of local scope.

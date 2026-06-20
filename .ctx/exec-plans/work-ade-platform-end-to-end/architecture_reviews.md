@@ -2,12 +2,13 @@
 
 Record architecture review checkpoints and sign-offs.
 
-## Pending Checkpoints
+## Status
 
-- After Work CLI/import/export design.
-- After plugin SDK/contribution schema implementation.
-- After hot reload implementation.
-- Before final done-ness review.
+- Final local architecture/security review is complete for current `HEAD`.
+- No architecture blockers remain for the declared local-only scope.
+- Hosted/team/enterprise/control-plane runtime surfaces remain out of public
+  ctx for this branch; remaining local `account_id`/`org_id` migration fields
+  are compatibility/provenance cleanup, not hosted authority exposure.
 
 ## Plan Review Baseline
 
@@ -150,3 +151,15 @@ Reviewer agents:
   substrate; it is around the next executable extension boundary. That should be
   designed as a follow-on permission/lifecycle slice, not squeezed into the
   current declarative projection work.
+
+## Final Current-HEAD Architecture Review
+
+- Reviewer Anscombe (`019ee2c2-4fd0-7322-b9b8-65b60e19ec1f`) reviewed current
+  `HEAD` and `HEAD~4..HEAD` read-only after the final cleanup commits.
+- Result: PASS for architecture/security local scope; no blockers found.
+- Non-blocking notes: local run/audit schema retains `account_id`, `org_id`,
+  and retention fields for local provenance/repair compatibility; migration
+  repair is bounded to exact legacy descriptions; CLI plugin reload remains
+  labeled as local scanner behavior; `/api/plugins/reload` remains the local
+  daemon inventory route used by ADE/E2E; settings no longer wire
+  billing/team/enterprise/mobile-access sections.
