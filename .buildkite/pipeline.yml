@@ -97,7 +97,7 @@ steps:
     plugins:
       - custom-checkout#v1.8.0:
           skip_checkout: true
-          interpolate_checkout_path: "${TMPDIR:-/tmp}/ctx-public-release-verification-${BUILDKITE_BUILD_NUMBER}-${BUILDKITE_JOB_ID}"
+          interpolate_checkout_path: "$${TMPDIR:-/tmp}/ctx-public-release-verification-$${BUILDKITE_BUILD_NUMBER}-$${BUILDKITE_STEP_KEY}-$${BUILDKITE_JOB_ID}"
           repos:
             - url: "https://github.com/ctxrs/ctx.git"
     agents:
@@ -112,7 +112,7 @@ steps:
     plugins:
       - custom-checkout#v1.8.0:
           skip_checkout: true
-          interpolate_checkout_path: "${TMPDIR:-/tmp}/ctx-public-release-verification-${BUILDKITE_BUILD_NUMBER}-${BUILDKITE_JOB_ID}"
+          interpolate_checkout_path: "$${TMPDIR:-/tmp}/ctx-public-release-verification-$${BUILDKITE_BUILD_NUMBER}-$${BUILDKITE_STEP_KEY}-$${BUILDKITE_JOB_ID}"
           repos:
             - url: "https://github.com/ctxrs/ctx.git"
     agents:
