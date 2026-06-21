@@ -1,88 +1,106 @@
 # Buildkite Release Verification Status
 
-Updated: 2026-06-21T10:50:00Z
+Updated: 2026-06-21T12:01:45Z
 
 Branch: `ctx/agent-work-semantics-primary`
 
-Buildkite evidence head: `6ae30f8cfb98d759ec1396640b26ed4ac601133d`
-
-Initial status-note commit: `284dde9c9d935a0c5e48afd3d3e9d2c9a109b68a`
+Buildkite evidence head: `0d82533a2c63c132b7e715c21f0b95ce6529c74a`
 
 Draft PR: https://github.com/ctxrs/ctx/pull/10
 
 Buildkite pipeline: https://buildkite.com/luca-king/ctx-public-release-verification
 
-Final evidence build: https://buildkite.com/luca-king/ctx-public-release-verification/builds/20
+Final evidence build: https://buildkite.com/luca-king/ctx-public-release-verification/builds/23
 
 ## Summary
 
-The Buildkite release verification matrix is implemented and CI-visible. Build
-#20 passed every repo/product lane that could run from healthy workers:
+Buildkite release verification is green for the required public matrix. Build
+#23 passed all 14 command jobs on commit
+`0d82533a2c63c132b7e715c21f0b95ce6529c74a`, including both macOS desktop
+package lanes that were previously blocked by stale shared-agent checkout
+directories.
 
-- source contracts;
-- build graph no-build analysis;
-- full Rust Bazel gate;
-- full web Bazel gate;
-- Linux CLI;
-- Windows CLI cross-package and native Windows smoke;
-- Linux desktop/Tauri package build;
-- browser premerge E2E;
-- release proof;
-- release artifact build.
-
-The only remaining red lanes are the two macOS desktop package lanes. They fail
-before repository checkout and before repo-owned commands run because the shared
-macOS Buildkite agents cannot remove stale checkout directories from previous
-jobs.
-
-This is an external worker-state blocker, not a product/code/test failure in
-this branch.
+No ctx merge, release, publish, or announcement was performed.
 
 ## Buildkite Matrix
 
-| Lane | Product / Platform | Build #20 status | Evidence |
+| Lane | Product / Platform | Build #23 status | Evidence |
 | --- | --- | --- | --- |
-| source: contracts | CI/source contracts | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56b9-4c8b-9317-7b9f8c536a01 |
-| build graph: no-build analysis | Bazel graph | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56c1-4fe8-acdb-320842cab1d5 |
-| rust: all-rust | Rust workspace | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56c2-4b85-bda1-127211a7ec51 |
-| web: all-web | Web app | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56c3-41f7-8002-086b77d0ea83 |
-| cli: linux x64 | CLI Linux x64 | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56c4-4202-94bc-b81d8905f6fc |
-| cli: windows x64 package | CLI Windows x64 package | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56c5-404c-b372-2b7fed126a17 |
-| cli: windows x64 | CLI Windows x64 native smoke | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56c6-40f4-93d3-90157c0aabd9 |
-| desktop: package linux x64 | Desktop Linux x64 package | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56ca-4e5c-a8bf-e4114234b41e |
-| desktop: package macos arm64 | Desktop macOS arm64 package | blocked | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56cb-49ba-aeca-40ef7a33fabf |
-| desktop: package macos x64 | Desktop macOS x64 package | blocked | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56cf-4c39-a9f0-0ccb0f3506ae |
-| browser: premerge e2e | Browser E2E | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56d3-4c53-a6fb-0f5ace20b627 |
-| release: proof | Release proof | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56d4-4dda-9286-1f540708941f |
-| artifact: release | Release artifacts | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/20#019ee9ae-56d5-4d27-896b-cb2617ad70a8 |
+| pipeline upload | Buildkite pipeline parse/upload | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-4b14-48e9-b18a-21f30ee2933e |
+| source: contracts | CI/source contracts | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-674c-4874-acad-c9ae71f47cd3 |
+| build graph: no-build analysis | Bazel graph | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-6753-4337-bc12-3aa035781f85 |
+| rust: all-rust | Rust workspace | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-6755-41fb-b5fc-3f08d443025f |
+| web: all-web | Web app | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-6756-4081-8851-22c7d7dd723d |
+| cli: linux x64 | CLI Linux x64 | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-6757-4e2d-9fda-2fe37e7cca4f |
+| cli: windows x64 package | CLI Windows x64 package | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-6758-440e-8b5f-6a7c46909091 |
+| cli: windows x64 | CLI Windows x64 native smoke | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-6758-461a-88d3-7b25f9250953 |
+| desktop: package linux x64 | Desktop Linux x64 package | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-675e-4ed5-9bce-0fb55219c499 |
+| desktop: package macos arm64 | Desktop macOS arm64 package | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-675f-4c3b-8c53-ca484ff21b99 |
+| desktop: package macos x64 | Desktop macOS x64 package | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-6763-4ca3-ab64-d5f54ec576d1 |
+| browser: premerge e2e | Browser E2E | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-676a-4e74-9091-fc56fe34d650 |
+| release: proof | Release proof | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-676b-4744-8592-5791161b3b48 |
+| artifact: release | Release artifacts | passed | https://buildkite.com/luca-king/ctx-public-release-verification/builds/23#019ee9f9-676c-46d4-b3b1-a76f039faf69 |
 
-## macOS Blocker
+## macOS Remediation
 
-Both macOS package lanes fail before checkout completes. The Buildkite agent
-tries to remove a stale checkout directory, then repeatedly fails with
-permission denied while unlinking:
+The earlier macOS blocker was real worker state: the default Buildkite checkout
+cleanup could not remove stale shared-agent directories before repo-owned
+commands ran. The remediation is now repo-owned pipeline code:
 
-`core/apps/desktop/src-tauri/web/dist/favicon-16x16.png`
+- added `custom-checkout#v1.8.0` to both macOS desktop package lanes;
+- configured `skip_checkout: true` so the default shared checkout cleanup path
+  is bypassed;
+- configured a job-unique checkout root with the build number, step key, and job
+  id:
+  `$${TMPDIR:-/tmp}/ctx-public-release-verification-$${BUILDKITE_BUILD_NUMBER}-$${BUILDKITE_STEP_KEY}-$${BUILDKITE_JOB_ID}`;
+- left signing, notarization, and updater private-key environment scrubbing in
+  the package scripts.
 
-Affected checkout roots observed in the logs:
+Evidence from the remediation sequence:
 
-- `/Users/ctxrunner/.buildkite-agent/builds/ctxrunner-Mac-mini-ctx-mac-gui-shared-arm64/luca-king/ctx-public-release-verification`
-- `/usr/local/var/buildkite-agent/builds/ctxcis-iMac-ctx-mac-gui-shared-x64/luca-king/ctx-public-release-verification`
+- Build #21 proved the custom checkout approach could bypass the stale checkout
+  directories and let macOS packaging pass, but the checkout path interpolated
+  too early.
+- Build #22 corrected interpolation so macOS jobs received distinct runtime
+  checkout roots. Both macOS package lanes passed, but the artifact upload still
+  used only the old `src-tauri/target` bundle path.
+- Build #23 added `core/target/release/bundle/**/*` to the desktop artifact
+  paths and passed the full matrix.
 
-Buildkite docs indicate `BUILDKITE_BUILD_CHECKOUT_PATH` cannot be overridden by
-pipeline YAML; it must be set by an agent environment or pre-checkout hook. From
-this repo, the safe remediation is therefore not available.
+Infra cleanup or fresh macOS workers were not required after the repo-owned
+checkout fix. The two stale shared checkout directories can still be cleaned as
+operational hygiene, but they no longer block this pipeline.
 
-Required infra remediation:
+The custom checkout plugin also supports `delete_checkout`. I intentionally did
+not enable it in this pass because the plugin's pre-exit cleanup falls back to
+`sudo rm -rf` on failure; that is unnecessary for proving the build and could add
+a new worker-specific failure mode. If disk pressure appears on the macOS
+agents, evaluate cleanup in a separate infra pass.
 
-- clean or remove the stale checkout directories on both shared macOS hosts;
-- fix ownership/permissions so the Buildkite agent user can unlink generated
-  files;
-- ideally update the macOS agent pre-checkout/environment hook to use a
-  build/job-unique checkout path or to repair stale checkout ownership before
-  checkout.
+## Artifact Coverage
 
-After that remediation, rerun the same Buildkite pipeline on this branch.
+Build #23 artifact listing returned 3,399 artifacts. Relevant release
+verification artifacts include:
+
+- macOS desktop DMGs:
+  - `core/target/release/bundle/dmg/ctx_0.66.0_aarch64.dmg`
+  - `core/target/release/bundle/dmg/ctx_0.66.0_x64.dmg`
+- Linux desktop bundles:
+  - `core/target/release/bundle/appimage/ctx_0.66.0_amd64.AppImage`
+  - `core/target/release/bundle/deb/ctx_0.66.0_amd64.deb`
+  - `core/target/release/bundle/rpm/ctx-0.66.0-1.x86_64.rpm`
+- Windows CLI artifacts:
+  - `ctx-cli-windows-x64/ctx.exe`
+  - `ctx-cli-windows-x64/ctx.exe.sha256`
+  - `ctx-cli-windows-x64-smoke.json`
+- release artifact lane outputs:
+  - `bazel-bin/core/crates/ctx-http/ctx`
+  - `bazel-bin/core/apps/web/dist/**/*`
+  - `bazel-testlogs/**/*`
+
+The macOS package logs explicitly showed artifact upload from
+`core/target/release/bundle/**/*`, including both DMGs. This confirms the
+previous "no files matched" artifact-path gap is closed.
 
 ## Changes Landed
 
@@ -103,32 +121,21 @@ After that remediation, rerun the same Buildkite pipeline on this branch.
   suffixes.
 - Let downstream proof lanes continue after desktop failures so unrelated proof
   evidence is still collected while desktop platform blockers remain visible.
-
-## Artifact Coverage
-
-- Windows CLI package lane uploads `ctx-cli-windows-x64/**/*` and the native
-  Windows smoke lane uploads `ctx-cli-windows-x64-smoke.json`.
-- Linux desktop package lane uploads
-  `core/apps/desktop/src-tauri/target/release/bundle/**/*`; build #20 passed
-  after producing Linux desktop bundle artifacts.
-- Release artifact lane uploads web dist, Linux CLI, and Bazel testlogs from
-  `//:release-artifacts`; build #20 passed.
-
-The artifact-listing helper hit its page cap on build #20 because the build
-uploaded many files, so artifact coverage is recorded by lane and configured
-artifact paths instead of enumerating every artifact.
+- Added macOS custom checkout plugin configuration with job-unique temp checkout
+  roots for desktop package lanes.
+- Added `core/target/release/bundle/**/*` to desktop artifact upload paths.
 
 ## Local Validation
 
 Light local checks run during this pass:
 
 - `.buildkite/validate-pipeline.sh`
-- `bash -n` for changed Buildkite shell scripts
+- `bash -n .buildkite/validate-pipeline.sh`
 - `git diff --check`
 - focused local pnpm-resolution smoke for `.buildkite/ci-toolchain.sh`
 
 Broad local Rust/web suites were not rerun in this phase because Buildkite build
-#20 passed the full `//:all-rust` and `//:all-web` gates, and the local host has
+#23 passed the full `//:all-rust` and `//:all-web` gates, and the local host has
 known I/O pressure under broad concurrent Rust builds.
 
 ## Review Status
@@ -136,16 +143,20 @@ known I/O pressure under broad concurrent Rust builds.
 - CI helper read-only review found no blocker. Its supply-chain concern about
   unverified Node bootstrap downloads was addressed with pinned SHA256
   verification in `.buildkite/ci-toolchain.sh`.
-- Final SDLC/security review returned PASS against head
-  `5dabe7a2322464c50791fa44df3a19b445f5debb`.
-- Final done-ness review returned PASS against head
-  `5dabe7a2322464c50791fa44df3a19b445f5debb`.
+- Final SDLC/security review for the earlier Buildkite pass returned PASS
+  against head `5dabe7a2322464c50791fa44df3a19b445f5debb`.
+- Final done-ness review for the earlier Buildkite pass returned PASS against
+  head `5dabe7a2322464c50791fa44df3a19b445f5debb`.
+- macOS remediation review returned PASS after inspecting the custom checkout
+  configuration, artifact paths, security posture, and repo-owned workaround.
+- A final done-ness review is required after this status note is committed.
 
 ## Guardrails Confirmed
 
 - No merge to `main`.
 - No release or public announcement.
 - No ctx release publish.
+- No tests were weakened to make the matrix pass.
 - No secrets intentionally printed by repo-owned scripts; signing/notarization
   env is scrubbed before public package verification commands.
 - The draft PR remains draft/open.
