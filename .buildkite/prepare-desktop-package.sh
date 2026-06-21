@@ -81,6 +81,31 @@ verify_host_arch() {
   fi
 }
 
+resolve_host_target_triple() {
+  local os_name=""
+  os_name="$(uname -s)"
+  local machine=""
+  machine="$(uname -m)"
+  case "${os_name}:${machine}" in
+    Linux:x86_64)
+      printf '%s\n' 'x86_64-unknown-linux-gnu'
+      ;;
+    Linux:aarch64|Linux:arm64)
+      printf '%s\n' 'aarch64-unknown-linux-gnu'
+      ;;
+    Darwin:x86_64)
+      printf '%s\n' 'x86_64-apple-darwin'
+      ;;
+    Darwin:arm64|Darwin:aarch64)
+      printf '%s\n' 'aarch64-apple-darwin'
+      ;;
+    *)
+      echo "error: unsupported desktop package target host ${os_name}/${machine}" >&2
+      exit 1
+      ;;
+  esac
+}
+
 verify_linux_packaging_deps() {
   require_command pkg-config
   require_command file
@@ -141,9 +166,12 @@ cd "${REPO_ROOT}"
 
 copy_tree "${REPO_ROOT}/bazel-bin/core/apps/web/dist" "${DESKTOP_TAURI_ROOT}/web/dist"
 
+TARGET_TRIPLE="${CTX_DESKTOP_TARGET_TRIPLE:-$(resolve_host_target_triple)}"
 mkdir -p "${DESKTOP_TAURI_ROOT}/bin"
 find "${DESKTOP_TAURI_ROOT}/bin" -mindepth 1 -maxdepth 1 ! -name ".gitkeep" -exec rm -rf {} +
 copy_executable "${REPO_ROOT}/bazel-bin/core/crates/ctx-http/ctx" "${DESKTOP_TAURI_ROOT}/bin/ctx-daemon"
+copy_executable "${REPO_ROOT}/bazel-bin/core/crates/ctx-http/ctx" "${DESKTOP_TAURI_ROOT}/bin/ctx-daemon-${TARGET_TRIPLE}"
 copy_executable "${REPO_ROOT}/bazel-bin/core/crates/ctx-mcp/ctx-mcp" "${DESKTOP_TAURI_ROOT}/bin/ctx-mcp"
+copy_executable "${REPO_ROOT}/bazel-bin/core/crates/ctx-mcp/ctx-mcp" "${DESKTOP_TAURI_ROOT}/bin/ctx-mcp-${TARGET_TRIPLE}"
 
 ctx_ci_pnpm -C "${CORE_ROOT}" desktop:build
