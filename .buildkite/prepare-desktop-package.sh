@@ -12,6 +12,8 @@ CORE_ROOT="${REPO_ROOT}/core"
 DESKTOP_TAURI_ROOT="${CORE_ROOT}/apps/desktop/src-tauri"
 EXPECTED_HOST_ARCH="${1:-${CTX_EXPECTED_HOST_ARCH:-}}"
 
+export PATH="${HOME}/.cargo/bin:${PATH}"
+
 require_command() {
   local command_name="$1"
   if ! command -v "${command_name}" >/dev/null 2>&1; then
