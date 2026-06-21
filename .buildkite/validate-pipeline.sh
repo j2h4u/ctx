@@ -31,6 +31,17 @@ if [[ ! -x "${RUNNER}" ]]; then
   exit 1
 fi
 
+for executable in \
+  "${REPO_ROOT}/.buildkite/run-cli-linux.sh" \
+  "${REPO_ROOT}/.buildkite/run-desktop-package-linux.sh" \
+  "${REPO_ROOT}/.buildkite/run-desktop-package-macos.sh"
+do
+  if [[ ! -x "${executable}" ]]; then
+    echo "error: ${executable#${REPO_ROOT}/} must be executable" >&2
+    exit 1
+  fi
+done
+
 if command -v buildkite-agent >/dev/null 2>&1; then
   BUILDKITE_AGENT_ACCESS_TOKEN="${BUILDKITE_AGENT_ACCESS_TOKEN:-local-buildkite-dry-run-token}" \
     buildkite-agent pipeline upload \
@@ -58,6 +69,10 @@ required_snippets=(
   ".buildkite/run-bazel.sh build --nobuild //:presubmit //:all-rust //:all-web //:e2e-premerge //:release //:release-artifacts"
   ".buildkite/run-bazel.sh test //:all-rust"
   ".buildkite/run-bazel.sh test //:all-web"
+  ".buildkite/run-cli-linux.sh"
+  "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .buildkite/run-cli-windows.ps1"
+  ".buildkite/run-desktop-package-linux.sh"
+  ".buildkite/run-desktop-package-macos.sh"
   ".buildkite/run-bazel.sh test //:e2e-premerge"
   ".buildkite/run-bazel.sh test //:release"
   ".buildkite/run-bazel.sh build //:release-artifacts"
@@ -65,9 +80,19 @@ required_snippets=(
   "key: \"build-graph-analysis\""
   "key: \"rust-all\""
   "key: \"web-all\""
+  "key: \"cli-linux-x64\""
+  "key: \"cli-windows-x64\""
+  "key: \"desktop-linux-x64\""
+  "key: \"desktop-macos-arm64\""
+  "key: \"desktop-macos-x64\""
   "key: \"browser-premerge-e2e\""
   "key: \"release-proof\""
   "key: \"release-artifacts\""
+  "queue: \"main-linux\""
+  "queue: \"windows-x64\""
+  "queue: \"release-linux-managed\""
+  "queue: \"ctx-mac-gui-shared-arm64\""
+  "queue: \"ctx-mac-gui-shared-x64\""
 )
 
 for snippet in "${required_snippets[@]}"; do

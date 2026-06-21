@@ -8,6 +8,8 @@ steps:
     command:
       - ".buildkite/validate-pipeline.sh"
       - ".buildkite/run-bazel.sh test //:buildkite_config_test //:schemas"
+    agents:
+      queue: "main-linux"
     artifact_paths:
       - "bazel-testlogs/**/*"
     timeout_in_minutes: 20
@@ -17,6 +19,8 @@ steps:
     depends_on: "source-contracts"
     command:
       - ".buildkite/run-bazel.sh build --nobuild //:presubmit //:all-rust //:all-web //:e2e-premerge //:release //:release-artifacts"
+    agents:
+      queue: "main-linux"
     artifact_paths:
       - "bazel-testlogs/**/*"
     timeout_in_minutes: 30
@@ -26,6 +30,8 @@ steps:
   - label: "rust: all-rust"
     key: "rust-all"
     command: ".buildkite/run-bazel.sh test //:all-rust"
+    agents:
+      queue: "main-linux"
     artifact_paths:
       - "bazel-testlogs/**/*"
     timeout_in_minutes: 120
@@ -33,15 +39,66 @@ steps:
   - label: "web: all-web"
     key: "web-all"
     command: ".buildkite/run-bazel.sh test //:all-web"
+    agents:
+      queue: "main-linux"
     artifact_paths:
       - "bazel-testlogs/**/*"
     timeout_in_minutes: 90
+
+  - label: "cli: linux x64"
+    key: "cli-linux-x64"
+    command: ".buildkite/run-cli-linux.sh"
+    agents:
+      queue: "main-linux"
+    artifact_paths:
+      - "core/target/debug/ctx"
+    timeout_in_minutes: 90
+
+  - label: "cli: windows x64"
+    key: "cli-windows-x64"
+    command: "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .buildkite/run-cli-windows.ps1"
+    agents:
+      queue: "windows-x64"
+    artifact_paths:
+      - "core/target/debug/ctx.exe"
+    timeout_in_minutes: 120
+
+  - wait: ~
+
+  - label: "desktop: package linux x64"
+    key: "desktop-linux-x64"
+    command: ".buildkite/run-desktop-package-linux.sh"
+    agents:
+      queue: "release-linux-managed"
+    artifact_paths:
+      - "core/apps/desktop/src-tauri/target/release/bundle/**/*"
+    timeout_in_minutes: 150
+
+  - label: "desktop: package macos arm64"
+    key: "desktop-macos-arm64"
+    command: ".buildkite/run-desktop-package-macos.sh"
+    agents:
+      queue: "ctx-mac-gui-shared-arm64"
+    artifact_paths:
+      - "core/apps/desktop/src-tauri/target/release/bundle/**/*"
+    timeout_in_minutes: 180
+
+  - label: "desktop: package macos x64"
+    key: "desktop-macos-x64"
+    command: ".buildkite/run-desktop-package-macos.sh"
+    agents:
+      queue: "ctx-mac-gui-shared-x64"
+    artifact_paths:
+      - "core/apps/desktop/src-tauri/target/release/bundle/**/*"
+    timeout_in_minutes: 180
 
   - wait: ~
 
   - label: "browser: premerge e2e"
     key: "browser-premerge-e2e"
     command: ".buildkite/run-bazel.sh test //:e2e-premerge"
+    agents:
+      queue: "main-linux"
     artifact_paths:
       - "bazel-testlogs/**/*"
     timeout_in_minutes: 90
@@ -51,6 +108,8 @@ steps:
   - label: "release: proof"
     key: "release-proof"
     command: ".buildkite/run-bazel.sh test //:release"
+    agents:
+      queue: "main-linux"
     artifact_paths:
       - "bazel-testlogs/**/*"
     timeout_in_minutes: 150
@@ -59,6 +118,8 @@ steps:
     key: "release-artifacts"
     depends_on: "release-proof"
     command: ".buildkite/run-bazel.sh build //:release-artifacts"
+    agents:
+      queue: "release-linux-managed"
     artifact_paths:
       - "bazel-bin/core/apps/web/dist/**/*"
       - "bazel-bin/core/crates/ctx-http/ctx"
