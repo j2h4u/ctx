@@ -10,6 +10,7 @@ steps:
       - ".buildkite/run-bazel.sh test //:buildkite_config_test //:schemas"
     agents:
       queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-control"
     artifact_paths:
       - "bazel-testlogs/**/*"
     timeout_in_minutes: 20
@@ -21,6 +22,7 @@ steps:
       - ".buildkite/run-bazel.sh build --nobuild //:presubmit //:all-rust //:all-web //:e2e-premerge //:release //:release-artifacts"
     agents:
       queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-control"
     artifact_paths:
       - "bazel-testlogs/**/*"
     timeout_in_minutes: 30
@@ -32,6 +34,7 @@ steps:
     command: ".buildkite/run-bazel.sh test //:all-rust"
     agents:
       queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-proof"
     artifact_paths:
       - "bazel-testlogs/**/*"
     timeout_in_minutes: 120
@@ -41,6 +44,7 @@ steps:
     command: ".buildkite/run-bazel.sh test //:all-web"
     agents:
       queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
     artifact_paths:
       - "bazel-testlogs/**/*"
     timeout_in_minutes: 90
@@ -50,6 +54,7 @@ steps:
     command: ".buildkite/run-cli-linux.sh"
     agents:
       queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-proof"
     artifact_paths:
       - "core/target/debug/ctx"
     timeout_in_minutes: 90
@@ -70,6 +75,7 @@ steps:
     command: ".buildkite/run-desktop-package-linux.sh"
     agents:
       queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
     artifact_paths:
       - "core/apps/desktop/src-tauri/target/release/bundle/**/*"
     timeout_in_minutes: 150
@@ -99,6 +105,7 @@ steps:
     command: ".buildkite/run-bazel.sh test //:e2e-premerge"
     agents:
       queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-proof"
     artifact_paths:
       - "bazel-testlogs/**/*"
     timeout_in_minutes: 90
@@ -110,6 +117,7 @@ steps:
     command: ".buildkite/run-bazel.sh test //:release"
     agents:
       queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-proof"
     artifact_paths:
       - "bazel-testlogs/**/*"
     timeout_in_minutes: 150
@@ -120,6 +128,7 @@ steps:
     command: ".buildkite/run-bazel.sh build //:release-artifacts"
     agents:
       queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
     artifact_paths:
       - "bazel-bin/core/apps/web/dist/**/*"
       - "bazel-bin/core/crates/ctx-http/ctx"
