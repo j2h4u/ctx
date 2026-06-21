@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::net::IpAddr;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -211,9 +210,14 @@ async fn ensure_egress_proxy_binary(data_root: &Path) -> Result<PathBuf> {
     if src != dest {
         fs::copy(&src, &dest).await?;
     }
-    let mut perms = fs::metadata(&dest).await?.permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&dest, perms).await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut perms = fs::metadata(&dest).await?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&dest, perms).await?;
+    }
     Ok(dest)
 }
 

@@ -40,5 +40,21 @@ if [[ ! -x "${BAZELISK_BIN}" ]]; then
   exit 127
 fi
 
-section "Run Bazel: $*"
-exec "${BAZELISK_BIN}" "$@"
+has_jobs_arg() {
+  local arg
+  for arg in "$@"; do
+    if [[ "${arg}" == "--jobs" || "${arg}" == --jobs=* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+bazel_args=("$@")
+if [[ -n "${BUILDKITE:-}" && "$#" -gt 0 && ( "$1" == "test" || "$1" == "build" ) ]] \
+  && ! has_jobs_arg "$@"; then
+  bazel_args=("$1" "--jobs=${CTX_BAZEL_JOBS:-4}" "${@:2}")
+fi
+
+section "Run Bazel: ${bazel_args[*]}"
+exec "${BAZELISK_BIN}" "${bazel_args[@]}"

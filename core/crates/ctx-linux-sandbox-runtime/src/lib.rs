@@ -1,5 +1,4 @@
 use std::io::ErrorKind;
-use std::os::unix::fs::PermissionsExt;
 mod prepare;
 #[cfg(test)]
 mod tests;
@@ -240,14 +239,19 @@ async fn ensure_linux_sandbox_bootstrap_script(paths: &LinuxSandboxBootstrapPath
         fs::write(&paths.activation_script_path, BOOTSTRAP_SCRIPT)
             .await
             .with_context(|| format!("writing {}", paths.activation_script_path.display()))?;
-        let mut perms = fs::metadata(&paths.activation_script_path)
-            .await
-            .with_context(|| format!("stat {}", paths.activation_script_path.display()))?
-            .permissions();
-        perms.set_mode(0o700);
-        fs::set_permissions(&paths.activation_script_path, perms)
-            .await
-            .with_context(|| format!("chmod {}", paths.activation_script_path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut perms = fs::metadata(&paths.activation_script_path)
+                .await
+                .with_context(|| format!("stat {}", paths.activation_script_path.display()))?
+                .permissions();
+            perms.set_mode(0o700);
+            fs::set_permissions(&paths.activation_script_path, perms)
+                .await
+                .with_context(|| format!("chmod {}", paths.activation_script_path.display()))?;
+        }
     }
     Ok(())
 }
@@ -449,6 +453,9 @@ pub async fn stage_linux_sandbox_runtime_downloads(
 ) -> Result<LinuxSandboxRuntimeStatus> {
     let platform = linux_sandbox_platform();
     let paths = linux_sandbox_bootstrap_paths(data_root);
+    if matches!(platform, LinuxSandboxPlatform::NotLinux) {
+        return status_via_bootstrap(data_root, &paths, &platform).await;
+    }
     observe_phase(
         observer,
         HarnessSetupPhase::ArtifactDownload,

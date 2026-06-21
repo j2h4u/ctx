@@ -9,9 +9,9 @@ use anyhow::{Context, Result};
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
 
 use super::platform::harden_private_open_file_sync;
-use super::{
-    chain, ensure_private_dir_sync, harden_private_file_sync, private_parent, PRIVATE_FILE_MODE,
-};
+#[cfg(unix)]
+use super::PRIVATE_FILE_MODE;
+use super::{chain, ensure_private_dir_sync, harden_private_file_sync, private_parent};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 

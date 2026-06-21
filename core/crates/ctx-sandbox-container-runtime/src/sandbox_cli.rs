@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -95,8 +94,13 @@ fn native_sandbox_cli_env_for_data_root(data_root: &Path) -> Result<HashMap<Stri
         .with_context(|| format!("create dir {}", sandbox_home.display()))?;
     std::fs::create_dir_all(&sandbox_tmp_root)
         .with_context(|| format!("create dir {}", sandbox_tmp_root.display()))?;
-    let _ = std::fs::set_permissions(&xdg_run, std::fs::Permissions::from_mode(0o700));
-    let _ = std::fs::set_permissions(&sandbox_home, std::fs::Permissions::from_mode(0o700));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _ = std::fs::set_permissions(&xdg_run, std::fs::Permissions::from_mode(0o700));
+        let _ = std::fs::set_permissions(&sandbox_home, std::fs::Permissions::from_mode(0o700));
+    }
 
     let mut env = HashMap::new();
     env.insert(

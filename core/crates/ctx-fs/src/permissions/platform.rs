@@ -1,7 +1,9 @@
 use std::fs::{self, File};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::Result;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 #[cfg(windows)]
@@ -14,6 +16,7 @@ use windows_sys::Win32::{
     },
 };
 
+#[cfg(unix)]
 use super::{PRIVATE_DIR_MODE, PRIVATE_FILE_MODE};
 
 #[cfg(windows)]
@@ -52,6 +55,10 @@ pub(super) fn harden_private_open_file_sync(file: &File, path: &Path) -> Result<
 
         file.set_permissions(fs::Permissions::from_mode(PRIVATE_FILE_MODE))
             .with_context(|| format!("chmod 0600 open file {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
     }
     #[cfg(windows)]
     apply_windows_private_acl(path)?;
@@ -125,7 +132,7 @@ fn apply_windows_private_acl(path: &Path) -> Result<()> {
         )
     };
     unsafe {
-        let _ = LocalFree(security_descriptor as isize);
+        let _ = LocalFree(security_descriptor);
     }
     if result == 0 {
         anyhow::bail!("failed to apply Windows private ACL to {}", path.display());
