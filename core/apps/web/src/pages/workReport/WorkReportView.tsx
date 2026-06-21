@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { KeyboardEvent } from "react";
 import type {
   JsonValue,
   WorkspaceWorkEvidence,
@@ -499,6 +500,29 @@ export function WorkInspectorView({
   const [selectedTab, setSelectedTab] = useState<WorkInspectorTab>("overview");
   const title = report.work.title || "Untitled Work";
   const selected = useMemo(() => tabs.find((tab) => tab.id === selectedTab) ?? tabs[0], [selectedTab]);
+  const moveTabFocus = (nextIndex: number) => {
+    const boundedIndex = (nextIndex + tabs.length) % tabs.length;
+    const nextTab = tabs[boundedIndex];
+    setSelectedTab(nextTab.id);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`work-report-tab-${nextTab.id}`)?.focus();
+    });
+  };
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      event.preventDefault();
+      moveTabFocus(index + 1);
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      event.preventDefault();
+      moveTabFocus(index - 1);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      moveTabFocus(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      moveTabFocus(tabs.length - 1);
+    }
+  };
   return (
     <main className="work-report-page">
       <header className="work-report-header">
@@ -520,14 +544,16 @@ export function WorkInspectorView({
       </header>
 
       <nav className="work-report-tabs" role="tablist" aria-label="Work Inspector sections">
-        {tabs.map((tab) => (
+        {tabs.map((tab, index) => (
           <button
             aria-controls={`work-report-panel-${tab.id}`}
             aria-selected={selected.id === tab.id}
             id={`work-report-tab-${tab.id}`}
             key={tab.id}
             role="tab"
+            tabIndex={selected.id === tab.id ? 0 : -1}
             type="button"
+            onKeyDown={(event) => handleTabKeyDown(event, index)}
             onClick={() => setSelectedTab(tab.id)}
           >
             {tab.label}

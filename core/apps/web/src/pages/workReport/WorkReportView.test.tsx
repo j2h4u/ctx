@@ -266,6 +266,22 @@ describe("WorkInspectorView", () => {
     expect(screen.getAllByText("worktree").length).toBeGreaterThan(0);
   });
 
+  it("supports arrow-key tab navigation", () => {
+    render(<WorkInspectorView report={baseReport()} />);
+
+    const overview = screen.getByRole("tab", { name: "Overview" });
+    overview.focus();
+    fireEvent.keyDown(overview, { key: "ArrowRight" });
+
+    expect(screen.getByRole("tab", { name: "Transcript" })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Transcript" }), { key: "End" });
+    expect(screen.getByRole("tab", { name: "Raw redacted JSON" })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Raw redacted JSON" }), { key: "Home" });
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  });
+
   it("renders unsafe URLs as text in tab content", () => {
     render(<WorkInspectorView report={baseReport()} />);
 
