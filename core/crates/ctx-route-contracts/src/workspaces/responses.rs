@@ -238,6 +238,104 @@ pub struct WorkspaceWorkEvidenceRouteResponse {
     pub evidence: Vec<WorkspaceWorkEvidenceRouteItem>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+pub struct WorkspaceWorkEvidenceCreateRouteRequest {
+    #[serde(default)]
+    pub kind: WorkEvidenceKind,
+    #[serde(default)]
+    pub status: WorkEvidenceStatus,
+    #[serde(default)]
+    pub freshness: WorkEvidenceFreshness,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub argv: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_ref: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_ref: Option<Value>,
+    #[serde(default)]
+    pub source: RecordSource,
+    #[serde(default)]
+    pub fidelity: RecordFidelity,
+    #[serde(default)]
+    pub trust: RecordTrust,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceWorkEvidenceCreateRouteResponse {
+    pub work_id: WorkRecordId,
+    pub evidence: WorkspaceWorkEvidenceRouteItem,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+pub struct WorkspaceWorkSummaryClaimCreateRouteRequest {
+    pub claim_text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_kind: Option<String>,
+    #[serde(default)]
+    pub source_kind: Option<String>,
+    #[serde(default)]
+    pub source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_hash: Option<String>,
+    #[serde(default)]
+    pub freshness: WorkSummaryFreshness,
+    #[serde(default)]
+    pub redaction_class: WorkRedactionClass,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+pub struct WorkspaceWorkSummaryCreateRouteRequest {
+    #[serde(default)]
+    pub kind: WorkSummaryKind,
+    #[serde(default)]
+    pub audience: WorkSummaryAudience,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_json: Option<Value>,
+    #[serde(default)]
+    pub generation_method: WorkSummaryGenerationMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+    #[serde(default)]
+    pub source_material_left_machine: bool,
+    #[serde(default)]
+    pub freshness: WorkSummaryFreshness,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_revision_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<WorkspaceWorkSummaryClaimCreateRouteRequest>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceWorkSummaryCreateRouteResponse {
+    pub work_id: WorkRecordId,
+    pub summary: WorkspaceWorkSummaryRouteItem,
+    pub claims: Vec<WorkspaceWorkSummaryClaimRouteItem>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspaceWorkTrustRouteSummary {
     pub verdict: WorkTrustVerdict,

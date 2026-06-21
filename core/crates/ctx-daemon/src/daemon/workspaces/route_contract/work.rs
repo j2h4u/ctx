@@ -1,19 +1,27 @@
-use ctx_core::ids::{ChangeSetId, ContributionId, WorkRecordId};
+use ctx_core::ids::{
+    ChangeSetId, ContributionId, WorkEventId, WorkEvidenceId, WorkRecordId, WorkSearchDocId,
+    WorkSummaryClaimId, WorkSummaryId,
+};
 use ctx_core::models::{
-    ChangeSet, Contribution, WorkEvent, WorkEvidence, WorkEvidenceFreshness, WorkEvidenceStatus,
-    WorkRecord, WorkRecordLink, WorkSummary, WorkSummaryClaim, WorkSummaryFreshness,
-    WorkTrustVerdict,
+    ChangeSet, Contribution, RecordFidelity, RecordSource, RecordTrust, WorkActorKind, WorkEvent,
+    WorkEventType, WorkEvidence, WorkEvidenceFreshness, WorkEvidenceStatus, WorkRecord,
+    WorkRecordLink, WorkRedactionClass, WorkSearchDoc, WorkSummary, WorkSummaryClaim,
+    WorkSummaryFreshness, WorkSummaryGenerationMethod, WorkTrustVerdict,
+    WORK_OBSERVABILITY_SCHEMA_VERSION,
 };
 use ctx_route_contracts::workspaces::{
     WorkspaceRouteParams, WorkspaceWorkChangeSummaryRouteResponse, WorkspaceWorkContextRouteQuery,
     WorkspaceWorkContextRouteResponse, WorkspaceWorkDetailRouteResponse,
     WorkspaceWorkDuplicateStrongLinkRouteItem, WorkspaceWorkEventRouteItem,
+    WorkspaceWorkEvidenceCreateRouteRequest, WorkspaceWorkEvidenceCreateRouteResponse,
     WorkspaceWorkEvidenceRouteItem, WorkspaceWorkEvidenceRouteResponse,
     WorkspaceWorkEvidenceSummaryRouteResponse, WorkspaceWorkLinkRouteItem,
     WorkspaceWorkListRouteQuery, WorkspaceWorkListRouteResponse, WorkspaceWorkRecordRouteItem,
-    WorkspaceWorkReportRouteResponse, WorkspaceWorkSummaryClaimRouteItem,
-    WorkspaceWorkSummaryRouteItem, WorkspaceWorkTimelineRouteQuery,
-    WorkspaceWorkTimelineRouteResponse, WorkspaceWorkTrustRouteSummary,
+    WorkspaceWorkReportRouteResponse, WorkspaceWorkSummaryClaimCreateRouteRequest,
+    WorkspaceWorkSummaryClaimRouteItem, WorkspaceWorkSummaryCreateRouteRequest,
+    WorkspaceWorkSummaryCreateRouteResponse, WorkspaceWorkSummaryRouteItem,
+    WorkspaceWorkTimelineRouteQuery, WorkspaceWorkTimelineRouteResponse,
+    WorkspaceWorkTrustRouteSummary,
 };
 use serde_json::{json, Map, Value};
 use sha2::Digest;
@@ -225,6 +233,193 @@ impl WorkspaceWorkHandle {
             .collect();
         Ok(WorkspaceWorkEvidenceRouteResponse { work_id, evidence })
     }
+
+    pub async fn create_workspace_work_evidence_for_route(
+        &self,
+        params: WorkspaceRouteParams,
+        work_id: String,
+        request: WorkspaceWorkEvidenceCreateRouteRequest,
+    ) -> Result<WorkspaceWorkEvidenceCreateRouteResponse, WorkspaceRouteError> {
+        let workspace_id = params.parse_workspace_id()?;
+        let store = self
+            .existing_workspace_store(workspace_id)
+            .await
+            .map_err(workspace_store_route_error)?;
+        let work_id = WorkRecordId::from_id(work_id);
+        load_work_record(&store, workspace_id, work_id.clone()).await?;
+
+        let now = chrono::Utc::now();
+        let started_at = request.started_at.unwrap_or(now);
+        let finished_at = request.finished_at.unwrap_or(started_at);
+        let source = route_record_source_or(request.source, RecordSource::Manual);
+        let fidelity = route_record_fidelity_or(request.fidelity, RecordFidelity::Declared);
+        let trust = route_record_trust_or(request.trust, RecordTrust::Medium);
+        let evidence = WorkEvidence {
+            evidence_id: WorkEvidenceId::new(),
+            work_id: work_id.clone(),
+            workspace_id,
+            kind: request.kind,
+            status: request.status,
+            freshness: request.freshness,
+            claim: bounded_optional_text(request.claim, 1_200),
+            command: bounded_optional_text(request.command, 2_000),
+            argv: request
+                .argv
+                .into_iter()
+                .take(128)
+                .map(|arg| bounded_redacted_text(&arg, 600))
+                .collect(),
+            cwd: bounded_optional_text(request.cwd, 1_000),
+            exit_code: request.exit_code,
+            repo_root: bounded_optional_text(request.repo_root, 1_000),
+            head_sha: request.head_sha,
+            branch: bounded_optional_text(request.branch, 500),
+            fingerprint: None,
+            current_fingerprint: None,
+            output_ref: request.output_ref.as_ref().map(redact_route_value),
+            artifact_ref: request.artifact_ref.as_ref().map(redact_route_value),
+            source,
+            fidelity,
+            trust,
+            started_at,
+            finished_at,
+            created_at: now,
+            updated_at: now,
+            schema_version: WORK_OBSERVABILITY_SCHEMA_VERSION,
+        };
+
+        let evidence = store
+            .upsert_work_evidence(&evidence)
+            .await
+            .map_err(WorkspaceRouteError::internal)?;
+        append_route_work_event(
+            &store,
+            workspace_id,
+            &work_id,
+            WorkEventType::EvidenceObserved,
+            WorkActorKind::System,
+            "evidence",
+            &evidence.evidence_id.0,
+            evidence.claim.as_deref().unwrap_or("Evidence observed"),
+            evidence.source,
+            evidence.fidelity,
+            evidence.trust,
+        )
+        .await?;
+        index_route_work_evidence(&store, &evidence).await?;
+        refresh_route_work_trust(&store, workspace_id, &work_id).await?;
+
+        Ok(WorkspaceWorkEvidenceCreateRouteResponse {
+            work_id,
+            evidence: route_work_evidence(&evidence),
+        })
+    }
+
+    pub async fn create_workspace_work_summary_for_route(
+        &self,
+        params: WorkspaceRouteParams,
+        work_id: String,
+        request: WorkspaceWorkSummaryCreateRouteRequest,
+    ) -> Result<WorkspaceWorkSummaryCreateRouteResponse, WorkspaceRouteError> {
+        validate_summary_create_request(&request)?;
+        let workspace_id = params.parse_workspace_id()?;
+        let store = self
+            .existing_workspace_store(workspace_id)
+            .await
+            .map_err(workspace_store_route_error)?;
+        let work_id = WorkRecordId::from_id(work_id);
+        let raw = load_work_detail(&store, workspace_id, work_id.clone()).await?;
+        let material_key = material_revision_key(
+            &raw.work,
+            &raw.links,
+            &raw.events,
+            &raw.evidence,
+            &raw.change_sets,
+            &raw.contributions,
+        );
+        let trust = trust_summary(&raw.work, &raw.evidence);
+        let text = request
+            .text
+            .map(|text| bounded_redacted_text(&text, REPORT_TEXT_LIMIT));
+        let text = text.unwrap_or_else(|| deterministic_route_summary_text(&raw.work, &trust));
+        let now = chrono::Utc::now();
+        let summary = WorkSummary {
+            summary_id: WorkSummaryId::new(),
+            work_id: work_id.clone(),
+            workspace_id,
+            kind: request.kind,
+            audience: request.audience,
+            text,
+            structured_json: request.structured_json.as_ref().map(redact_route_value),
+            generation_method: request.generation_method,
+            provider: None,
+            model: None,
+            template: request
+                .template
+                .map(|value| bounded_redacted_text(&value, 200)),
+            source_material_left_machine: false,
+            freshness: route_summary_freshness_or(request.freshness, WorkSummaryFreshness::Fresh),
+            source_revision_key: Some(request.source_revision_key.unwrap_or(material_key.clone())),
+            generated_at: now,
+            created_at: now,
+            updated_at: now,
+            schema_version: WORK_OBSERVABILITY_SCHEMA_VERSION,
+        };
+        let summary = store
+            .upsert_work_summary(&summary)
+            .await
+            .map_err(WorkspaceRouteError::internal)?;
+
+        let mut claim_requests = request.claims;
+        if claim_requests.is_empty() {
+            claim_requests.push(default_summary_claim_request(
+                &summary,
+                &work_id,
+                &material_key,
+            ));
+        }
+        let mut claims = Vec::with_capacity(claim_requests.len().min(64));
+        for claim_request in claim_requests.into_iter().take(64) {
+            let claim = route_summary_claim_from_request(
+                claim_request,
+                &summary,
+                workspace_id,
+                &work_id,
+                &material_key,
+            )?;
+            let claim = store
+                .upsert_work_summary_claim(&claim)
+                .await
+                .map_err(WorkspaceRouteError::internal)?;
+            claims.push(claim);
+        }
+
+        append_route_work_event(
+            &store,
+            workspace_id,
+            &work_id,
+            WorkEventType::SummaryGenerated,
+            WorkActorKind::System,
+            "summary",
+            &summary.summary_id.0,
+            "Work summary generated",
+            RecordSource::Manual,
+            RecordFidelity::Summary,
+            RecordTrust::Medium,
+        )
+        .await?;
+        index_route_work_summary(&store, &summary).await?;
+        refresh_route_summary_freshness(&store, workspace_id, &work_id, summary.freshness).await?;
+
+        Ok(WorkspaceWorkSummaryCreateRouteResponse {
+            work_id,
+            summary: route_work_summary(&summary, &material_key, REPORT_TEXT_LIMIT),
+            claims: claims
+                .iter()
+                .map(|claim| route_work_summary_claim(claim, &material_key))
+                .collect(),
+        })
+    }
 }
 
 struct RawWorkDetail {
@@ -237,6 +432,350 @@ struct RawWorkDetail {
     change_sets: Vec<ChangeSet>,
     contributions: Vec<Contribution>,
     duplicate_strong_links: Vec<ctx_store::WorkStrongLinkDuplicate>,
+}
+
+fn bounded_optional_text(value: Option<String>, limit: usize) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| bounded_redacted_text(text, limit))
+}
+
+fn route_record_source_or(value: RecordSource, fallback: RecordSource) -> RecordSource {
+    if value == RecordSource::Unknown {
+        fallback
+    } else {
+        value
+    }
+}
+
+fn route_record_fidelity_or(value: RecordFidelity, fallback: RecordFidelity) -> RecordFidelity {
+    if value == RecordFidelity::Unknown {
+        fallback
+    } else {
+        value
+    }
+}
+
+fn route_record_trust_or(value: RecordTrust, fallback: RecordTrust) -> RecordTrust {
+    if value == RecordTrust::Unknown {
+        fallback
+    } else {
+        value
+    }
+}
+
+fn route_summary_freshness_or(
+    value: WorkSummaryFreshness,
+    fallback: WorkSummaryFreshness,
+) -> WorkSummaryFreshness {
+    if value == WorkSummaryFreshness::Missing {
+        fallback
+    } else {
+        value
+    }
+}
+
+fn validate_summary_create_request(
+    request: &WorkspaceWorkSummaryCreateRouteRequest,
+) -> Result<(), WorkspaceRouteError> {
+    if request.generation_method == WorkSummaryGenerationMethod::ProviderLlm
+        || request.source_material_left_machine
+        || request.provider.is_some()
+        || request.model.is_some()
+    {
+        return Err(WorkspaceRouteError::bad_request(
+            "provider-backed summaries are out of scope for local Work routes",
+        ));
+    }
+    if let Some(text) = request.text.as_deref() {
+        if text.trim().is_empty() {
+            return Err(WorkspaceRouteError::bad_request(
+                "summary text cannot be empty",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn deterministic_route_summary_text(
+    work: &WorkRecord,
+    trust: &WorkspaceWorkTrustRouteSummary,
+) -> String {
+    let title = work.title.as_deref().unwrap_or("Untitled Work");
+    format!(
+        "{title}\n\nTrust verdict: {:?}. Next action: {}",
+        trust.verdict, trust.recommended_next_action
+    )
+}
+
+fn default_summary_claim_request(
+    summary: &WorkSummary,
+    work_id: &WorkRecordId,
+    material_key: &str,
+) -> WorkspaceWorkSummaryClaimCreateRouteRequest {
+    WorkspaceWorkSummaryClaimCreateRouteRequest {
+        claim_text: summary
+            .text
+            .lines()
+            .next()
+            .unwrap_or("Work summary generated")
+            .to_string(),
+        claim_kind: Some("summary".to_string()),
+        source_kind: Some("work_report".to_string()),
+        source_id: Some(work_id.0.clone()),
+        record_hash: Some(material_key.to_string()),
+        freshness: WorkSummaryFreshness::Fresh,
+        redaction_class: WorkRedactionClass::LocalRedacted,
+    }
+}
+
+fn route_summary_claim_from_request(
+    request: WorkspaceWorkSummaryClaimCreateRouteRequest,
+    summary: &WorkSummary,
+    workspace_id: ctx_core::ids::WorkspaceId,
+    work_id: &WorkRecordId,
+    material_key: &str,
+) -> Result<WorkSummaryClaim, WorkspaceRouteError> {
+    let claim_text = request.claim_text.trim();
+    if claim_text.is_empty() {
+        return Err(WorkspaceRouteError::bad_request(
+            "summary claim text is required",
+        ));
+    }
+    Ok(WorkSummaryClaim {
+        claim_id: WorkSummaryClaimId::new(),
+        summary_id: summary.summary_id.clone(),
+        work_id: work_id.clone(),
+        workspace_id,
+        claim_text: bounded_redacted_text(claim_text, 2_000),
+        claim_kind: bounded_optional_text(request.claim_kind, 200),
+        source_kind: request
+            .source_kind
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| bounded_redacted_text(value, 200))
+            .unwrap_or_else(|| "work_report".to_string()),
+        source_id: request
+            .source_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| bounded_redacted_text(value, 500))
+            .unwrap_or_else(|| work_id.0.clone()),
+        record_hash: request
+            .record_hash
+            .or_else(|| Some(material_key.to_string())),
+        freshness: route_summary_freshness_or(request.freshness, WorkSummaryFreshness::Fresh),
+        redaction_class: request.redaction_class,
+        created_at: chrono::Utc::now(),
+        schema_version: WORK_OBSERVABILITY_SCHEMA_VERSION,
+    })
+}
+
+async fn append_route_work_event(
+    store: &ctx_store::Store,
+    workspace_id: ctx_core::ids::WorkspaceId,
+    work_id: &WorkRecordId,
+    event_type: WorkEventType,
+    actor_kind: WorkActorKind,
+    source_kind: &str,
+    source_id: &str,
+    redacted_text: &str,
+    source: RecordSource,
+    fidelity: RecordFidelity,
+    trust: RecordTrust,
+) -> Result<(), WorkspaceRouteError> {
+    let now = chrono::Utc::now();
+    let event = WorkEvent {
+        event_id: WorkEventId::new(),
+        work_id: work_id.clone(),
+        workspace_id,
+        sequence: 0,
+        source_kind: Some(source_kind.to_string()),
+        source_id: Some(source_id.to_string()),
+        event_type,
+        event_time: now,
+        actor_kind,
+        provider: None,
+        harness: None,
+        model: None,
+        redaction_class: WorkRedactionClass::LocalRedacted,
+        source,
+        fidelity,
+        trust,
+        payload_json: None,
+        redacted_text: Some(bounded_redacted_text(redacted_text, EVENT_TEXT_LIMIT)),
+        artifact_ref: None,
+        created_at: now,
+        schema_version: WORK_OBSERVABILITY_SCHEMA_VERSION,
+    };
+    store
+        .append_work_event(&event)
+        .await
+        .map_err(WorkspaceRouteError::internal)?;
+    Ok(())
+}
+
+async fn index_route_work_evidence(
+    store: &ctx_store::Store,
+    evidence: &WorkEvidence,
+) -> Result<(), WorkspaceRouteError> {
+    let now = chrono::Utc::now();
+    let doc = WorkSearchDoc {
+        doc_id: stable_route_search_doc_id("work_evidence", &evidence.evidence_id.0),
+        workspace_id: evidence.workspace_id,
+        work_id: evidence.work_id.clone(),
+        doc_type: "evidence".to_string(),
+        source_id: evidence.evidence_id.0.clone(),
+        source_kind: "evidence".to_string(),
+        event_time: evidence.finished_at,
+        repo_root: evidence
+            .repo_root
+            .as_deref()
+            .map(|root| bounded_redacted_text(root, 1_000)),
+        path: None,
+        branch: evidence
+            .branch
+            .as_deref()
+            .map(|branch| bounded_redacted_text(branch, 500)),
+        commit_sha: evidence.head_sha.clone(),
+        pr_owner: None,
+        pr_repo: None,
+        pr_number: None,
+        agent_provider: None,
+        freshness: evidence.freshness,
+        redaction_class: WorkRedactionClass::LocalRedacted,
+        title: evidence
+            .claim
+            .as_deref()
+            .map(|claim| bounded_redacted_text(claim, 1_000)),
+        search_text_redacted: bounded_redacted_text(
+            &[
+                evidence.claim.as_deref().unwrap_or(""),
+                evidence.command.as_deref().unwrap_or(""),
+                &evidence.argv.join(" "),
+            ]
+            .join("\n"),
+            16 * 1024,
+        ),
+        created_at: now,
+        updated_at: now,
+        schema_version: WORK_OBSERVABILITY_SCHEMA_VERSION,
+    };
+    store
+        .upsert_work_search_doc(&doc)
+        .await
+        .map_err(WorkspaceRouteError::internal)?;
+    Ok(())
+}
+
+async fn index_route_work_summary(
+    store: &ctx_store::Store,
+    summary: &WorkSummary,
+) -> Result<(), WorkspaceRouteError> {
+    let now = chrono::Utc::now();
+    let freshness = match summary.freshness {
+        WorkSummaryFreshness::Fresh | WorkSummaryFreshness::Locked => WorkEvidenceFreshness::Fresh,
+        WorkSummaryFreshness::Stale => WorkEvidenceFreshness::Stale,
+        WorkSummaryFreshness::Partial => WorkEvidenceFreshness::Partial,
+        WorkSummaryFreshness::Missing => WorkEvidenceFreshness::Unknown,
+    };
+    let doc = WorkSearchDoc {
+        doc_id: stable_route_search_doc_id("work_summary", &summary.summary_id.0),
+        workspace_id: summary.workspace_id,
+        work_id: summary.work_id.clone(),
+        doc_type: "summary".to_string(),
+        source_id: summary.summary_id.0.clone(),
+        source_kind: "summary".to_string(),
+        event_time: summary.generated_at,
+        repo_root: None,
+        path: None,
+        branch: None,
+        commit_sha: None,
+        pr_owner: None,
+        pr_repo: None,
+        pr_number: None,
+        agent_provider: summary.provider.clone(),
+        freshness,
+        redaction_class: WorkRedactionClass::LocalRedacted,
+        title: Some(format!("{:?}", summary.kind)),
+        search_text_redacted: bounded_redacted_text(&summary.text, 16 * 1024),
+        created_at: now,
+        updated_at: now,
+        schema_version: WORK_OBSERVABILITY_SCHEMA_VERSION,
+    };
+    store
+        .upsert_work_search_doc(&doc)
+        .await
+        .map_err(WorkspaceRouteError::internal)?;
+    Ok(())
+}
+
+fn stable_route_search_doc_id(kind: &str, source_id: &str) -> WorkSearchDocId {
+    let digest = sha2::Sha256::digest(format!("{kind}:{source_id}").as_bytes());
+    WorkSearchDocId::from_id(format!("wsd_{}", hex::encode(digest)))
+}
+
+async fn refresh_route_work_trust(
+    store: &ctx_store::Store,
+    workspace_id: ctx_core::ids::WorkspaceId,
+    work_id: &WorkRecordId,
+) -> Result<(), WorkspaceRouteError> {
+    let evidence = store
+        .list_work_evidence(workspace_id, work_id.clone())
+        .await
+        .map_err(WorkspaceRouteError::internal)?;
+    if let Some(mut work) = store
+        .get_workspace_work_record(workspace_id, work_id.clone())
+        .await
+        .map_err(WorkspaceRouteError::internal)?
+    {
+        work.trust_verdict = computed_trust_verdict(&work, &evidence);
+        work.updated_at = chrono::Utc::now();
+        store
+            .upsert_work_record(&work)
+            .await
+            .map_err(WorkspaceRouteError::internal)?;
+    }
+    Ok(())
+}
+
+async fn refresh_route_summary_freshness(
+    store: &ctx_store::Store,
+    workspace_id: ctx_core::ids::WorkspaceId,
+    work_id: &WorkRecordId,
+    fallback: WorkSummaryFreshness,
+) -> Result<(), WorkspaceRouteError> {
+    let raw = load_work_detail(store, workspace_id, work_id.clone()).await?;
+    let material_key = material_revision_key(
+        &raw.work,
+        &raw.links,
+        &raw.events,
+        &raw.evidence,
+        &raw.change_sets,
+        &raw.contributions,
+    );
+    let summary_freshness = if raw.summaries.is_empty() {
+        fallback
+    } else {
+        aggregate_summary_freshness(&raw.summaries, &material_key)
+    };
+    if let Some(mut work) = store
+        .get_workspace_work_record(workspace_id, work_id.clone())
+        .await
+        .map_err(WorkspaceRouteError::internal)?
+    {
+        work.summary_freshness = summary_freshness;
+        work.updated_at = chrono::Utc::now();
+        store
+            .upsert_work_record(&work)
+            .await
+            .map_err(WorkspaceRouteError::internal)?;
+    }
+    Ok(())
 }
 
 async fn build_report(
@@ -709,15 +1248,23 @@ fn material_revision_key(
     change_sets: &[ChangeSet],
     contributions: &[Contribution],
 ) -> String {
+    let material_events: Vec<&WorkEvent> = events
+        .iter()
+        .filter(|event| {
+            !matches!(
+                event.event_type,
+                WorkEventType::EvidenceObserved | WorkEventType::SummaryGenerated
+            )
+        })
+        .collect();
     let value = json!({
         "work": {
             "work_id": work.work_id,
-            "updated_at": work.updated_at,
             "lifecycle": work.lifecycle,
             "head_commit": work.head_commit,
         },
         "links": links,
-        "events": events,
+        "events": material_events,
         "evidence": evidence,
         "change_sets": change_sets,
         "contributions": contributions,
@@ -799,10 +1346,11 @@ fn bounded_redacted_text(value: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use chrono::{Duration, Utc};
     use ctx_core::ids::{WorkEventId, WorkRecordId, WorkspaceId};
     use ctx_core::models::{
-        RecordFidelity, RecordSource, RecordTrust, WorkActorKind, WorkEventType, WorkRedactionClass,
+        RecordFidelity, RecordSource, RecordTrust, WorkActorKind, WorkEventType, WorkLifecycle,
+        WorkRedactionClass,
     };
 
     #[test]
@@ -842,5 +1390,111 @@ mod tests {
         assert!(!serialized.contains("sk-test-raw-secret"));
         assert!(!serialized.contains("/home/daddy/private"));
         assert!(serialized.contains("safe redacted event"));
+    }
+
+    #[test]
+    fn summary_create_rejects_provider_backed_request() {
+        let request = WorkspaceWorkSummaryCreateRouteRequest {
+            source_material_left_machine: true,
+            generation_method: WorkSummaryGenerationMethod::ProviderLlm,
+            provider: Some("external".to_string()),
+            ..WorkspaceWorkSummaryCreateRouteRequest::default()
+        };
+
+        let error = validate_summary_create_request(&request).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            ctx_route_contracts::workspaces::WorkspaceRouteErrorKind::BadRequest
+        );
+    }
+
+    #[test]
+    fn material_revision_key_ignores_bookkeeping_timestamps_and_derived_events() {
+        let workspace_id = WorkspaceId::new();
+        let work_id = WorkRecordId::new();
+        let now = Utc::now();
+        let mut work = test_route_work_record(workspace_id, work_id.clone(), now);
+        let base = material_revision_key(&work, &[], &[], &[], &[], &[]);
+
+        work.updated_at = now + Duration::seconds(30);
+        assert_eq!(material_revision_key(&work, &[], &[], &[], &[], &[]), base);
+
+        let derived_event = test_route_event(
+            workspace_id,
+            work_id.clone(),
+            WorkEventType::SummaryGenerated,
+            now + Duration::seconds(60),
+        );
+        assert_eq!(
+            material_revision_key(&work, &[], &[derived_event], &[], &[], &[]),
+            base
+        );
+
+        let source_event = test_route_event(
+            workspace_id,
+            work_id,
+            WorkEventType::AssistantMessage,
+            now + Duration::seconds(90),
+        );
+        assert_ne!(
+            material_revision_key(&work, &[], &[source_event], &[], &[], &[]),
+            base
+        );
+    }
+
+    fn test_route_work_record(
+        workspace_id: WorkspaceId,
+        work_id: WorkRecordId,
+        now: chrono::DateTime<Utc>,
+    ) -> WorkRecord {
+        WorkRecord {
+            work_id,
+            workspace_id,
+            title: Some("Route Work".to_string()),
+            objective: None,
+            lifecycle: WorkLifecycle::Active,
+            primary_repo_root: None,
+            primary_branch: Some("main".to_string()),
+            base_commit: None,
+            head_commit: Some("abc123".to_string()),
+            current_diff_fingerprint: None,
+            trust_verdict: WorkTrustVerdict::UntrustedLocalCapture,
+            summary_freshness: WorkSummaryFreshness::Missing,
+            metadata_json: None,
+            created_at: now,
+            updated_at: now,
+            schema_version: WORK_OBSERVABILITY_SCHEMA_VERSION,
+        }
+    }
+
+    fn test_route_event(
+        workspace_id: WorkspaceId,
+        work_id: WorkRecordId,
+        event_type: WorkEventType,
+        now: chrono::DateTime<Utc>,
+    ) -> WorkEvent {
+        WorkEvent {
+            event_id: WorkEventId::new(),
+            work_id,
+            workspace_id,
+            sequence: 1,
+            source_kind: Some("test".to_string()),
+            source_id: Some("test-1".to_string()),
+            event_type,
+            event_time: now,
+            actor_kind: WorkActorKind::Agent,
+            provider: None,
+            harness: None,
+            model: None,
+            redaction_class: WorkRedactionClass::LocalRedacted,
+            source: RecordSource::Session,
+            fidelity: RecordFidelity::Summary,
+            trust: RecordTrust::Low,
+            payload_json: None,
+            redacted_text: Some("source event".to_string()),
+            artifact_ref: None,
+            created_at: now,
+            schema_version: WORK_OBSERVABILITY_SCHEMA_VERSION,
+        }
     }
 }

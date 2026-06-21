@@ -2522,15 +2522,23 @@ fn material_revision_key_value(
     change_sets: &[ChangeSet],
     contributions: &[Contribution],
 ) -> String {
+    let material_events: Vec<&WorkEvent> = events
+        .iter()
+        .filter(|event| {
+            !matches!(
+                event.event_type,
+                WorkEventType::EvidenceObserved | WorkEventType::SummaryGenerated
+            )
+        })
+        .collect();
     let value = json!({
         "work": {
             "work_id": work.work_id,
-            "updated_at": work.updated_at,
             "lifecycle": work.lifecycle,
             "head_commit": work.head_commit,
         },
         "links": links,
-        "events": events,
+        "events": material_events,
         "evidence": evidence,
         "change_sets": change_sets,
         "contributions": contributions,

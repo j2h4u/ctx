@@ -42,11 +42,15 @@ pub(super) fn workspace_base_routes() -> axum::Router<RouteState> {
         )
         .route(
             "/api/workspaces/:id/work/:work_id/evidence",
-            get(get_workspace_work_evidence),
+            get(get_workspace_work_evidence).post(create_workspace_work_evidence),
         )
         .route(
             "/api/workspaces/:id/work/:work_id/report",
             get(get_workspace_work_report),
+        )
+        .route(
+            "/api/workspaces/:id/work/:work_id/summaries",
+            post(create_workspace_work_summary),
         )
         .route(
             "/api/workspaces/:id/work/:work_id/timeline",
