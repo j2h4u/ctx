@@ -1,6 +1,6 @@
 # Buildkite Release Verification Status
 
-Updated: 2026-06-21T10:44:00Z
+Updated: 2026-06-21T10:50:00Z
 
 Branch: `ctx/agent-work-semantics-primary`
 
@@ -136,8 +136,10 @@ known I/O pressure under broad concurrent Rust builds.
 - CI helper read-only review found no blocker. Its supply-chain concern about
   unverified Node bootstrap downloads was addressed with pinned SHA256
   verification in `.buildkite/ci-toolchain.sh`.
-- Final SDLC/security and done-ness reviews are pending against this status
-  note and head.
+- Final SDLC/security review returned PASS against head
+  `5dabe7a2322464c50791fa44df3a19b445f5debb`.
+- Final done-ness review returned PASS against head
+  `5dabe7a2322464c50791fa44df3a19b445f5debb`.
 
 ## Guardrails Confirmed
 
