@@ -2,13 +2,22 @@
   <img src="assets/readme/work-record-banner.png" alt="ctx records agent work so it can be attached to PRs, searched later, and shared across teams." />
 </p>
 
-**Local Work Records for coding agents.**
+# ctx
 
-ctx is an explicit recorder for coding-agent work: prompts and notes you save with `ctx work record`, command evidence you run through `ctx work evidence run`, pull request URLs you attach with `ctx work link-pr`, and the local context you search, report, export, and import.
+ctx records agent work so it can be attached to PRs, searched later, and shared with teammates.
 
-Coding agents are useful, but the useful review trail is easy to lose unless you record it deliberately. ctx stores what you or your agent send to the `ctx work ...` CLI, so a task can be reviewed, resumed, shared, or audited from a local record.
+Agents are useful, but their work is easy to lose. A Codex or Claude session can hit compaction, subagents can do most of the implementation, tool output can disappear into terminal scrollback, and useful decisions can stay trapped in one developer's `~/.codex` or `~/.claude` directory.
 
-ctx is not trying to replace your agent. It works beside the agents and CLIs you already use, gives them a small durable place to write work history, and stores that history locally in SQLite first.
+ctx gives that work a durable local record. It captures prompts, transcripts, commands, tool calls, evidence, artifacts, commits, PR links, and summaries in a local database that humans and future agents can search.
+
+## Why Use ctx
+
+- **Attach agent history to PRs.** Link a pull request to the record that produced it: prompt, commands, evidence, artifacts, and decisions.
+- **Search previous attempts.** Future agents can find old context instead of starting from zero after compaction or a fresh session.
+- **Preserve subagent work.** Manager sessions, implementation subagents, review subagents, and imported provider transcripts stay connected.
+- **Use your existing agents.** ctx works beside Claude Code, Codex, Pi, Cursor, shell scripts, GitHub CLI, and local editors.
+- **Keep records local first.** Your local records live on your machine in SQLite and blob files. Nothing has to be pushed or synced by default.
+- **Handle multi-repo work.** A single record can touch multiple Git repos, commits, files, and PRs.
 
 ## Install
 
@@ -16,81 +25,525 @@ ctx is not trying to replace your agent. It works beside the agents and CLIs you
 curl -fsSL https://ctx.rs/install | sh
 ```
 
-Platform support: macOS and Linux today. Windows is planned.
-
-- Website: https://ctx.rs
-- Getting started: [docs/getting-started.md](docs/getting-started.md)
-- Work model: [docs/work-model.md](docs/work-model.md)
-- CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
-- Privacy and storage: [docs/privacy-storage.md](docs/privacy-storage.md)
-
-## What ctx captures
-
-- The original prompt, task brief, or follow-up note that shaped the work
-- Command evidence captured by running tools through `ctx work evidence run`
-- Exit codes, stdout, stderr, and duration for recorded evidence commands
-- Pull request links attached to the work record
-- Searchable notes, tags, workspace paths, and record kinds
-- Importable and exportable JSON archives for local handoff or backup
-- Context and reports that help a reviewer understand the saved record and evidence
-
-## Why Work Records
-
-- A code change needs context. The record keeps saved prompts, notes, command evidence, pull request links, and review context together.
-- Useful agent output should be written into a durable record instead of living only in one terminal session or provider UI.
-- Existing agents should keep working. ctx sits beside them instead of forcing a new harness.
-- Local-first storage matters. Your records, command evidence, pull request links, and task metadata start on your machine.
-- Review is easier when evidence is attached to the change instead of scattered through chat and shell history.
-
-## How it works
-
-ctx is CLI-first. Set up the local workspace, write a record, capture command evidence, and link the pull request that carries the change.
+Check the install:
 
 ```bash
-ctx workspace setup
-ctx work record \
-  --title "fix flaky checkout test" \
-  --body "Reproduced the retry failure and captured the verification command." \
-  --tag test --kind task --json
-ctx work evidence run --record <record-id> cargo test -p checkout
-ctx work link-pr <record-id> https://github.com/ctxrs/ctx/pull/123
-ctx work show <record-id>
-ctx work context checkout
+ctx doctor
 ```
 
-Under the hood, ctx keeps a local SQLite database. The database tracks records, command evidence, pull request links, tags, workspace paths, and reportable context.
+Set up local recording:
 
-## Works with existing agents
+```bash
+ctx setup
+```
 
-Use ctx with the tools already in your loop: Codex, Claude Code, Cursor, shell scripts, test runners, GitHub CLI, and local editors. ctx does not require one model, one provider, or one app.
+`ctx setup` creates local storage and configures optional capture integrations. It does not write files into your Git repo by default.
 
-The contract is simple: a Work Record is the durable layer around the work. Agents can change. The record remains inspectable.
+## Quick Start
 
-## Product shape
+Create a record for a task:
 
-ctx is intentionally:
+```bash
+ctx record "Fix checkout retry bug" \
+  --body "Investigating the flaky retry path in checkout." \
+  --tag checkout --tag test
+```
 
-- **Local-first:** SQLite on your machine before anything else.
-- **CLI-first:** useful from the terminal, scriptable, and friendly to existing workflows.
-- **Agent-neutral:** records work from the tools you choose rather than owning the agent loop.
-- **Evidence-oriented:** optimized for review, handoff, audit, and resumption.
-- **Small enough to trust:** the recorder should be understandable, portable, and hackable.
+Capture evidence:
 
-## Docs
+```bash
+ctx run --record <record-id> -- cargo test -p checkout
+```
 
-- [Getting started](docs/getting-started.md)
-- [Work model](docs/work-model.md)
-- [CLI reference](docs/cli-reference.md)
-- [Privacy and storage](docs/privacy-storage.md)
+Attach a pull request:
 
-## Build from source
+```bash
+ctx attach pr <record-id> https://github.com/acme/app/pull/123
+```
+
+Show the record:
+
+```bash
+ctx show <record-id>
+```
+
+Give future agents context:
+
+```bash
+ctx context "checkout retry"
+```
+
+Generate a review report:
+
+```bash
+ctx report <record-id> --format markdown
+```
+
+## The Core Model
+
+ctx is organized around **Work Records**.
+
+A Work Record is the durable history for one piece of agent-assisted work. It can include:
+
+- the original prompt or task brief;
+- user and agent messages;
+- primary agent and subagent sessions;
+- command evidence;
+- tool calls and tool output;
+- files touched;
+- commits and PR links;
+- screenshots and artifacts;
+- summaries, decisions, and review notes.
+
+The main objects are:
+
+| Object | Meaning |
+| --- | --- |
+| `Work Record` | The task or unit of work you want to preserve. |
+| `Session` | One agent conversation, including primary sessions and subagents. |
+| `Run` | One bounded execution: an agent turn, command, review pass, import, or evidence capture. |
+| `Event` | A normalized timeline item: message, tool call, command output, file change, etc. |
+| `Evidence` | A reviewable result such as a test run, lint command, screenshot, or CI link. |
+| `Artifact` | A large payload such as stdout, transcript, screenshot, report, or diff. |
+| `Repo` | A detected Git repository associated with a record/session/event. |
+| `PR` | A pull request attached to a record. |
+
+## CLI
+
+The main commands are:
+
+```bash
+ctx setup
+ctx status
+ctx doctor
+ctx record
+ctx run
+ctx attach
+ctx show
+ctx list
+ctx search
+ctx context
+ctx report
+ctx export
+ctx import
+ctx uninstall
+```
+
+### `ctx setup`
+
+Creates local ctx storage and configures optional capture integrations.
+
+```bash
+ctx setup
+ctx setup --with-hooks
+ctx setup --with-shims
+```
+
+By default, setup is local and conservative. Repo-level Git hooks are optional. The default policy is no repo files unless you ask for them.
+
+### `ctx status`
+
+Shows the current recorder state.
+
+```bash
+ctx status
+```
+
+Useful fields include:
+
+- data directory;
+- SQLite path;
+- detected workspace;
+- detected Git repos;
+- installed hooks/shims;
+- recent capture health.
+
+### `ctx doctor`
+
+Checks whether ctx can record successfully.
+
+```bash
+ctx doctor
+```
+
+It verifies storage, permissions, optional shims, optional hooks, Git detection, and provider capture configuration.
+
+### `ctx record`
+
+Creates a Work Record.
+
+```bash
+ctx record "Refactor auth refresh" \
+  --body "Move token refresh into a shared provider module." \
+  --tag auth --tag refactor
+```
+
+Agents can call this too. A useful agent instruction is:
+
+```text
+When you begin meaningful work, create or reuse a ctx record. Attach important commands, decisions, and PRs to that record.
+```
+
+### `ctx run`
+
+Runs a command and stores the output as evidence.
+
+```bash
+ctx run --record <record-id> -- npm test
+ctx run --record <record-id> -- cargo test -p ctx-cli
+ctx run --record <record-id> -- pnpm lint
+```
+
+ctx stores:
+
+- command;
+- cwd;
+- start/end time;
+- exit code;
+- stdout/stderr preview;
+- full output blob when large;
+- timeout/truncation status.
+
+### `ctx attach`
+
+Attaches external context to a record.
+
+```bash
+ctx attach pr <record-id> https://github.com/acme/app/pull/123
+ctx attach commit <record-id> abc123
+ctx attach artifact <record-id> screenshot.png
+ctx attach note <record-id> "The first attempt failed because the fixture was stale."
+```
+
+### `ctx show`
+
+Shows one record.
+
+```bash
+ctx show <record-id>
+ctx show <record-id> --json
+```
+
+### `ctx list`
+
+Lists recent records.
+
+```bash
+ctx list
+ctx list --repo acme/app
+ctx list --tag auth
+```
+
+### `ctx search`
+
+Searches records, messages, commands, evidence, and summaries.
+
+```bash
+ctx search "token refresh"
+ctx search "checkout retry" --repo app
+ctx search "race condition" --primary
+ctx search "race condition" --subagents
+```
+
+Search defaults should prefer high-signal material:
+
+1. explicit record titles and notes;
+2. user messages in primary sessions;
+3. manager summaries and decisions;
+4. review conclusions;
+5. subagent final summaries;
+6. subagent internal messages;
+7. raw tool output.
+
+### `ctx context`
+
+Prints agent-readable context for a future session.
+
+```bash
+ctx context "checkout retry"
+ctx context --repo app "auth refresh"
+ctx context --record <record-id>
+```
+
+This is one of the most important commands. It turns recorded history into compact context that a future agent can use.
+
+### `ctx report`
+
+Creates a human-readable report.
+
+```bash
+ctx report <record-id>
+ctx report <record-id> --format markdown
+ctx report <record-id> --format html
+ctx report <record-id> --format json
+```
+
+A report can include:
+
+- what changed;
+- why it changed;
+- linked PRs/commits;
+- commands/tests run;
+- stale or missing evidence;
+- artifacts and screenshots;
+- transcript links;
+- summaries and review notes.
+
+### `ctx export` and `ctx import`
+
+Moves records between machines or archives them.
+
+```bash
+ctx export --since 7d > ctx-records.json
+ctx import ctx-records.json
+```
+
+Use export/import when moving to a new machine, pulling records back from a remote devbox, or preserving work from an ephemeral agent job.
+
+### `ctx uninstall`
+
+Removes local ctx setup.
+
+```bash
+ctx uninstall
+ctx uninstall --data
+```
+
+`ctx uninstall` removes shims/hooks/configuration. `ctx uninstall --data` also removes local Work Record data after confirmation.
+
+## Capture Methods
+
+ctx collects work through several mechanisms.
+
+### Direct CLI Capture
+
+The most reliable path is explicit:
+
+```bash
+ctx record
+ctx run
+ctx attach
+```
+
+This works for humans, shell scripts, and agents.
+
+### Agent-Mediated Capture
+
+Agents can call ctx directly. This is flexible and works even when provider hooks are limited.
+
+Example instruction:
+
+```text
+Use ctx to preserve important work. Create a record for the task, attach important test commands with ctx run, attach the PR when created, and use ctx context before resuming old work.
+```
+
+### Provider Hooks
+
+Provider hooks capture agent events when available.
+
+Claude Code and Codex expose hook events for sessions, prompts, tools, subagents, and compaction-related lifecycle events. ctx records these events and imports provider transcript files when available.
+
+Capture fidelity depends on the provider. Every imported session/event is labeled with its source and fidelity:
+
+```text
+full
+partial
+imported
+inferred
+summary_only
+```
+
+### Subagent Capture
+
+Subagents are stored as normal sessions with parent-child relationships.
+
+```text
+primary session
+  -> implementation subagent
+  -> review subagent
+  -> research subagent
+```
+
+Roles are not hard-coded. A subagent may review, implement, investigate, or do all three. ctx stores provider labels and optional role hints, but the graph remains flexible.
+
+### `git` and `gh` Capture
+
+ctx can capture Git and GitHub CLI activity through optional shims or hooks.
+
+Useful captured facts include:
+
+- current repo;
+- branch;
+- commits;
+- changed files;
+- PR URL/number;
+- PR creation/update events;
+- command cwd;
+- command timestamp.
+
+The shims must always pass through to the real command. If ctx capture fails, `git` and `gh` should still work.
+
+### Provider Imports
+
+ctx can import existing provider history from local session stores, such as Codex and Claude transcript directories.
+
+Imported records are useful, but they are marked as imported rather than first-party captured.
+
+## Multi-Repo Work
+
+ctx uses one local machine-level database.
+
+```text
+~/.ctx/work-record/work.sqlite
+```
+
+A Work Record can touch many repos.
+
+Example:
+
+```text
+record: "ship hosted work report"
+  repo: ctx
+  repo: ctx-private
+  repo: control-plane
+  pr: ctxrs/ctx#123
+  pr: ctxrs/ctx-private#456
+```
+
+ctx associates sessions and events with repos by looking at:
+
+- session cwd;
+- Git root detection;
+- file paths;
+- `git` commands;
+- `gh` commands;
+- commits;
+- PR URLs;
+- explicit agent/user attachments.
+
+Associations include a reason and confidence level, so inferred links are not treated the same as explicit links.
+
+## Multi-Machine Work
+
+Local-first means each runtime can record locally.
+
+```text
+MacBook          ~/.ctx/work-record/work.sqlite
+remote devbox   ~/.ctx/work-record/work.sqlite
+cloud job       temporary ctx archive or sync upload
+```
+
+For local-only use, export/import is enough:
+
+```bash
+ctx export --since 7d > records.json
+scp devbox:records.json .
+ctx import records.json
+```
+
+For teams or cloud agents, hosted sync can collect records from many machines. That is a separate layer on top of the local recorder. Local recording does not require an account.
+
+## Storage
+
+ctx stores local data under your home directory:
+
+```text
+~/.ctx/work-record/
+  work.sqlite
+  blobs/
+  inbox/
+```
+
+### SQLite
+
+SQLite is the canonical local store. It tracks records, sessions, runs, events, evidence, repos, PRs, files, summaries, and search indexes.
+
+### Blobs
+
+Large payloads are stored outside SQLite by content hash:
+
+```text
+~/.ctx/work-record/blobs/<hash>
+```
+
+Examples:
+
+- long stdout/stderr;
+- full transcripts;
+- screenshots;
+- reports;
+- artifacts;
+- diffs.
+
+SQLite stores metadata, preview text, blob IDs, sizes, hashes, truncation status, and sensitivity labels.
+
+### JSONL Inbox
+
+Hooks and shims write append-only JSONL events first:
+
+```text
+~/.ctx/work-record/inbox/*.jsonl
+```
+
+The inbox is a capture buffer. ctx normalizes those events into SQLite.
+
+This keeps capture robust: a shim can write one JSON line and pass through to the real command without blocking user work.
+
+## Privacy
+
+ctx is local-first.
+
+- No account is required for local recording.
+- No data is uploaded by default.
+- Repo files are not modified by default.
+- Large outputs can be truncated or omitted.
+- Sensitive events can be excluded from sync/export.
+- Export and sync paths can exclude sensitive records, raw transcripts, and large blobs.
+
+Use:
+
+```bash
+ctx status
+ctx doctor
+ctx export
+ctx uninstall
+```
+
+to inspect and control local state.
+
+## For Future Agents
+
+The Work Record is useful because agents can read it.
+
+At the start of a task:
+
+```bash
+ctx context "billing retry bug"
+```
+
+Before reviewing a PR:
+
+```bash
+ctx report <record-id> --format markdown
+```
+
+When resuming old work:
+
+```bash
+ctx search "why did we avoid the cache rewrite"
+ctx show <record-id>
+```
+
+The goal is simple: the next agent should not start from zero.
+
+## Build From Source
 
 Prerequisites:
 
 - Rust stable
-- A normal local C/C++ build toolchain for your platform
+- a normal local C/C++ build toolchain for your platform
 
-Build and test the workspace:
+Build and test:
 
 ```bash
 cargo build --workspace
@@ -103,7 +556,7 @@ Run the repository check script:
 ./scripts/check.sh
 ```
 
-If Bazel is installed, you can run the Bazel test wrapper directly or through Bazel:
+If Bazel is installed:
 
 ```bash
 ./scripts/bazel-test.sh
