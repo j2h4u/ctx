@@ -1,6 +1,6 @@
 # Work Recorder Productization Reviewer Verdicts
 
-Updated: 2026-06-22T18:24:00-05:00
+Updated: 2026-06-22T18:52:32-05:00
 
 ## Read-Only Mapper Results
 
@@ -36,6 +36,21 @@ No milestone reviewer verdicts have passed yet.
   focused CLI tests plus full check.
 - Store foundation worker: complete. Added migration/schema/WAL/busy/FTS
   foundation; integrated into the manager branch and validated with full check.
+
+## Milestone Review Results
+
+- Architecture/data model reviewer on head `eb0d8f9`: FAIL.
+  - Blocking issues:
+    - generated Work Record/evidence IDs were UUIDv4 instead of UUIDv7;
+    - public JSON outputs were not consistently schema-versioned, and
+      `ctx context --json` did not emit the public `AgentContextPacket`;
+    - core data-root helpers did not expose `blobs/`, `inbox/`, and
+      `device.json`;
+    - evidence output remained inline in SQLite and evidence could be unattached.
+  - Resolution status:
+    - targeted fixes are implemented locally;
+    - focused/full/release dry-run checks passed;
+    - re-review is required after the fix commit.
 
 Required reviewer categories from the plan:
 

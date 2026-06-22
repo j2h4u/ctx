@@ -1,6 +1,6 @@
 # Work Recorder Productization Validation Log
 
-Updated: 2026-06-22T18:24:00-05:00
+Updated: 2026-06-22T18:52:32-05:00
 
 ## 2026-06-22 Baseline Public Branch Check
 
@@ -64,6 +64,9 @@ Updated: 2026-06-22T18:24:00-05:00
 
 - Root filesystem has available space; `/tmp` was comparatively full. Use
   `TMPDIR=/var/tmp/ctxwr` or another disk-backed temp root for cargo-heavy work.
+- Do not run broad Cargo checks from multiple agents concurrently on this host.
+  Use the repo's resource-capped scripts with low job counts and disk-backed
+  temp space.
 
 ## 2026-06-22 Root CLI And Store Foundation Checks
 
@@ -110,3 +113,45 @@ Future entries must include:
 - outcome;
 - failure mode if any;
 - whether the command was local, Buildkite, or staging.
+
+## 2026-06-22 Foundation Review Fix Checks
+
+- Command:
+  `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo test -p ctx -p work-record-core -p work-record-store -- --test-threads 1`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted changes on `eb0d8f9`
+- Outcome: PASS
+- Coverage:
+  - 11 CLI integration tests passed;
+  - 3 core unit tests passed;
+  - 9 store unit tests passed;
+  - core/store doc-tests passed.
+
+- Command:
+  `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 BAZEL_JOBS=2 ./scripts/check.sh all`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted changes on `eb0d8f9`
+- Outcome: PASS
+- Coverage:
+  - `cargo fmt --all -- --check`;
+  - `cargo check --workspace --all-targets --locked`;
+  - `cargo clippy --workspace --all-targets --locked -- -D warnings`;
+  - `cargo test --workspace --all-targets --locked -- --test-threads 1`;
+  - Bazel lane recorded `skipped` because neither `bazel` nor `bazelisk` is
+    installed.
+
+- Command:
+  `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 ./scripts/release-dry-run.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted changes on `eb0d8f9`
+- Outcome: PASS
+- Artifacts:
+  - `target/ctx-artifacts/release-dry-run/manifest.json`;
+  - `target/ctx-artifacts/release-dry-run/checksums.sha256`;
+  - `target/ctx-artifacts/release-dry-run/timings.json`.

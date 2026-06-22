@@ -1,6 +1,6 @@
 # Work Recorder Productization Decision Log
 
-Updated: 2026-06-22T17:39:00-05:00
+Updated: 2026-06-22T18:52:32-05:00
 
 ## Decisions
 
@@ -17,6 +17,15 @@ Updated: 2026-06-22T17:39:00-05:00
   hosted sync should follow the stabilized local JSON/schema contract.
 - Prefer a new Work Recorder hosted worker/service in `ctx-private` rather than
   overloading the existing control-plane worker.
+- Public Work Record and evidence IDs use UUIDv7 for sortable local/offline IDs.
+- Public CLI JSON responses use schema-versioned envelopes. `ctx context --json`
+  emits the public `AgentContextPacket` instead of the older internal context
+  shape.
+- Current evidence writes must be attached to a Work Record. When
+  `ctx evidence run` is invoked without `--record`, the CLI creates a command
+  evidence Work Record and attaches the evidence automatically.
+- Full command output is stored as content-addressed local-only artifacts under
+  `blobs/`; evidence rows keep bounded redacted previews and artifact pointers.
 
 ## Pending Decisions
 
@@ -26,3 +35,5 @@ Updated: 2026-06-22T17:39:00-05:00
 - Hosted staging environment choice and whether credentials allow deployment
   from this machine.
 - Buildkite runner/platform availability and any required queue/pool changes.
+- Whether legacy unattached evidence rows from pre-productization stores should
+  be migrated into synthetic Work Records or only tolerated as legacy read data.

@@ -528,7 +528,7 @@ impl WorkRecord {
     ) -> Self {
         let now = Utc::now();
         Self {
-            id: Uuid::new_v4(),
+            id: new_id(),
             title: title.into(),
             body: body.into(),
             tags,
@@ -564,7 +564,7 @@ impl Evidence {
         duration_ms: i64,
     ) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            id: new_id(),
             record_id,
             command: command.into(),
             exit_code,
@@ -1226,12 +1226,102 @@ pub struct AgentContextPacket {
     pub truncation: Option<ContextTruncation>,
 }
 
+impl AgentContextPacket {
+    pub fn from_work_context(context: &WorkContext, max_tokens: u32) -> Self {
+        let generated_at = Utc::now();
+        let mut estimated_tokens = 0_u32;
+        let results = context
+            .records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| {
+                let summary = if record.body.is_empty() {
+                    None
+                } else {
+                    Some(redact_preview(&record.body, 600))
+                };
+                estimated_tokens = estimated_tokens
+                    .saturating_add(estimate_tokens(&record.title))
+                    .saturating_add(summary.as_deref().map(estimate_tokens).unwrap_or(0));
+                let evidence = context
+                    .evidence
+                    .iter()
+                    .filter(|evidence| evidence.record_id == Some(record.id))
+                    .map(|evidence| ContextEvidence {
+                        id: evidence.id,
+                        kind: evidence_kind_from_command(&evidence.command),
+                        status: evidence_status_from_exit(evidence.exit_code),
+                        freshness: EvidenceFreshness::Unbound,
+                    })
+                    .collect();
+                let mut why_matched = Vec::new();
+                if context
+                    .query
+                    .as_deref()
+                    .is_some_and(|query| contains_case_insensitive(&record.title, query))
+                {
+                    why_matched.push("title".to_owned());
+                }
+                if context
+                    .query
+                    .as_deref()
+                    .is_some_and(|query| contains_case_insensitive(&record.body, query))
+                {
+                    why_matched.push("summary".to_owned());
+                }
+                if why_matched.is_empty() {
+                    why_matched.push("recent_work".to_owned());
+                }
+                ContextResult {
+                    record_id: record.id,
+                    title: record.title.clone(),
+                    summary,
+                    rank: 1.0_f32 / (index as f32 + 1.0),
+                    why_matched,
+                    citations: vec![ContextCitation {
+                        citation_type: ContextCitationType::WorkRecord,
+                        id: record.id,
+                        label: "work record".to_owned(),
+                        time: record.created_at,
+                    }],
+                    evidence,
+                    links: ContextLinks {
+                        dashboard: None,
+                        pr: record.pr_url.clone(),
+                    },
+                    visibility: Visibility::Reportable,
+                }
+            })
+            .collect();
+
+        Self {
+            schema_version: 1,
+            query: context.query.clone(),
+            generated_at,
+            budget: ContextBudget {
+                max_tokens,
+                estimated_tokens,
+            },
+            results,
+            pagination: ContextPagination {
+                cursor: None,
+                has_more: false,
+            },
+            truncation: None,
+        }
+    }
+}
+
 fn default_metadata() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
 }
 
 fn default_pending_sync_state() -> SyncState {
     SyncState::Pending
+}
+
+pub fn new_id() -> Uuid {
+    Uuid::now_v7()
 }
 
 pub fn default_data_root() -> Result<PathBuf> {
@@ -1249,6 +1339,78 @@ pub fn work_record_dir(root: PathBuf) -> PathBuf {
 
 pub fn database_path(root: PathBuf) -> PathBuf {
     work_record_dir(root).join("work.sqlite")
+}
+
+pub fn blob_dir(root: PathBuf) -> PathBuf {
+    work_record_dir(root).join("blobs")
+}
+
+pub fn inbox_dir(root: PathBuf) -> PathBuf {
+    work_record_dir(root).join("inbox")
+}
+
+pub fn device_path(root: PathBuf) -> PathBuf {
+    work_record_dir(root).join("device.json")
+}
+
+fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
+    haystack.to_lowercase().contains(&needle.to_lowercase())
+}
+
+fn estimate_tokens(text: &str) -> u32 {
+    text.chars()
+        .count()
+        .div_ceil(4)
+        .try_into()
+        .unwrap_or(u32::MAX)
+}
+
+fn redact_preview(text: &str, max_chars: usize) -> String {
+    let mut preview = String::new();
+    for ch in text.chars().take(max_chars) {
+        preview.push(ch);
+    }
+    redact_secret_markers(&preview)
+}
+
+fn redact_secret_markers(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| {
+            let lower = word.to_ascii_lowercase();
+            if lower.starts_with("sk-")
+                || lower.starts_with("ghp_")
+                || lower.contains("api_key=")
+                || lower.contains("token=")
+                || lower.contains("authorization:")
+            {
+                "[redacted]"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn evidence_status_from_exit(exit_code: i32) -> EvidenceStatus {
+    if exit_code == 0 {
+        EvidenceStatus::Passed
+    } else {
+        EvidenceStatus::Failed
+    }
+}
+
+fn evidence_kind_from_command(command: &str) -> EvidenceKind {
+    let lower = command.to_ascii_lowercase();
+    if lower.contains("test") {
+        EvidenceKind::Test
+    } else if lower.contains("lint") || lower.contains("clippy") {
+        EvidenceKind::Lint
+    } else if lower.contains("build") {
+        EvidenceKind::Build
+    } else {
+        EvidenceKind::Manual
+    }
 }
 
 #[cfg(test)]
@@ -1292,6 +1454,41 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(outbox.sync_state, SyncState::Pending);
+    }
+
+    #[test]
+    fn generated_ids_are_uuid_v7_and_paths_are_centralized() {
+        let record = WorkRecord::new("Task", "body", Vec::new(), "task", None);
+        let evidence = Evidence::new(
+            Some(record.id),
+            "cargo test",
+            0,
+            String::new(),
+            String::new(),
+            Utc::now(),
+            1,
+        );
+
+        assert_eq!(record.id.get_version_num(), 7);
+        assert_eq!(evidence.id.get_version_num(), 7);
+
+        let root = PathBuf::from("/tmp/ctx-root");
+        assert_eq!(
+            database_path(root.clone()),
+            PathBuf::from("/tmp/ctx-root/work-record/work.sqlite")
+        );
+        assert_eq!(
+            blob_dir(root.clone()),
+            PathBuf::from("/tmp/ctx-root/work-record/blobs")
+        );
+        assert_eq!(
+            inbox_dir(root.clone()),
+            PathBuf::from("/tmp/ctx-root/work-record/inbox")
+        );
+        assert_eq!(
+            device_path(root),
+            PathBuf::from("/tmp/ctx-root/work-record/device.json")
+        );
     }
 
     #[test]

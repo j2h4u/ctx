@@ -12,7 +12,8 @@ use chrono::Utc;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 use work_record_core::{
-    database_path, default_data_root, work_record_dir, Evidence, WorkRecord, WorkRecordArchive,
+    blob_dir, database_path, default_data_root, device_path, inbox_dir, work_record_dir,
+    AgentContextPacket, Evidence, WorkRecord, WorkRecordArchive,
 };
 use work_record_store::Store;
 
@@ -287,7 +288,13 @@ fn run_workspace_subcommand(command: WorkspaceSubcommand, data_root: PathBuf) ->
         WorkspaceSubcommand::Status => {
             let db_path = database_path(data_root.clone());
             println!("data_root: {}", data_root.display());
-            println!("work_record_dir: {}", work_record_dir(data_root).display());
+            println!(
+                "work_record_dir: {}",
+                work_record_dir(data_root.clone()).display()
+            );
+            println!("blob_dir: {}", blob_dir(data_root.clone()).display());
+            println!("inbox_dir: {}", inbox_dir(data_root.clone()).display());
+            println!("device_path: {}", device_path(data_root.clone()).display());
             println!("database: {}", db_path.display());
             println!("initialized: {}", db_path.exists());
         }
@@ -334,7 +341,8 @@ fn run_work_subcommand(command: WorkSubcommand, data_root: PathBuf) -> Result<()
         WorkSubcommand::Context(args) => {
             let context = store.context(args.query.as_deref(), args.limit)?;
             if args.json {
-                println!("{}", serde_json::to_string_pretty(&context)?);
+                let packet = AgentContextPacket::from_work_context(&context, 12_000);
+                println!("{}", serde_json::to_string_pretty(&packet)?);
             } else {
                 println!("{}", work_record_report::context_markdown(&context));
             }
@@ -347,7 +355,11 @@ fn run_work_subcommand(command: WorkSubcommand, data_root: PathBuf) -> Result<()
                     print!("{}", work_record_report::render_text(&records, &evidence))
                 }
                 ReportFormat::Json => {
-                    println!("{}", work_record_report::render_json(&records, &evidence)?)
+                    let summary = work_record_report::summarize(&records, &evidence);
+                    print_json(serde_json::json!({
+                        "schema_version": 1,
+                        "summary": summary,
+                    }))?;
                 }
             }
         }
@@ -410,8 +422,25 @@ fn run_evidence(args: EvidenceCommand, store: &Store) -> Result<()> {
             )
             .with_context(|| format!("run evidence command `{}`", args.command.join(" ")))?;
             let duration_ms = timer.elapsed().as_millis().try_into().unwrap_or(i64::MAX);
+            let record_id = match args.record {
+                Some(record_id) => Some(record_id),
+                None => {
+                    let workspace = std::env::current_dir()
+                        .ok()
+                        .map(|path| path.display().to_string());
+                    let record = WorkRecord::new(
+                        format!("Command evidence: {}", args.command.join(" ")),
+                        "Command evidence captured without an explicit Work Record.",
+                        vec!["evidence".to_owned()],
+                        "evidence",
+                        workspace,
+                    );
+                    store.insert_record(&record)?;
+                    Some(record.id)
+                }
+            };
             let evidence = Evidence::new(
-                args.record,
+                record_id,
                 args.command.join(" "),
                 output.exit_code,
                 output.stdout,
@@ -420,7 +449,10 @@ fn run_evidence(args: EvidenceCommand, store: &Store) -> Result<()> {
                 duration_ms,
             );
             store.insert_evidence(&evidence)?;
-            println!("{}", serde_json::to_string_pretty(&evidence)?);
+            print_json(serde_json::json!({
+                "schema_version": 1,
+                "evidence": evidence,
+            }))?;
             if output.exit_code == 0 {
                 Ok(())
             } else {
@@ -575,7 +607,10 @@ fn read_body(body: String) -> Result<String> {
 
 fn print_record(record: &WorkRecord, json: bool) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(record)?);
+        print_json(serde_json::json!({
+            "schema_version": 1,
+            "record": record,
+        }))?;
     } else {
         println!("{} {}", record.id, record.title);
         if !record.body.is_empty() {
@@ -593,11 +628,19 @@ fn print_record(record: &WorkRecord, json: bool) -> Result<()> {
 
 fn print_records(records: &[WorkRecord], json: bool) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(records)?);
+        print_json(serde_json::json!({
+            "schema_version": 1,
+            "records": records,
+        }))?;
     } else {
         for record in records {
             println!("{} [{}] {}", record.id, record.kind, record.title);
         }
     }
+    Ok(())
+}
+
+fn print_json(value: serde_json::Value) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }

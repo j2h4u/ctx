@@ -1,6 +1,6 @@
 # Work Recorder Productization Implementation Status
 
-Updated: 2026-06-22T18:24:00-05:00
+Updated: 2026-06-22T18:52:32-05:00
 
 Task: `feb64c1c-e58c-40f8-b1e9-1094dca0646e`
 
@@ -135,6 +135,31 @@ Known remaining gap after this slice: capture spool/import, VCS/PR normalized
 write APIs, search/context ranking over FTS projections, dashboard/report UI,
 hosted staging, and Buildkite platform evidence remain unimplemented.
 
+## Foundation Review Fixes
+
+Integrated implementation work after the first architecture/data model review:
+
+- Generated Work Record and evidence IDs now use UUIDv7 through a shared
+  `new_id()` helper, while existing serialized UUID fields remain compatible.
+- Centralized local path helpers now cover `work.sqlite`, `blobs/`, `inbox/`,
+  and `device.json` under the public Work Recorder data root.
+- Public CLI JSON responses now carry `schema_version: 1` envelopes, including
+  `record`, `records`, `summary`, `evidence`, and `AgentContextPacket` output
+  from `ctx context --json`.
+- Evidence capture now requires an attached Work Record for current writes.
+  `ctx evidence run` without `--record` creates a command evidence Work Record
+  automatically before attaching the evidence.
+- Full stdout/stderr content is stored as content-addressed local-only artifacts
+  under `blobs/<shard>/<sha256>`, while the evidence row stores bounded redacted
+  previews and an artifact pointer.
+- Focused tests cover UUIDv7/path helpers, versioned JSON wrappers, context
+  packet output, hidden compatibility aliases, and artifact-backed evidence
+  storage.
+
+Known remaining review item: migrated legacy databases can still contain nullable
+evidence rows that predate this productization pass; current store writes and
+CLI-created evidence require or create a Work Record attachment.
+
 ## Validation
 
 - `./scripts/check.sh` in the public `work-record-product` worktree: PASS at
@@ -160,10 +185,25 @@ hosted staging, and Buildkite platform evidence remain unimplemented.
   nor `bazelisk` is installed.
 - `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 ./scripts/release-dry-run.sh`:
   PASS after root command and storage foundation integration.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo test -p ctx -p work-record-core -p work-record-store -- --test-threads 1`:
+  PASS after foundation review fixes. Covered 11 CLI integration tests, 3 core
+  unit tests, 9 store unit tests, and doc-tests for core/store.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 BAZEL_JOBS=2 ./scripts/check.sh all`:
+  PASS after foundation review fixes. Covered fmt, check, clippy, and tests;
+  Bazel lane recorded `skipped` because neither `bazel` nor `bazelisk` is
+  installed.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 ./scripts/release-dry-run.sh`:
+  PASS after foundation review fixes. Wrote local release dry-run manifest,
+  checksum, and timing artifacts under
+  `target/ctx-artifacts/release-dry-run/`.
 
 ## Reviewer Status
 
-No implementation reviewer has passed a milestone gate yet.
+Architecture/data model reviewer returned FAIL on head `eb0d8f9` because IDs
+were UUIDv4, public JSON/context output was not consistently versioned,
+`blobs/`/`inbox/`/`device.json` path helpers were missing, and evidence output
+was still inline or unattached. The fixes above are integrated locally and
+awaiting re-review after commit.
 
 ## Blockers
 

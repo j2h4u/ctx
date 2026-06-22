@@ -1,6 +1,6 @@
 # Work Recorder Productization Risk Register
 
-Updated: 2026-06-22T17:39:00-05:00
+Updated: 2026-06-22T18:52:32-05:00
 
 | Risk | Impact | Current Mitigation |
 | --- | --- | --- |
@@ -12,6 +12,8 @@ Updated: 2026-06-22T17:39:00-05:00
 | README/docs currently overclaim implemented behavior. | User confusion and false product promises. | Docs truth-pass worker is scoped to README/docs only. |
 | Existing local store shape diverges from the product contract. | Capture/search/hosted sync churn if built on the wrong schema. | Land core schema/types and versioned store migrations before capture/search/dashboard work. |
 | Buildkite/release platform matrix is absent. | Cannot satisfy release-verification criteria yet. | CI worker is scoped to resource-safe scripts and initial Buildkite wiring first. |
+| `/tmp` pressure and concurrent broad Cargo checks can freeze this host. | Local verification instability and interrupted agent work. | Use `TMPDIR=/var/tmp/ctxwr`, low `CARGO_BUILD_JOBS`, low `RUST_TEST_THREADS`, and avoid overlapping broad Cargo commands across agents. |
+| Bazel is not installed in this environment. | Local `scripts/check.sh all` cannot prove Bazel lanes yet. | The script records the Bazel lane as skipped; Buildkite or local Bazel/Bazelisk installation must satisfy the retained Bazel requirement later. |
 
 ## Accepted Risks
 

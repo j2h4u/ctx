@@ -26,7 +26,7 @@ fn record(temp: &TempDir, title: &str, body: &str, tags: &[&str]) -> Value {
         command.args(["--tag", tag]);
     }
     let output = command.assert().success().get_output().stdout.clone();
-    serde_json::from_slice(&output).unwrap()
+    serde_json::from_slice::<Value>(&output).unwrap()["record"].clone()
 }
 
 fn write_json(temp: &TempDir, name: &str, value: &Value) -> String {
@@ -48,7 +48,10 @@ fn root_setup_status_schema_and_validate_work() {
         .args(["status"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("initialized: true"));
+        .stdout(predicate::str::contains("initialized: true"))
+        .stdout(predicate::str::contains("blob_dir:"))
+        .stdout(predicate::str::contains("inbox_dir:"))
+        .stdout(predicate::str::contains("device_path:"));
 
     ctx(&temp)
         .args(["schema"])
@@ -79,12 +82,16 @@ fn root_record_show_search_context_report_and_link_pr_work() {
         .args(["search", "local", "--json"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("\"schema_version\": 1"))
+        .stdout(predicate::str::contains("\"records\""))
         .stdout(predicate::str::contains("Implement search"));
 
     ctx(&temp)
         .args(["show", id, "--json"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("\"schema_version\": 1"))
+        .stdout(predicate::str::contains("\"record\""))
         .stdout(predicate::str::contains("Implement search"));
 
     ctx(&temp)
@@ -96,6 +103,7 @@ fn root_record_show_search_context_report_and_link_pr_work() {
         ])
         .assert()
         .success()
+        .stdout(predicate::str::contains("\"schema_version\": 1"))
         .stdout(predicate::str::contains("pull/42"));
 
     ctx(&temp)
@@ -109,6 +117,8 @@ fn root_record_show_search_context_report_and_link_pr_work() {
         .args(["report", "--format", "json"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("\"schema_version\": 1"))
+        .stdout(predicate::str::contains("\"summary\""))
         .stdout(predicate::str::contains("\"record_count\": 2"));
 }
 
@@ -122,13 +132,17 @@ fn evidence_run_is_recorded() {
         .args(["evidence", "run", "--record", id, "rustc", "--version"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("\"schema_version\": 1"))
+        .stdout(predicate::str::contains("\"evidence\""))
         .stdout(predicate::str::contains("\"exit_code\": 0"));
 
     ctx(&temp)
         .args(["context", "Run", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("rustc --version"));
+        .stdout(predicate::str::contains("\"schema_version\": 1"))
+        .stdout(predicate::str::contains("\"results\""))
+        .stdout(predicate::str::contains("Run tests"));
 }
 
 #[test]
@@ -151,8 +165,9 @@ fn evidence_run_truncates_stdout_to_output_cap() {
         .clone();
     let evidence: Value = serde_json::from_slice(&output).unwrap();
 
-    assert_eq!(evidence["exit_code"], 0);
-    assert_eq!(evidence["stdout"].as_str().unwrap(), "rust");
+    assert_eq!(evidence["schema_version"], 1);
+    assert_eq!(evidence["evidence"]["exit_code"], 0);
+    assert_eq!(evidence["evidence"]["stdout"].as_str().unwrap(), "rust");
 }
 
 #[cfg(unix)]
@@ -183,7 +198,8 @@ fn evidence_timeout_kills_descendant_process_group() {
         .clone();
 
     let evidence: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(evidence["exit_code"], 124);
+    assert_eq!(evidence["schema_version"], 1);
+    assert_eq!(evidence["evidence"]["exit_code"], 124);
 }
 
 #[test]
@@ -379,7 +395,7 @@ fn nested_workspace_and_work_commands_remain_compatibility_aliases() {
         .stdout
         .clone();
     let record: Value = serde_json::from_slice(&output).unwrap();
-    let id = record["id"].as_str().unwrap();
+    let id = record["record"]["id"].as_str().unwrap();
 
     ctx(&temp)
         .args(["work", "show", id])
