@@ -2,9 +2,11 @@
   <img src="assets/readme/work-record-banner.png" alt="ctx records agent work so it can be attached to PRs, searched later, and shared across teams." />
 </p>
 
-Agents are useful, but their work is easy to lose. A Codex or Claude session can hit compaction, subagents can do most of the implementation, tool output can disappear into terminal scrollback, and useful decisions can stay trapped in one developer's `~/.codex` or `~/.claude` directory.
+Agent work disappears too easily. Prompts, decisions, failed attempts, tool output, review notes, and implementation context get scattered across local session files, terminal history, and provider UIs.
 
 ctx gives that work a durable local record. It captures prompts, transcripts, commands, tool calls, evidence, artifacts, commits, PR links, and summaries in a local database that humans and future agents can search.
+
+The fastest way to see it is to run setup. ctx imports the agent history already on your machine, links what it can to repos and PRs, and opens a local dashboard.
 
 ## Why Use ctx
 
@@ -21,21 +23,35 @@ ctx gives that work a durable local record. It captures prompts, transcripts, co
 curl -fsSL https://ctx.rs/install | sh
 ```
 
+Set up ctx and open the local dashboard:
+
+```bash
+ctx setup
+```
+
+`ctx setup` creates local storage, imports existing agent history, configures optional capture integrations, starts the local dashboard, and opens it in your browser. It does not write files into your Git repo by default.
+
+Use `--no-open` for headless setup:
+
+```bash
+ctx setup --no-open
+```
+
 Check the install:
 
 ```bash
 ctx doctor
 ```
 
-Set up local recording:
+## Quick Start
+
+Run setup first:
 
 ```bash
 ctx setup
 ```
 
-`ctx setup` creates local storage and configures optional capture integrations. It does not write files into your Git repo by default.
-
-## Quick Start
+The dashboard opens with imported history and updates as new work is recorded.
 
 Create a record for a task:
 
@@ -73,6 +89,12 @@ Generate a review report:
 
 ```bash
 ctx report <record-id> --format markdown
+```
+
+Publish a PR report:
+
+```bash
+ctx publish pr <record-id>
 ```
 
 ## The Core Model
@@ -115,6 +137,8 @@ ctx doctor
 ctx record
 ctx run
 ctx attach
+ctx publish
+ctx dashboard
 ctx show
 ctx list
 ctx search
@@ -127,15 +151,46 @@ ctx uninstall
 
 ### `ctx setup`
 
-Creates local ctx storage and configures optional capture integrations.
+Creates local ctx storage, imports existing agent history, configures optional capture integrations, starts the local dashboard, and opens it in your browser.
 
 ```bash
 ctx setup
 ctx setup --with-hooks
 ctx setup --with-shims
+ctx setup --no-open
 ```
 
 By default, setup is local and conservative. Repo-level Git hooks are optional. The default policy is no repo files unless you ask for them.
+
+Setup should be the quick local demo:
+
+1. detect existing agent histories;
+2. import supported provider sessions;
+3. infer repos from cwd, transcript paths, and Git roots;
+4. link what it can to commits and PRs;
+5. start the dashboard;
+6. open the dashboard in your browser.
+
+### `ctx dashboard`
+
+Opens the local dashboard.
+
+```bash
+ctx dashboard
+```
+
+The dashboard is the always-on view of recorded agent work on the machine. It refreshes as new records, sessions, tool calls, commands, PR links, and artifacts are captured.
+
+Common views:
+
+- overview of recent work;
+- active sessions;
+- repo view;
+- record/task view;
+- session transcript view;
+- PR evidence view;
+- slow/flaky command view;
+- missing-evidence and stale-evidence view.
 
 ### `ctx status`
 
@@ -210,6 +265,34 @@ ctx attach commit <record-id> abc123
 ctx attach artifact <record-id> screenshot.png
 ctx attach note <record-id> "The first attempt failed because the fixture was stale."
 ```
+
+### `ctx publish`
+
+Publishes a shareable report.
+
+```bash
+ctx publish pr <record-id>
+ctx publish pr <record-id> --summary-only
+ctx publish pr <record-id> --with-evidence
+```
+
+For a PR, ctx should post or update a separate Markdown comment with a stable marker rather than editing the PR description by default.
+
+Example:
+
+```md
+<!-- ctx:work-record record_id=... -->
+## ctx Work Record
+
+- record: ...
+- sessions: ...
+- commands/tests: ...
+- evidence: ...
+- artifacts: ...
+- known gaps: ...
+```
+
+The local full record stays private unless you explicitly export, bundle, or sync it.
 
 ### `ctx show`
 
