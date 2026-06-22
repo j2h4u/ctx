@@ -11,8 +11,11 @@ validation and docs`.
 
 Status: validation passed locally. The first dedicated done-ness review on
 `a6fac71` found the substantive implementation complete and failed only this
-status note's stale bookkeeping. This status-only follow-up records that result
-and replaces the stale pending lines.
+status note's stale bookkeeping. The first status-only follow-up commit was
+`711c51a Record Work Inspector review status`; the reviewer then failed only the
+remaining "re-check pending" wording. This current status-only commit records
+that second result and intentionally identifies itself as current `HEAD` because
+a Git commit cannot embed its own final hash without changing that hash.
 
 ## Scope Landed
 
@@ -157,8 +160,12 @@ Final screenshot set:
   bookkeeping FAIL because this status file still said final review and hygiene
   were pending. No product, architecture, security, visual, test, dogfood, or
   deferral blockers were found.
-- Final re-check: pending on the status-only follow-up commit that replaces the
-  stale pending lines.
+- Final re-check on `711c51a`: implementation still PASS; temporary bookkeeping
+  FAIL because this file still said the re-check was pending and did not mention
+  `711c51a`.
+- Current status-only `HEAD`: records the final re-check results above. No code,
+  product, architecture, security, visual, test, dogfood, or deferral blockers
+  remain in the recorded reviewer feedback.
 
 ## Validation
 
