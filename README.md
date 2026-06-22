@@ -66,10 +66,6 @@ Use ctx with the tools already in your loop: Codex, Claude Code, Cursor, shell s
 
 The contract is simple: a Work Record is the durable layer around the work. Agents can change. The record remains inspectable.
 
-## Old ADE
-
-The earlier ctx Agentic Development Environment has moved to `ctxrs/ade`. This repository now focuses on the local Work Recorder.
-
 ## Product shape
 
 ctx is intentionally:
