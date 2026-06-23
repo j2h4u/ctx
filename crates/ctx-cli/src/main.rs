@@ -304,7 +304,7 @@ enum CaptureSubcommand {
     WriteShimCommand(CaptureWriteShimCommandArgs),
     #[command(about = "Import pending capture spool files")]
     Import(CaptureImportArgs),
-    #[command(about = "Import a provider fixture JSONL transcript")]
+    #[command(about = "Import provider fixture JSONL")]
     ImportProvider(CaptureImportProviderArgs),
     #[command(about = "Import a Codex prompt history JSONL file")]
     ImportCodexHistory(CaptureImportCodexHistoryArgs),

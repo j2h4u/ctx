@@ -24,9 +24,9 @@ authenticated `gh` CLI is in scope.
 - Make arbitrary command output safe to publish without review.
 - Guarantee that third-party tools run by the user do not use the network.
 - Enforce centralized team retention, policy, or DLP controls.
-- Import full historical provider transcripts in this branch. The only native
-  provider-history exception is explicit Codex prompt-history JSONL import,
-  which is marked `summary_only`.
+- Import full historical provider transcripts in this branch. The only
+  provider-history path is explicit local Codex prompt-history JSONL import,
+  prompt-only and `summary_only`.
 - Provide hosted/team pull request publishing; it remains outside launch scope
   in this branch.
 
@@ -128,7 +128,7 @@ Required design gates before implementation:
 - dry-run inventory with counts and path roots;
 - provider-specific redaction tests;
 - clear provenance fields for imported records;
-- no default hosted upload of imported transcripts.
+- no default hosted upload of imported provider data.
 
 The Codex prompt-history importer satisfies only the explicit source-selection
 and provenance gates for prompt logs. It does not satisfy full transcript,
@@ -236,8 +236,10 @@ Controls:
 
 - `ctx link-pr` is local only;
 - `ctx publish pr-comment --dry-run` provides an explicit preview step;
-- PR comment rendering redacts transcript and secret-like content by default;
-- `--include-raw-transcript` is explicit opt-in;
+- PR comment rendering redacts command output and secret-like content by
+  default;
+- `--include-raw-transcript` is explicit opt-in for raw command stdout/stderr
+  evidence;
 - publishing uses an idempotent ctx-owned comment marker;
 - inferred links should be confidence labeled;
 - hosted/team publishing remains out of scope pending a separate threat model.

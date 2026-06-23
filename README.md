@@ -21,7 +21,8 @@ Implemented in this branch:
   timestamps, and id;
 - capture command evidence when commands are run through `ctx evidence run`;
 - install local reversible Git/jj/gh wrapper shims that spool command evidence;
-- link one pull request URL to a record with `ctx link-pr`;
+- validate/normalize pull request URLs with `ctx pr parse`, then store one
+  local pull request URL string on a record with `ctx link-pr`;
 - list, show, search, and render context for local records;
 - generate text or JSON reports from recent records and evidence;
 - export a static local React/Vite dashboard with local assets only;
@@ -106,9 +107,10 @@ git status
 ctx capture import
 ```
 
-Link a pull request URL locally:
+Validate and link a pull request URL locally:
 
 ```bash
+ctx pr parse https://github.com/example/project/pull/42 --json
 ctx link-pr <record-id> https://github.com/example/project/pull/42
 ```
 
@@ -147,8 +149,9 @@ ctx capture import-provider --provider codex --input tests/fixtures/provider/cod
 ```
 
 Provider fixture import currently supports `codex`, `claude`, and `pi` fixture
-JSONL. It creates a summary Work Record for new imported sessions/events so the
-content appears in search, context, report, and dashboard output.
+JSONL. It creates a summary Work Record and provider event, message, and
+tool-call fixture views for new imported sessions/events so the content appears
+in search, context, report, and dashboard output.
 
 Import Codex prompt history explicitly when a local `history.jsonl` file exists:
 
@@ -170,8 +173,9 @@ ctx capture import --json
 The capture importer reads JSONL envelope files from the local Work Recorder
 inbox. The optional Git/jj/gh wrapper shims can write these envelopes for local
 command-line activity. Provider-native transcript importers and shell hooks are
-not implemented in this branch, except for the explicit Codex prompt-history
-import path described above.
+not implemented in this branch. The only provider-history path is explicit
+local Codex prompt-history JSONL import, prompt-only and `summary_only`, as
+described above.
 
 ## Work Record Model
 
@@ -255,9 +259,10 @@ By default, ctx uses machine-local storage under:
 
 Set `CTX_DATA_ROOT` to use a different root. The current implementation stores
 records, imported provider fixture summaries, and imported command evidence in
-SQLite, full evidence payloads in local blob files, and pending passive
-captures in a JSONL inbox. Provider-history directory scanners and broader
-passive normalization pipelines remain product direction.
+SQLite, full evidence payloads in local blob files, and pending capture
+envelopes from fixtures or opt-in shims in a JSONL inbox. Provider-history
+directory scanners and broader passive normalization pipelines remain product
+direction.
 
 No account is required. No hosted sync runs in this branch. Exported JSON files
 should be reviewed before they leave your machine because records and command
@@ -275,8 +280,8 @@ The Work Recorder direction remains local-first:
 - Local recording should not require a hosted account.
 - Passive capture should be conservative and should not break the wrapped tool
   if capture fails.
-- Hosted sync should not upload raw transcripts by default; full transcript sync
-  should be explicit opt-in.
+- Hosted sync should not upload raw command stdout/stderr evidence by default;
+  full transcript sync, if implemented later, should be explicit opt-in.
 - Pull request publishing in this branch is local GitHub PR comment upsert via
   the authenticated `gh` CLI; hosted/team publishing remains out of scope.
 - PR publishing should upsert a separate ctx comment by default instead of

@@ -97,8 +97,13 @@ ctx shim uninstall --dir .ctx-shims
 ## Link review state
 
 ```bash
+ctx pr parse https://github.com/example/project/pull/42 --json
 ctx link-pr <record-id> https://github.com/example/project/pull/42
 ```
+
+`ctx link-pr` stores the pull request URL string in the local record. Use
+`ctx pr parse` first to validate and normalize supported GitHub and GitLab pull
+request URLs.
 
 ## Review and search
 

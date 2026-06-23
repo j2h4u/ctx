@@ -23,8 +23,10 @@ archives that include the blob payloads needed to preserve recorded evidence on
 another machine.
 
 The current implementation does not store passive provider transcripts,
-dashboard state, or hosted sync state. Local Git/jj/gh shim events are written
-to the JSONL capture inbox and imported only into local storage.
+dashboard state, or hosted sync state. Explicit provider fixture imports and
+the explicit local Codex prompt-history JSONL import are stored only when the
+user runs those commands. Local Git/jj/gh shim events are written to the JSONL
+capture inbox and imported only into local storage.
 
 Hosted accounts, hosted sync, team policy, hosted dashboards, organization
 analytics, hosted retention, and hosted publish workflows are not in launch
@@ -32,10 +34,11 @@ scope for this branch.
 
 ## Capture inbox
 
-`ctx capture import` reads pending JSONL capture envelope files from the local
-Work Recorder inbox. These files may contain prompts, command output, paths, and
-tool metadata before import. Successful imports are renamed to `.done`; failed
-imports are renamed to `.failed` and get an `.error.json` sidecar.
+`ctx capture import` reads pending JSONL capture envelope files from fixtures
+or opt-in shims in the local Work Recorder inbox. These files may contain
+prompts, command output, paths, and tool metadata before import. Successful
+imports are renamed to `.done`; failed imports are renamed to `.failed` and get
+an `.error.json` sidecar.
 
 Treat the inbox and imported JSON archives as sensitive local data. This branch
 does not install provider hooks or shell hooks. Inbox files are created by local

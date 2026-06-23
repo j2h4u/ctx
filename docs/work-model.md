@@ -64,14 +64,17 @@ fixture JSONL and Codex prompt-history JSONL with `summary_only` fidelity.
 
 ## Pull requests
 
-`ctx link-pr <record-id> <url>` attaches a pull request URL to a record. The
-link stays with the local record and appears in redacted `show`, report, and
-context output as well as private archive export.
+`ctx link-pr <record-id> <url>` stores a pull request URL string on a local
+record. Use `ctx pr parse <url>` first to validate and normalize supported
+GitHub and GitLab pull request URLs. The link stays with the local record and
+appears in redacted `show`, report, and context output as well as private
+archive export.
 
 `ctx publish pr-comment <record-id>` uses the authenticated local `gh` CLI to
 create or update one marker-bounded ctx comment on the linked GitHub pull
 request. `--dry-run` renders the same comment locally for review. Hosted/team
-publishing is outside the current local-first implementation.
+publishing and non-GitHub PR publishing are outside the current local-first
+implementation.
 
 ## Context and reports
 

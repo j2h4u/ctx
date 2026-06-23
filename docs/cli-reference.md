@@ -150,9 +150,10 @@ child session relationships.
 
 These commands do not automatically scan existing agent transcript
 directories. Local Git/jj/gh wrapper shims are opt-in through `ctx shim`;
-provider-native hooks and shell hooks are not implemented in this branch. See
-[provider-support.md](provider-support.md) for the current support matrix and
-native-history blockers.
+provider-native hooks and shell hooks are not implemented in this branch. The
+Codex history command is an explicit local prompt-history JSONL import,
+prompt-only and `summary_only`. See [provider-support.md](provider-support.md)
+for the current support matrix and native-history blockers.
 
 ## VCS and pull request helpers
 
@@ -179,14 +180,17 @@ ctx publish pr-comment <record-id> --dry-run --include-raw-transcript
 ctx publish pr-comment <record-id>
 ```
 
-- `link-pr` attaches a pull request URL to a Work Record in the local store.
+- `link-pr` stores a local pull request URL string on a Work Record. Use
+  `ctx pr parse` first to validate and normalize the URL before attaching it.
 - `publish pr-comment --dry-run` renders the finished-product PR comment
   Markdown for the linked GitHub pull request without mutating the network.
 - `publish pr-comment` uses the authenticated `gh` CLI to create or update one
   marker-bounded ctx comment on the linked GitHub pull request.
-- PR comment rendering redacts transcript and secret-like content by default.
+- PR comment rendering redacts command output and secret-like content by
+  default.
   `--include-raw-transcript` is an explicit opt-in for private PRs where raw
-  command stdout/stderr is acceptable to share.
+  command stdout/stderr evidence is acceptable to share; publishing currently
+  supports GitHub PRs through `gh`.
 - GitLab publishing and hosted/team publishing remain outside this local
   launch scope.
 

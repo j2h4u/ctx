@@ -59,8 +59,9 @@ Inspect these populated areas:
 - redaction/privacy copy: confirms the file must be reviewed before sharing.
 
 Some sections are expected to be sparse in this CLI dogfood path. With
-`--seed-live`, provider fixture imports populate sessions, timeline, transcript,
-messages, and tool-call views. Sparse messages are still expected for:
+`--seed-live`, provider fixture imports populate sessions, timeline, and
+provider event, message, and tool-call fixture views. Sparse messages are still
+expected for:
 
 - files touched;
 - Git and jj state;
