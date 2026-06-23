@@ -98,15 +98,46 @@ json_escape() {
   printf '%s' "${value}"
 }
 
-safe_reset_default_data_root() {
-  local default_root="${repo_root}/target/tmp/dashboard-review-data"
-  if [[ "${data_root}" == "${default_root}" ]]; then
-    rm -rf "${data_root}"
+sed_literal() {
+  printf '%s' "$1" | sed 's/[#&]/\\&/g'
+}
+
+sanitize_share_artifact() {
+  local path="$1"
+  local tmp
+  local escaped_repo
+  local escaped_home
+
+  if [[ ! -f "${path}" ]]; then
+    return 0
   fi
+
+  tmp="$(mktemp "${path}.XXXXXX")"
+  escaped_repo="$(sed_literal "${repo_root}")"
+  escaped_home="$(sed_literal "${HOME:-}")"
+  if [[ -n "${escaped_home}" ]]; then
+    sed \
+      -e "s#${escaped_repo}#[REDACTED_PATH]#g" \
+      -e "s#${escaped_home}/[^[:space:]\"']*#[REDACTED_PATH]#g" \
+      -e "s#${escaped_home}#[REDACTED_PATH]#g" \
+      "${path}" >"${tmp}"
+  else
+    sed -e "s#${escaped_repo}#[REDACTED_PATH]#g" "${path}" >"${tmp}"
+  fi
+  mv "${tmp}" "${path}"
+}
+
+safe_reset_data_root() {
+  local default_root="${repo_root}/target/tmp/dashboard-review-data"
+  case "${data_root}" in
+    "${default_root}"|"${repo_root}/target/tmp/"*)
+      rm -rf "${data_root}"
+      ;;
+  esac
 }
 
 seed_live_records() {
-  local record_json record_id sparse_json sparse_id failed_json failed_id
+  local record_json record_id sparse_json sparse_id failed_json failed_id fixture provider
 
   record_json="$(run_ctx record \
     --title "Dogfood dashboard review: rich local evidence" \
@@ -158,6 +189,13 @@ seed_live_records() {
   fi
   run_ctx link-pr "${failed_id}" https://github.com/ctxrs/ctx/pull/4243 >/dev/null
   run_ctx evidence run --record "${failed_id}" -- bash -c 'printf "expected failure: screenshot diff threshold exceeded\n" >&2; exit 1' || true
+
+  for provider in codex pi claude; do
+    fixture="${repo_root}/tests/fixtures/provider/${provider}.jsonl"
+    if [[ -f "${fixture}" ]]; then
+      run_ctx capture import-provider --provider "${provider}" --input "${fixture}" --json >"${artifact_dir}/provider-${provider}-import.json"
+    fi
+  done
 }
 
 capture_screenshots() {
@@ -167,8 +205,17 @@ capture_screenshots() {
   local module_name=""
   local browser_path="${CTX_DASHBOARD_REVIEW_BROWSER:-}"
   local firefox_path="${CTX_DASHBOARD_REVIEW_FIREFOX:-}"
+  local scratch_parent="${TMPDIR:-${repo_root}/target/tmp}"
+  local browser_scratch
 
   mkdir -p "${screenshot_dir}"
+  rm -rf \
+    "${screenshot_dir}"/chrome-profile-* \
+    "${screenshot_dir}"/chrome-cache-* \
+    "${screenshot_dir}/firefox-tmp"
+  mkdir -p "${scratch_parent}"
+  browser_scratch="$(mktemp -d "${scratch_parent%/}/ctx-dashboard-screenshot.XXXXXX")"
+  trap 'rm -rf "${browser_scratch:-}"' RETURN
 
   if ! command -v node >/dev/null 2>&1; then
     printf 'skip: node is not available; dashboard screenshots were not captured\n' | tee "${screenshot_status}"
@@ -200,8 +247,8 @@ capture_screenshots() {
       --disable-software-rasterizer \
       --disable-dev-shm-usage \
       --no-sandbox \
-      --user-data-dir="${screenshot_dir}/chrome-profile-desktop" \
-      --disk-cache-dir="${screenshot_dir}/chrome-cache-desktop" \
+      --user-data-dir="${browser_scratch}/chrome-profile-desktop" \
+      --disk-cache-dir="${browser_scratch}/chrome-cache-desktop" \
       --window-size=1440,1100 \
       --screenshot="${screenshot_dir}/desktop.png" \
       "${dashboard_url}" >"${screenshot_status}" 2>&1 && \
@@ -211,8 +258,8 @@ capture_screenshots() {
       --disable-software-rasterizer \
       --disable-dev-shm-usage \
       --no-sandbox \
-      --user-data-dir="${screenshot_dir}/chrome-profile-mobile" \
-      --disk-cache-dir="${screenshot_dir}/chrome-cache-mobile" \
+      --user-data-dir="${browser_scratch}/chrome-profile-mobile" \
+      --disk-cache-dir="${browser_scratch}/chrome-cache-mobile" \
       --window-size=390,1200 \
       --screenshot="${screenshot_dir}/mobile.png" \
       "${dashboard_url}" >>"${screenshot_status}" 2>&1; then
@@ -224,9 +271,9 @@ capture_screenshots() {
     fi
     if [[ -n "${firefox_path}" ]]; then
       printf 'Chrome screenshot failed; trying Firefox fallback: %s\n' "${firefox_path}" >>"${screenshot_status}"
-      mkdir -p "${screenshot_dir}/firefox-tmp"
-      TMPDIR="${screenshot_dir}/firefox-tmp" "${firefox_path}" --headless --window-size 1440,1100 --screenshot "${screenshot_dir}/desktop.png" "${dashboard_url}" >>"${screenshot_status}" 2>&1
-      TMPDIR="${screenshot_dir}/firefox-tmp" "${firefox_path}" --headless --window-size 390,1200 --screenshot "${screenshot_dir}/mobile.png" "${dashboard_url}" >>"${screenshot_status}" 2>&1
+      mkdir -p "${browser_scratch}/firefox-tmp"
+      TMPDIR="${browser_scratch}/firefox-tmp" "${firefox_path}" --headless --window-size 1440,1100 --screenshot "${screenshot_dir}/desktop.png" "${dashboard_url}" >>"${screenshot_status}" 2>&1
+      TMPDIR="${browser_scratch}/firefox-tmp" "${firefox_path}" --headless --window-size 390,1200 --screenshot "${screenshot_dir}/mobile.png" "${dashboard_url}" >>"${screenshot_status}" 2>&1
       if [[ -s "${screenshot_dir}/desktop.png" && -s "${screenshot_dir}/mobile.png" ]]; then
         printf 'captured dashboard screenshots with %s\n' "${firefox_path}" >>"${screenshot_status}"
         return 0
@@ -286,7 +333,7 @@ main() {
   export CTX_DATA_ROOT="${data_root}"
 
   mkdir -p "${artifact_dir}" "$(dirname "${data_root}")"
-  safe_reset_default_data_root
+  safe_reset_data_root
   mkdir -p "${data_root}"
 
   run_ctx setup >/dev/null
@@ -306,7 +353,6 @@ main() {
   run_ctx context dogfood >"${artifact_dir}/context.md"
   run_ctx search dogfood --json >"${artifact_dir}/search.json"
   run_ctx dashboard export --output "${artifact_dir}/dashboard"
-  run_ctx export --output "${artifact_dir}/work-records.json"
   run_ctx validate >"${artifact_dir}/validate.txt"
 
   local screenshot_status="${artifact_dir}/screenshot-status.txt"
@@ -315,6 +361,7 @@ main() {
   else
     capture_screenshots "${artifact_dir}/dashboard/index.html" "${artifact_dir}/screenshots" "${screenshot_status}"
   fi
+  sanitize_share_artifact "${screenshot_status}"
 
   {
     printf '{\n'
@@ -328,7 +375,8 @@ main() {
     printf '  "report_json": "%s",\n' "$(json_escape "${artifact_dir}/report.json")"
     printf '  "context": "%s",\n' "$(json_escape "${artifact_dir}/context.md")"
     printf '  "search": "%s",\n' "$(json_escape "${artifact_dir}/search.json")"
-    printf '  "archive": "%s",\n' "$(json_escape "${artifact_dir}/work-records.json")"
+    printf '  "raw_archive_exported": false,\n'
+    printf '  "raw_archive_note": "omitted from default dogfood artifacts because ctx export is portable/private and may contain raw command or artifact content",\n'
     printf '  "screenshot_status": "%s"\n' "$(json_escape "$(tr '\n' ' ' <"${screenshot_status}")")"
     printf '}\n'
   } >"${artifact_dir}/manifest.json"

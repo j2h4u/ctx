@@ -14,10 +14,15 @@ Default outputs are written to `target/ctx-artifacts/dashboard-review`:
 - `dashboard/index.html` is the static dashboard export.
 - `report.txt` and `report.json` are CLI report outputs for quick count checks.
 - `context.md` and `search.json` exercise handoff/search review paths.
-- `work-records.json` is the exported archive from the seeded local store.
+- provider import JSON files are present for live-seeded Codex, Claude, and Pi
+  fixtures when `--seed-live` is used.
 - `manifest.json` lists artifact paths and screenshot status.
 - `screenshots/desktop.png` and `screenshots/mobile.png` are present only when
   Node, Playwright, and a launchable Chromium/Chrome browser are available.
+
+The default artifact set does not include `ctx export` output. Raw archives are
+portable/private data and may contain raw command or artifact content; generate
+one explicitly only when reviewing private local data.
 
 The default fixture is `examples/dogfood-dashboard-review-archive.json`. It has
 fixed IDs, timestamps, tags, linked PRs, passing evidence, one failing evidence
@@ -47,18 +52,13 @@ Inspect these populated areas:
 - tags: repeated `dogfood` and `dashboard` counts;
 - redaction/privacy copy: confirms the file must be reviewed before sharing.
 
-Some sections are expected to be sparse in this CLI dogfood path. The CLI
-`ctx dashboard export` currently renders records and evidence from the local
-store; richer internal metadata sections are covered by report-library fixtures.
-When reviewing this script's dashboard, sparse messages are expected for:
+Some sections are expected to be sparse in this CLI dogfood path. With
+`--seed-live`, provider fixture imports populate sessions, timeline, transcript,
+messages, and tool-call views. Sparse messages are still expected for:
 
-- sessions and runs;
-- timeline;
-- transcript, messages, and tool calls;
-- evidence status;
 - files touched;
 - Git and jj state;
-- artifact cards.
+- artifact cards when no share-safe artifact preview is available.
 
 Treat those sparse sections as layout and empty-state review targets. They
 should be readable, non-overlapping, and clear about why the section has no

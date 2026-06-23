@@ -22,6 +22,80 @@ require_file() {
   fi
 }
 
+sha256_file() {
+  local path="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${path}" | awk '{ print $1 }'
+    return 0
+  fi
+
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${path}" | awk '{ print $1 }'
+    return 0
+  fi
+
+  printf 'sha256sum or shasum is required\n' >&2
+  return 1
+}
+
+require_json_parser() {
+  if ! command -v jq >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+    fail_certificate "jq or python3 is required to verify release manifest evidence"
+    return 1
+  fi
+}
+
+manifest_value() {
+  local path="$1"
+  local query="$2"
+  local full_path="${completion_evidence_root}/${path}"
+
+  if command -v jq >/dev/null 2>&1; then
+    jq -r "(${query}) as \$value | if \$value == null then empty else \$value end" "${full_path}" 2>/dev/null || true
+    return 0
+  fi
+
+  python3 - "${full_path}" "${query}" <<'PY' 2>/dev/null || true
+import json
+import re
+import sys
+
+path, query = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+if query == '.artifacts | if type == "array" then length else -1 end':
+    artifacts = data.get("artifacts")
+    print(len(artifacts) if isinstance(artifacts, list) else -1)
+    raise SystemExit(0)
+
+value = data
+for part in query.lstrip(".").split("."):
+    match = re.fullmatch(r"([A-Za-z0-9_]+)(?:\[(\d+)\])?", part)
+    if not match:
+        raise SystemExit(0)
+    key, index = match.group(1), match.group(2)
+    if not isinstance(value, dict) or key not in value:
+        raise SystemExit(0)
+    value = value[key]
+    if index is not None:
+        if not isinstance(value, list):
+            raise SystemExit(0)
+        idx = int(index)
+        if idx >= len(value):
+            raise SystemExit(0)
+        value = value[idx]
+
+if value is None:
+    raise SystemExit(0)
+if isinstance(value, bool):
+    print("true" if value else "false")
+else:
+    print(value)
+PY
+}
+
 require_contains() {
   local path="$1"
   local text="$2"
@@ -38,11 +112,9 @@ require_env_key() {
   local path="$1"
   local key="$2"
   local expected="$3"
-  local full_path actual
+  local actual
 
-  require_file "${path}"
-  full_path="${completion_evidence_root}/${path}"
-  actual="$(awk -F= -v key="${key}" '$1 == key { print substr($0, length(key) + 2); found = 1; exit } END { if (!found) exit 1 }' "${full_path}" 2>/dev/null || true)"
+  actual="$(env_value "${path}" "${key}")"
   if [[ "${actual}" != "${expected}" ]]; then
     fail_certificate "${path} must set ${key}=${expected}"
   fi
@@ -51,14 +123,46 @@ require_env_key() {
 require_env_sha256() {
   local path="$1"
   local key="$2"
-  local full_path actual
+  local actual
 
-  require_file "${path}"
-  full_path="${completion_evidence_root}/${path}"
-  actual="$(awk -F= -v key="${key}" '$1 == key { print substr($0, length(key) + 2); found = 1; exit } END { if (!found) exit 1 }' "${full_path}" 2>/dev/null || true)"
+  actual="$(env_value "${path}" "${key}")"
   if [[ ! "${actual}" =~ ^[0-9a-f]{64}$ ]]; then
     fail_certificate "${path} must set ${key} to a real lowercase SHA-256 checksum"
   fi
+}
+
+env_value() {
+  local path="$1"
+  local key="$2"
+  local full_path="${completion_evidence_root}/${path}"
+
+  require_file "${path}"
+  awk -F= -v key="${key}" '$1 == key { print substr($0, length(key) + 2); found = 1; exit } END { if (!found) exit 1 }' "${full_path}" 2>/dev/null || true
+}
+
+require_manifest_value() {
+  local path="$1"
+  local query="$2"
+  local expected="$3"
+  local description="$4"
+  local actual
+
+  actual="$(manifest_value "${path}" "${query}")"
+  if [[ "${actual}" != "${expected}" ]]; then
+    fail_certificate "${description}: ${path} expected ${expected}, got ${actual:-<missing>}"
+  fi
+}
+
+require_summary_status() {
+  local path="$1"
+  local expected_mode="$2"
+
+  require_file "${path}"
+  require_json_parser || return 0
+  require_manifest_value "${path}" ".schema_version" "1" "${expected_mode} summary records schema version"
+  require_manifest_value "${path}" ".mode" "${expected_mode}" "${expected_mode} summary records mode"
+  require_manifest_value "${path}" ".status" "passed" "${expected_mode} summary records passing status"
+  require_manifest_value "${path}" ".publishing" "false" "${expected_mode} summary records non-publishing status"
 }
 
 validate_release_dry_run() {
@@ -66,18 +170,76 @@ validate_release_dry_run() {
   local target_triple="$2"
   local manifest="$3"
   local metadata="$4"
-  local platform_key
+  local platform_key manifest_dir checksum_file artifact_path artifact_name artifact_full_path artifact_checksum artifact_bytes artifact_count metadata_artifact metadata_checksum checksum_entry file_checksum file_bytes
 
   platform_key="${platform//-/_}"
-  require_contains "${manifest}" '"dry_run": true' "${platform} manifest records dry-run"
-  require_contains "${manifest}" '"upload": false' "${platform} manifest records non-uploading release"
-  require_contains "${manifest}" "\"platform\": \"${platform}\"" "${platform} manifest records platform"
-  require_contains "${manifest}" "\"target_triple\": \"${target_triple}\"" "${platform} manifest records target triple"
+  require_file "${manifest}"
+  require_json_parser || return 0
+
+  require_manifest_value "${manifest}" ".schema_version" "1" "${platform} manifest records schema version"
+  require_manifest_value "${manifest}" ".dry_run" "true" "${platform} manifest records dry-run"
+  require_manifest_value "${manifest}" ".upload" "false" "${platform} manifest records non-uploading release"
+  require_manifest_value "${manifest}" ".package" "ctx" "${platform} manifest records package"
+  require_manifest_value "${manifest}" ".platform" "${platform}" "${platform} manifest records platform"
+  require_manifest_value "${manifest}" ".target_triple" "${target_triple}" "${platform} manifest records target triple"
+
+  artifact_count="$(manifest_value "${manifest}" '.artifacts | if type == "array" then length else -1 end')"
+  if [[ "${artifact_count}" != "1" ]]; then
+    fail_certificate "${platform} manifest must record exactly one release artifact"
+    return 0
+  fi
+
+  artifact_path="$(manifest_value "${manifest}" '.artifacts[0].path')"
+  artifact_checksum="$(manifest_value "${manifest}" '.artifacts[0].sha256')"
+  artifact_bytes="$(manifest_value "${manifest}" '.artifacts[0].bytes')"
+  artifact_name="$(basename "${artifact_path}")"
+  manifest_dir="$(dirname "${manifest}")"
+  checksum_file="${manifest_dir}/checksums.sha256"
+
+  if [[ -z "${artifact_path}" || "${artifact_path}" = /* || "${artifact_path}" == *..* ]]; then
+    fail_certificate "${platform} manifest must record a safe relative artifact path"
+  else
+    require_file "${artifact_path}"
+  fi
+  if [[ "${artifact_name}" != ctx-* ]]; then
+    fail_certificate "${platform} manifest artifact name must start with ctx-: ${artifact_name:-<missing>}"
+  fi
+  if [[ ! "${artifact_checksum}" =~ ^[0-9a-f]{64}$ ]]; then
+    fail_certificate "${platform} manifest artifact checksum must be a lowercase SHA-256"
+  fi
+  if [[ ! "${artifact_bytes}" =~ ^[1-9][0-9]*$ ]]; then
+    fail_certificate "${platform} manifest artifact bytes must be a positive integer"
+  fi
+
+  require_file "${checksum_file}"
+  checksum_entry="$(awk -v name="${artifact_name}" '$2 == name { print $1; found = 1; exit } END { if (!found) exit 1 }' "${completion_evidence_root}/${checksum_file}" 2>/dev/null || true)"
+  if [[ "${checksum_entry}" != "${artifact_checksum}" ]]; then
+    fail_certificate "${platform} checksums.sha256 must match manifest checksum for ${artifact_name}"
+  fi
 
   require_env_key "${metadata}" "CTX_RELEASE_SCHEMA_VERSION" "1"
   require_env_key "${metadata}" "CTX_RELEASE_CHANNEL" "dry-run"
-  require_contains "${metadata}" "CTX_RELEASE_ARTIFACT_${platform_key}=ctx-" "${platform} metadata records artifact"
   require_env_sha256 "${metadata}" "CTX_RELEASE_SHA256_${platform_key}"
+  metadata_artifact="$(env_value "${metadata}" "CTX_RELEASE_ARTIFACT_${platform_key}")"
+  metadata_checksum="$(env_value "${metadata}" "CTX_RELEASE_SHA256_${platform_key}")"
+  if [[ "${metadata_artifact}" != "${artifact_name}" ]]; then
+    fail_certificate "${platform} metadata artifact ${metadata_artifact:-<missing>} must equal manifest artifact name ${artifact_name:-<missing>}"
+  fi
+  if [[ "${metadata_checksum}" != "${artifact_checksum}" ]]; then
+    fail_certificate "${platform} metadata checksum must equal manifest artifact checksum"
+  fi
+
+  artifact_full_path="${completion_evidence_root}/${artifact_path}"
+  if [[ -f "${artifact_full_path}" ]]; then
+    file_checksum="$(sha256_file "${artifact_full_path}")"
+    if [[ "${file_checksum}" != "${artifact_checksum}" ]]; then
+      fail_certificate "${platform} artifact file checksum must equal manifest checksum"
+    fi
+    file_bytes="$(wc -c < "${artifact_full_path}" | tr -d '[:space:]')"
+    if [[ "${file_bytes}" != "${artifact_bytes}" ]]; then
+      fail_certificate "${platform} artifact file size must equal manifest bytes"
+    fi
+  fi
 }
 
 validate_evidence() {
@@ -103,13 +265,24 @@ validate_evidence() {
     "artifacts/buildkite/release-dry-run/windows-x64/ctx-release-metadata.env"
 
   require_file "artifacts/buildkite/pipeline-contract/pipeline-contract.txt"
-  require_contains "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" '"publishing": false' "FreeBSD blocker records non-publishing status"
-  require_contains "artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json" '"publishing":false' "provider fixture summary records non-publishing status"
+  require_file "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json"
+  require_manifest_value "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" ".schema_version" "1" "FreeBSD blocker records schema version"
+  require_manifest_value "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" ".kind" "release_platform_blocker" "FreeBSD blocker records kind"
+  require_manifest_value "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" ".platform" "freebsd-x64" "FreeBSD blocker records platform"
+  require_manifest_value "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" ".target_triple" "x86_64-unknown-freebsd" "FreeBSD blocker records target triple"
+  require_manifest_value "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" ".publishing" "false" "FreeBSD blocker records non-publishing status"
+  require_summary_status "artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json" "provider-fixtures"
+  require_summary_status "artifacts/buildkite/finished-product/rich-search-context/rich-search-context.json" "rich-search-context"
   require_file "artifacts/buildkite/finished-product/rich-search-context/rich-context.json"
+  require_summary_status "artifacts/buildkite/finished-product/dashboard-report-artifact-review/dashboard-report-artifact-review.json" "dashboard-report-artifact-review"
   require_contains "artifacts/buildkite/finished-product/dashboard-report-artifact-review/report.json" '"record_count"' "dashboard/report artifact records report data"
+  require_summary_status "artifacts/buildkite/finished-product/pr-publish-dry-run/pr-publish-dry-run.json" "pr-publish-dry-run"
   require_contains "artifacts/buildkite/finished-product/pr-publish-dry-run/pr-comment-dry-run.md" "ctx-work-record:finished-product:start" "PR publish artifact records dry-run marker"
+  require_summary_status "artifacts/buildkite/finished-product/security-archive-fixtures/security-archive-fixtures.json" "security-archive-fixtures"
   require_contains "artifacts/buildkite/finished-product/security-archive-fixtures/security-archive-fixtures.md" "Publishing: false" "security archive fixture records non-publishing status"
+  require_summary_status "artifacts/buildkite/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.json" "jj-e2e-blocker-status"
   require_file "artifacts/buildkite/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.txt"
+  require_summary_status "artifacts/buildkite/finished-product/installer-dry-run-smoke/installer-dry-run-smoke.json" "installer-dry-run-smoke"
   require_contains "artifacts/buildkite/finished-product/installer-dry-run-smoke/install-dry-run.txt" "ctx install plan" "installer smoke records dry-run install plan"
 
   if (( certificate_failures > 0 )); then

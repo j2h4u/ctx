@@ -1,10 +1,9 @@
 # Redaction Corpus
 
-The launch branch documents a redaction corpus but does not yet ship a
-general-purpose redaction engine for every command, archive, report, or
-dashboard path. The fixture in
-`tests/fixtures/redaction/redaction-corpus.jsonl` is an intentionally inert
-corpus for future tests and review.
+The launch branch includes a synthetic redaction corpus and uses it in current
+share-safe output tests. It does not claim a general-purpose redaction engine
+for every raw command, archive, internal database, report, or dashboard path.
+The fixture lives at `tests/fixtures/redaction/redaction-corpus.jsonl`.
 
 ## Purpose
 
@@ -13,7 +12,7 @@ Use the corpus to keep security review concrete:
 - define examples of secrets and sensitive local data that Work Recorder may
   encounter;
 - separate input examples from expected redacted output;
-- make future redaction tests deterministic;
+- make current and future redaction tests deterministic;
 - avoid using real customer data, real tokens, or real private repository URLs
   in tests.
 
@@ -48,10 +47,11 @@ The current corpus covers:
 - archive payload snippets;
 - dashboard/report preview text.
 
-## Future Test Expectations
+## Test Expectations
 
-Before adding provider transcript import, broader capture hooks, PR publishing,
-or hosted sync, add automated tests that prove the relevant output surface is
-covered by the corpus. The current CLI integration tests load this corpus for
-active shareable surfaces including search/context JSON, report JSON, dashboard
-HTML, and PR dry-run markdown.
+Current CLI integration tests load this corpus for active shareable surfaces
+including search/context JSON, report JSON, dashboard HTML, and PR dry-run
+markdown. Before adding provider transcript import, broader capture hooks, more
+publishing targets, or hosted sync, add automated tests that prove each new
+shareable output surface is covered by the corpus. Raw archives and internal
+storage remain private data and are not treated as share-safe outputs.

@@ -115,7 +115,8 @@ match reasons, citations, result summaries, and stable record ids. If
 `CTX_DASHBOARD_URL` is set to a share-safe `http://` or `https://` URL, those
 JSON packets may include dashboard links. `ctx dashboard export` writes a static
 local HTML dashboard with no hosted sync, JavaScript, tracking, or remote
-assets.
+assets. Default review output from `ctx list`, `ctx show`, `ctx search`, and
+`ctx report` redacts secret-like values, credential URLs, and local paths.
 
 ## Inspect repository and pull request metadata
 
@@ -174,6 +175,11 @@ This is local integration plumbing, not a provider-history importer. The branch
 includes opt-in local Git/jj/gh wrapper shims, but does not install Codex,
 Claude, Cursor provider hooks or shell hooks that write the spool
 automatically.
+
+Provider fixture imports fail closed on malformed JSONL or provider mismatches
+before import, so a bad fixture does not leave partial summary records behind.
+Rows that pass CLI preflight but fail during the lower capture import are
+reported in the failed count.
 
 See [../examples/local-record-workflow.sh](../examples/local-record-workflow.sh)
 and [../examples/capture-spool-fixture.sh](../examples/capture-spool-fixture.sh)

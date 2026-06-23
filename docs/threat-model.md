@@ -4,7 +4,8 @@ This document covers the local Work Recorder launch branch. It describes the
 implemented local CLI and the near-term integration points that influence the
 security design. Hosted Option A, hosted sync, hosted accounts, team policy,
 organization dashboards, remote retention, and hosted publish commands are out
-of scope for this launch branch.
+of scope for this launch branch. Local GitHub PR comment publishing through the
+authenticated `gh` CLI is in scope.
 
 ## Security Goals
 
@@ -24,7 +25,8 @@ of scope for this launch branch.
 - Guarantee that third-party tools run by the user do not use the network.
 - Enforce centralized team retention, policy, or DLP controls.
 - Import historical provider transcripts in this branch.
-- Publish pull request comments in this branch.
+- Provide hosted/team pull request publishing; it remains outside launch scope
+  in this branch.
 
 ## Assets
 
@@ -202,17 +204,16 @@ Follow-ups:
 
 ### Pull Request Publishing
 
-The launch branch parses PR URLs and links one PR URL to a local record. It
-does not create, update, or delete pull request comments.
+The launch branch parses PR URLs, links one PR URL to a local record, renders a
+dry-run PR comment, and can create or update one marker-bounded ctx comment on
+a linked GitHub pull request through the authenticated local `gh` CLI. GitLab,
+hosted, and team publishing are outside launch scope.
 
 Risks for current local behavior:
 
 - private repository URLs may be stored in records, reports, dashboards, and
   archives;
 - parsed URL confidence can be mistaken for verified repository access.
-
-Risks for future publishing:
-
 - accidentally posting raw prompts or command output;
 - mutating a PR description instead of a separate ctx-owned comment;
 - publishing stale or cross-repo work records;
@@ -221,17 +222,12 @@ Risks for future publishing:
 Controls:
 
 - `ctx link-pr` is local only;
-- product direction says future publishing should upsert a separate ctx comment
-  by default;
-- inferred links should be confidence labeled.
-
-Required design gates before publisher implementation:
-
-- explicit preview step;
-- redaction pass over publish payloads;
-- repository and PR identity verification;
-- idempotent ctx-owned comment marker;
-- tests for private URL handling and stale record selection.
+- `ctx publish pr-comment --dry-run` provides an explicit preview step;
+- PR comment rendering redacts transcript and secret-like content by default;
+- `--include-raw-transcript` is explicit opt-in;
+- publishing uses an idempotent ctx-owned comment marker;
+- inferred links should be confidence labeled;
+- hosted/team publishing remains out of scope pending a separate threat model.
 
 ### Installer and Update Supply Chain
 

@@ -53,18 +53,22 @@ Work Records can contain:
 - command output with secrets or customer data
 - private repository and pull request links
 
-Treat the ctx data directory like source code. Do not publish it unless the record has been reviewed for sensitive content.
+Treat the ctx data directory like source code. Do not publish it unless the
+record has been reviewed for sensitive content. Default review surfaces such as
+`ctx list`, `ctx show`, `ctx search`, `ctx context`, `ctx report`, dashboard
+HTML, and PR comment rendering redact secret-like values and local paths, but
+raw JSON archives and the local data root remain private data.
 
 The redaction corpus fixture in [redaction-corpus.md](redaction-corpus.md)
-documents synthetic examples that future redaction tests should cover. It is
-not a guarantee that every current output path is automatically redacted.
+documents synthetic examples covered by share-safe review output tests.
 
 ## Network behavior
 
 The local recorder is useful without network sync. This branch does not include
-hosted sync, account login, or pull request comment publishing. Exported JSON
-archives can include full command output payloads and should be reviewed before
-they leave your machine.
+hosted sync or account login. `ctx publish pr-comment` can publish a local
+GitHub PR comment through the authenticated `gh` CLI; hosted/team publishing is
+out of scope. Exported JSON archives can include full command output payloads
+and should be reviewed before they leave your machine.
 
 Agent providers, package managers, GitHub, and other tools you run during the
 task may still use the network according to their own configuration. ctx stores

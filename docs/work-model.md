@@ -63,13 +63,22 @@ future product direction.
 
 ## Pull requests
 
-`ctx link-pr <record-id> <url>` attaches a pull request URL to a record. The link stays with the local record and appears in `show`, reports, exports, and context.
+`ctx link-pr <record-id> <url>` attaches a pull request URL to a record. The
+link stays with the local record and appears in redacted `show`, report, and
+context output as well as private archive export.
+
+`ctx publish pr-comment <record-id>` uses the authenticated local `gh` CLI to
+create or update one marker-bounded ctx comment on the linked GitHub pull
+request. `--dry-run` renders the same comment locally for review. Hosted/team
+publishing is outside the current local-first implementation.
 
 ## Context and reports
 
 `ctx context [query]` renders matching records and evidence as work context.
 `ctx report` summarizes recent recorded work in text or JSON. `ctx dashboard
-export` writes a static local HTML dashboard for visual review.
+export` writes a static local HTML dashboard for visual review. These review
+surfaces redact secret-like values and local paths by default; archive export is
+the private full-fidelity data path.
 
 Use these commands before review, handoff, or resuming a paused task. They turn the local record store into a concise packet of what happened.
 
@@ -93,7 +102,8 @@ URLs before a URL is attached with `ctx link-pr`.
 
 The current open recorder focuses on explicit local records and review packets.
 It does not yet passively capture provider sessions, import existing local agent
-history, publish pull request comments, or sync hosted team data.
+history, or sync hosted team data. Pull request comment publishing is limited
+to local GitHub PR upsert through `gh`.
 
 Hosted team sync, shared policy enforcement, centralized dashboards, and
 organization-level analytics are separate product concerns and are not part of

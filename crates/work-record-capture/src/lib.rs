@@ -180,6 +180,8 @@ pub struct ProviderFixtureImportOptions {
     pub source_path: Option<PathBuf>,
     pub imported_at: DateTime<Utc>,
     pub work_record_id: Option<Uuid>,
+    pub expected_provider: Option<CaptureProvider>,
+    pub allow_partial_failures: bool,
 }
 
 impl Default for ProviderFixtureImportOptions {
@@ -189,6 +191,8 @@ impl Default for ProviderFixtureImportOptions {
             source_path: None,
             imported_at: Utc::now(),
             work_record_id: None,
+            expected_provider: None,
+            allow_partial_failures: false,
         }
     }
 }
@@ -500,6 +504,7 @@ pub fn import_provider_fixture_jsonl(
     let mut summary = ProviderImportSummary::default();
     let mut imported_sessions = BTreeSet::new();
     let mut imported_edges = BTreeSet::new();
+    let mut fixtures = Vec::new();
 
     for (index, line) in reader.lines().enumerate() {
         let line_number = index + 1;
@@ -519,7 +524,28 @@ pub fn import_provider_fixture_jsonl(
                 continue;
             }
         };
+        if let Some(expected_provider) = options.expected_provider {
+            if fixture.provider != expected_provider {
+                summary.failed += 1;
+                summary.failures.push(ProviderImportFailure {
+                    line: line_number,
+                    error: format!(
+                        "provider fixture line {line_number} has provider `{}` but expected `{}`",
+                        fixture.provider.as_str(),
+                        expected_provider.as_str()
+                    ),
+                });
+                continue;
+            }
+        }
+        fixtures.push((line_number, fixture));
+    }
 
+    if summary.failed > 0 && !options.allow_partial_failures {
+        return Ok(summary);
+    }
+
+    for (line_number, fixture) in fixtures {
         match import_provider_fixture_line(
             store,
             &fixture,
@@ -1356,6 +1382,8 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc),
             work_record_id: None,
+            expected_provider: None,
+            allow_partial_failures: false,
         }
     }
 
@@ -1640,7 +1668,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_fixture_replay_reports_malformed_lines_after_partial_import() {
+    fn provider_fixture_replay_rejects_malformed_lines_without_partial_import_by_default() {
         let temp = tempdir();
         let fixture = provider_fixture("malformed-partial.jsonl");
         let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
@@ -1651,6 +1679,23 @@ mod tests {
             fixed_import_options(fixture.clone()),
         )
         .unwrap();
+
+        assert_eq!(summary.imported_sessions, 0);
+        assert_eq!(summary.imported_events, 0);
+        assert_eq!(summary.failed, 1);
+        let session_id = provider_session_uuid(CaptureProvider::Codex, "malformed-partial-session");
+        assert!(store.events_for_session(session_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn provider_fixture_replay_allows_explicit_partial_import() {
+        let temp = tempdir();
+        let fixture = provider_fixture("malformed-partial.jsonl");
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let mut options = fixed_import_options(fixture.clone());
+        options.allow_partial_failures = true;
+
+        let summary = import_provider_fixture_jsonl(&fixture, &mut store, options).unwrap();
 
         assert_eq!(summary.imported_sessions, 1);
         assert_eq!(summary.imported_events, 2);
@@ -1668,5 +1713,22 @@ mod tests {
             .payload
             .to_string()
             .contains("Valid event after malformed line."));
+    }
+
+    #[test]
+    fn provider_fixture_replay_rejects_expected_provider_mismatch() {
+        let temp = tempdir();
+        let fixture = provider_fixture("claude.jsonl");
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let mut options = fixed_import_options(fixture.clone());
+        options.expected_provider = Some(CaptureProvider::Codex);
+
+        let summary = import_provider_fixture_jsonl(fixture, &mut store, options).unwrap();
+
+        assert_eq!(summary.imported, 0);
+        assert_eq!(summary.failed, 2);
+        assert!(summary.failures.iter().all(|failure| failure
+            .error
+            .contains("has provider `claude` but expected `codex`")));
     }
 }

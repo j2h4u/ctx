@@ -120,7 +120,9 @@ pub fn summarize(records: &[WorkRecord], evidence: &[Evidence]) -> ReportSummary
     let mut tag_counts = std::collections::BTreeMap::<String, usize>::new();
     for record in records {
         for tag in &record.tags {
-            *tag_counts.entry(tag.clone()).or_default() += 1;
+            *tag_counts
+                .entry(redact_share_safe_markers(tag))
+                .or_default() += 1;
         }
     }
 
@@ -274,7 +276,11 @@ pub fn render_evidence_report_markdown(report: &DashboardReport<'_>) -> String {
     out.push_str(&format!("- Records: {}\n", report.summary.record_count));
     out.push_str(&format!("- Commands: {}\n", report.commands.len()));
     out.push_str(&format!(
-        "- Pull requests: {}\n",
+        "- Linked PR URLs: {}\n",
+        report.summary.linked_pr_count
+    ));
+    out.push_str(&format!(
+        "- Typed PR records: {}\n",
         report.pull_requests.len()
     ));
     out.push_str(&format!(

@@ -2,12 +2,13 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
 # shellcheck source=scripts/ci-common.sh
 source "${script_dir}/ci-common.sh"
 
 usage() {
   cat <<'USAGE'
-usage: scripts/check.sh [all|fmt|docs|check|clippy|test|examples|bazel|platform-smoke|provider-fixtures|rich-search-context|dashboard-report-artifact-review|pr-publish-dry-run|security-archive-fixtures|jj-e2e-blocker-status|installer-dry-run-smoke|completion-certificate]...
+usage: scripts/check.sh [all|fmt|docs|check|clippy|test|examples|bazel|platform-smoke|provider-fixtures|rich-search-context|dashboard-report-artifact-review|pr-publish-dry-run|security-archive-fixtures|jj-e2e-blocker-status|installer-dry-run-smoke|completion-certificate|completion-certificate-self-test]...
 
 Runs resource-capped local checks sequentially. Defaults to "all".
 Environment overrides:
@@ -41,6 +42,23 @@ file_contains() {
   fi
 
   grep -F -q -- "${text}" "${file}"
+}
+
+sha256_file() {
+  local path="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${path}" | awk '{ print $1 }'
+    return 0
+  fi
+
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${path}" | awk '{ print $1 }'
+    return 0
+  fi
+
+  printf 'sha256sum or shasum is required\n' >&2
+  return 1
 }
 
 run_fmt() {
@@ -221,7 +239,7 @@ run_rich_search_context() {
 }
 
 run_dashboard_report_artifact_review() {
-  local bin data_root record_json record_id report_json dashboard_index
+  local bin data_root record_json record_id report_json dashboard_index dogfood_dir fake_browser fake_firefox
 
   bin="$(ctx_debug_bin)"
   data_root="$(mktemp -d "${TMPDIR}/ctx-dashboard-report.XXXXXX")"
@@ -242,6 +260,42 @@ run_dashboard_report_artifact_review() {
   test -s "${dashboard_index}"
   file_contains "${report_json}" '"record_count"'
   file_contains "${dashboard_index}" "dashboard report artifact review"
+  dogfood_dir="${CTX_ARTIFACT_DIR}/dogfood-sanitizer"
+  fake_browser="${TMPDIR}/ctx-fake-browser"
+  fake_firefox="${TMPDIR}/ctx-fake-firefox"
+  cat >"${fake_browser}" <<EOF
+#!/usr/bin/env bash
+printf 'fake browser failed from %s and %s\n' "${repo_root}" "${HOME:-}" >&2
+exit 1
+EOF
+  cat >"${fake_firefox}" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "${fake_browser}" "${fake_firefox}"
+  rm -rf "${dogfood_dir}" "${CTX_ARTIFACT_DIR}/dogfood-data"
+  ctx_run_timed "dashboard-dogfood-sanitizer" env \
+    CTX_BIN="${bin}" \
+    CTX_DASHBOARD_REVIEW_BROWSER="${fake_browser}" \
+    CTX_DASHBOARD_REVIEW_FIREFOX="${fake_firefox}" \
+    TMPDIR="${TMPDIR}" \
+    scripts/dashboard-review-dogfood.sh \
+      --seed-live \
+      --output "${dogfood_dir}" \
+      --data-root "${CTX_ARTIFACT_DIR}/dogfood-data"
+  file_contains "${dogfood_dir}/manifest.json" '"raw_archive_exported": false'
+  if grep -R -F -q -- "${repo_root}" "${dogfood_dir}"; then
+    printf 'dogfood sanitizer leaked repo root into default artifacts\n' >&2
+    return 1
+  fi
+  if [[ -n "${HOME:-}" ]] && grep -R -F -q -- "${HOME}" "${dogfood_dir}"; then
+    printf 'dogfood sanitizer leaked home path into default artifacts\n' >&2
+    return 1
+  fi
+  if grep -R -E -q 'ghp_1234567890abcdef|hunter2|fake_secret_value|chrome-profile|firefox-tmp' "${dogfood_dir}"; then
+    printf 'dogfood sanitizer leaked secret marker or browser scratch path\n' >&2
+    return 1
+  fi
   write_mode_summary "dashboard-report-artifact-review" "passed" "report JSON and dashboard HTML artifacts were generated for review"
 }
 
@@ -258,9 +312,9 @@ run_pr_publish_dry_run() {
     --json)"
   record_id="$(printf '%s\n' "${record_json}" | sed -n 's/.*"id": "\([^"]*\)".*/\1/p')"
   test -n "${record_id}"
+  mkdir -p "${CTX_ARTIFACT_DIR}"
   ctx_run_timed "pr-link" capture_output "${CTX_ARTIFACT_DIR}/linked-pr.json" env CTX_DATA_ROOT="${data_root}" "${bin}" link-pr "${record_id}" "https://github.com/example/project/pull/42" --json
   markdown="${CTX_ARTIFACT_DIR}/pr-comment-dry-run.md"
-  mkdir -p "${CTX_ARTIFACT_DIR}"
   ctx_run_timed "pr-comment-dry-run" capture_output "${markdown}" env CTX_DATA_ROOT="${data_root}" "${bin}" publish pr-comment "${record_id}" --dry-run
   file_contains "${markdown}" "ctx-work-record:finished-product:start"
   file_contains "${markdown}" "PR publish dry-run fixture"
@@ -381,22 +435,49 @@ EOF
   write_mode_summary "installer-dry-run-smoke" "passed" "validated installer dry-run plus insecure metadata, placeholder checksum, and unsafe artifact refusals"
 }
 
-write_release_evidence_fixture() {
+write_release_evidence_self_test_fixture() {
   local root="$1"
   local platform="$2"
   local target="$3"
-  local sha="$4"
   local platform_key="${platform//-/_}"
   local dir="${root}/artifacts/buildkite/release-dry-run/${platform}"
+  local suffix=""
+  local artifact
+  local artifact_path
+  local checksum bytes
 
+  if [[ "${platform}" == "windows-x64" ]]; then
+    suffix=".exe"
+  fi
+  artifact="ctx-0.0.0-smoke-${target}${suffix}"
+  artifact_path="artifacts/buildkite/release-dry-run/${platform}/${artifact}"
   mkdir -p "${dir}"
+  printf 'ctx dry-run artifact self-test fixture for %s\n' "${platform}" > "${root}/${artifact_path}"
+  chmod 0755 "${root}/${artifact_path}" 2>/dev/null || true
+  checksum="$(sha256_file "${root}/${artifact_path}")"
+  bytes="$(wc -c < "${root}/${artifact_path}" | tr -d '[:space:]')"
+  printf '%s  %s\n' "${checksum}" "${artifact}" > "${dir}/checksums.sha256"
   cat > "${dir}/manifest.json" <<EOF
 {
   "schema_version": 1,
+  "dry_run": true,
+  "upload": false,
+  "package": "ctx",
+  "version": "0.0.0-smoke",
   "platform": "${platform}",
   "target_triple": "${target}",
-  "dry_run": true,
-  "upload": false
+  "host_triple": "${target}",
+  "expected_host_triple": "${target}",
+  "git_commit": "$(git rev-parse HEAD)",
+  "git_branch": "$(git branch --show-current)",
+  "generated_at_unix_s": 1,
+  "artifacts": [
+    {
+      "path": "${artifact_path}",
+      "sha256": "${checksum}",
+      "bytes": ${bytes}
+    }
+  ]
 }
 EOF
   cat > "${dir}/ctx-release-metadata.env" <<EOF
@@ -404,48 +485,95 @@ CTX_RELEASE_SCHEMA_VERSION=1
 CTX_RELEASE_CHANNEL=dry-run
 CTX_RELEASE_VERSION=0.0.0-smoke
 CTX_RELEASE_BASE_URL=https://example.invalid/ctx
-CTX_RELEASE_ARTIFACT_${platform_key}=ctx-0.0.0-smoke-${target}
-CTX_RELEASE_SHA256_${platform_key}=${sha}
+CTX_RELEASE_ARTIFACT_${platform_key}=${artifact}
+CTX_RELEASE_SHA256_${platform_key}=${checksum}
 EOF
 }
 
-copy_completion_evidence() {
+run_completion_certificate_prerequisites() {
   local root="$1"
-  local source="$2"
-  local dest="$3"
 
-  if [[ ! -s "${source}" ]]; then
-    printf 'missing local completion evidence: %s\n' "${source}" >&2
-    return 1
+  CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/pipeline-contract" bash scripts/check-buildkite-pipeline.sh
+  CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/release-blockers/freebsd-x64" bash scripts/release-platform-blocker.sh freebsd-x64
+
+  CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/finished-product/provider-fixtures" run_provider_fixtures
+  CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/finished-product/rich-search-context" run_rich_search_context
+  CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/finished-product/dashboard-report-artifact-review" run_dashboard_report_artifact_review
+  CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/finished-product/pr-publish-dry-run" run_pr_publish_dry_run
+  CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/finished-product/security-archive-fixtures" run_security_archive_fixtures
+  CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/finished-product/jj-e2e-blocker-status" run_jj_e2e_blocker_status
+  CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/finished-product/installer-dry-run-smoke" run_installer_dry_run_smoke
+}
+
+run_completion_certificate_release_prerequisites() {
+  local root="$1"
+  local host_triple
+
+  if ! command -v rustc >/dev/null 2>&1; then
+    return 0
   fi
-  mkdir -p "$(dirname "${root}/${dest}")"
-  cp "${source}" "${root}/${dest}"
+  host_triple="$(ctx_detect_host_triple)"
+  case "${host_triple}" in
+    x86_64-unknown-linux-gnu)
+      CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/release-dry-run/linux-x64" \
+        CTX_RELEASE_PLATFORM=linux-x64 \
+        CTX_RELEASE_TARGET_TRIPLE=x86_64-unknown-linux-gnu \
+        CTX_EXPECT_HOST_TRIPLE=x86_64-unknown-linux-gnu \
+        bash scripts/release-dry-run.sh
+      ;;
+    aarch64-apple-darwin)
+      CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/release-dry-run/macos-arm64" \
+        CTX_RELEASE_PLATFORM=macos-arm64 \
+        CTX_RELEASE_TARGET_TRIPLE=aarch64-apple-darwin \
+        CTX_EXPECT_HOST_TRIPLE=aarch64-apple-darwin \
+        bash scripts/release-dry-run.sh
+      ;;
+    x86_64-apple-darwin)
+      CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/release-dry-run/macos-x64" \
+        CTX_RELEASE_PLATFORM=macos-x64 \
+        CTX_RELEASE_TARGET_TRIPLE=x86_64-apple-darwin \
+        CTX_EXPECT_HOST_TRIPLE=x86_64-apple-darwin \
+        bash scripts/release-dry-run.sh
+      ;;
+    x86_64-pc-windows-gnu)
+      ;;
+  esac
 }
 
 run_completion_certificate() {
   local root="${CTX_ARTIFACT_DIR}/completion-evidence-root"
 
   rm -rf "${root}"
-  mkdir -p "${root}/artifacts/buildkite/pipeline-contract" \
-    "${root}/artifacts/buildkite/release-blockers/freebsd-x64"
-  printf 'local pipeline contract fixture\n' > "${root}/artifacts/buildkite/pipeline-contract/pipeline-contract.txt"
-  printf '{"schema_version":1,"platform":"freebsd-x64","publishing": false,"status":"blocked"}\n' \
-    > "${root}/artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json"
-
-  write_release_evidence_fixture "${root}" "linux-x64" "x86_64-unknown-linux-gnu" "1111111111111111111111111111111111111111111111111111111111111111"
-  write_release_evidence_fixture "${root}" "macos-arm64" "aarch64-apple-darwin" "2222222222222222222222222222222222222222222222222222222222222222"
-  write_release_evidence_fixture "${root}" "macos-x64" "x86_64-apple-darwin" "3333333333333333333333333333333333333333333333333333333333333333"
-  write_release_evidence_fixture "${root}" "windows-x64" "x86_64-pc-windows-gnu" "4444444444444444444444444444444444444444444444444444444444444444"
-
-  copy_completion_evidence "${root}" "${CTX_ARTIFACT_DIR}/provider-fixtures.json" "artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json"
-  copy_completion_evidence "${root}" "${CTX_ARTIFACT_DIR}/rich-context.json" "artifacts/buildkite/finished-product/rich-search-context/rich-context.json"
-  copy_completion_evidence "${root}" "${CTX_ARTIFACT_DIR}/report.json" "artifacts/buildkite/finished-product/dashboard-report-artifact-review/report.json"
-  copy_completion_evidence "${root}" "${CTX_ARTIFACT_DIR}/pr-comment-dry-run.md" "artifacts/buildkite/finished-product/pr-publish-dry-run/pr-comment-dry-run.md"
-  copy_completion_evidence "${root}" "${CTX_ARTIFACT_DIR}/security-archive-fixtures.md" "artifacts/buildkite/finished-product/security-archive-fixtures/security-archive-fixtures.md"
-  copy_completion_evidence "${root}" "${CTX_ARTIFACT_DIR}/jj-e2e-blocker-status.txt" "artifacts/buildkite/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.txt"
-  copy_completion_evidence "${root}" "${CTX_ARTIFACT_DIR}/install-dry-run.txt" "artifacts/buildkite/finished-product/installer-dry-run-smoke/install-dry-run.txt"
+  mkdir -p "${root}"
+  run_completion_certificate_prerequisites "${root}"
+  run_completion_certificate_release_prerequisites "${root}"
 
   CTX_COMPLETION_EVIDENCE_ROOT="${root}" bash scripts/release-completion-certificate.sh
+}
+
+run_completion_certificate_self_test() {
+  local root="${CTX_ARTIFACT_DIR}/completion-certificate-self-test-evidence-root"
+  local empty_root="${CTX_ARTIFACT_DIR}/completion-certificate-empty-evidence-root"
+  local negative_output="${CTX_ARTIFACT_DIR}/completion-certificate-empty-evidence.txt"
+
+  rm -rf "${root}"
+  mkdir -p "${root}"
+  run_completion_certificate_prerequisites "${root}"
+
+  write_release_evidence_self_test_fixture "${root}" "linux-x64" "x86_64-unknown-linux-gnu"
+  write_release_evidence_self_test_fixture "${root}" "macos-arm64" "aarch64-apple-darwin"
+  write_release_evidence_self_test_fixture "${root}" "macos-x64" "x86_64-apple-darwin"
+  write_release_evidence_self_test_fixture "${root}" "windows-x64" "x86_64-pc-windows-gnu"
+
+  CTX_COMPLETION_EVIDENCE_ROOT="${root}" bash scripts/release-completion-certificate.sh
+
+  rm -rf "${empty_root}"
+  mkdir -p "${empty_root}"
+  if CTX_COMPLETION_EVIDENCE_ROOT="${empty_root}" bash scripts/release-completion-certificate.sh >"${negative_output}" 2>&1; then
+    printf 'completion certificate unexpectedly passed with empty evidence root\n' >&2
+    return 1
+  fi
+  file_contains "${negative_output}" "required evidence is missing or empty"
 }
 
 run_bazel() {
@@ -535,6 +663,9 @@ run_mode() {
     completion-certificate)
       run_completion_certificate
       ;;
+    completion-certificate-self-test)
+      run_completion_certificate_self_test
+      ;;
     all)
       run_mode fmt
       run_mode docs
@@ -550,6 +681,7 @@ run_mode() {
       run_mode security-archive-fixtures
       run_mode jj-e2e-blocker-status
       run_mode installer-dry-run-smoke
+      run_mode completion-certificate-self-test
       ;;
     -h|--help|help)
       usage

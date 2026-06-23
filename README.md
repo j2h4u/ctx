@@ -3,8 +3,8 @@
 </p>
 
 ctx is being productized around **Work Records**: durable, local records of
-agent-assisted work that can be searched, reviewed, exported, and later attached
-to pull requests or team workflows.
+agent-assisted work that can be searched, reviewed, exported, and attached to
+pull requests through local CLI workflows.
 
 This branch is an early local Work Recorder. It is useful today for explicit
 records, command evidence, pull request links, search, reports, context output,
@@ -262,8 +262,10 @@ The Work Recorder direction remains local-first:
   if capture fails.
 - Hosted sync should not upload raw transcripts by default; full transcript sync
   should be explicit opt-in.
-- Pull request publishing should eventually upsert a separate ctx comment by
-  default instead of mutating the PR description.
+- Pull request publishing in this branch is local GitHub PR comment upsert via
+  the authenticated `gh` CLI; hosted/team publishing remains out of scope.
+- PR publishing should upsert a separate ctx comment by default instead of
+  mutating the PR description.
 - Inferred links between records, repos, commits, and PRs should be confidence
   labeled rather than presented as facts.
 

@@ -549,6 +549,7 @@ fn provider_fixture_import_json_reports_counts_and_summary_record() {
     let payload = json_output(&mut command);
 
     assert_eq!(payload["schema_version"], 1);
+    assert_eq!(payload["share_safe"], true);
     assert_eq!(payload["provider"], "codex");
     assert_eq!(payload["import"]["imported_sessions"], 2);
     assert_eq!(payload["import"]["imported_events"], 3);
@@ -558,6 +559,15 @@ fn provider_fixture_import_json_reports_counts_and_summary_record() {
     assert_eq!(
         payload["record"]["title"],
         "Imported codex provider fixture"
+    );
+    let rendered = serde_json::to_string(&payload).unwrap();
+    assert!(
+        !rendered.contains(&fixture),
+        "provider import JSON leaked raw fixture path: {rendered}"
+    );
+    assert!(
+        rendered.contains("[REDACTED_PATH]"),
+        "provider import JSON did not mark path redaction: {rendered}"
     );
 
     let mut second = ctx(&temp);
@@ -574,6 +584,82 @@ fn provider_fixture_import_json_reports_counts_and_summary_record() {
     assert_eq!(second_payload["import"]["imported_sessions"], 0);
     assert_eq!(second_payload["import"]["imported_events"], 0);
     assert_eq!(second_payload["record"], Value::Null);
+}
+
+#[test]
+fn provider_fixture_import_rejects_malformed_lines_without_partial_import() {
+    let temp = tempdir();
+    let fixture = temp.path().join("malformed-provider.jsonl");
+    let valid = fs::read_to_string(provider_fixture("codex.jsonl")).unwrap();
+    fs::write(
+        &fixture,
+        format!(
+            "{}\n{{not json}}\n{}\n",
+            valid.lines().next().unwrap(),
+            valid.lines().nth(1).unwrap()
+        ),
+    )
+    .unwrap();
+
+    let mut command = ctx(&temp);
+    command.args([
+        "capture",
+        "import-provider",
+        "--provider",
+        "codex",
+        "--input",
+        fixture.to_str().unwrap(),
+        "--json",
+    ]);
+    command
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("parse provider fixture line 2"));
+
+    let mut list = ctx(&temp);
+    list.args(["list", "--json"]);
+    let payload = json_output(&mut list);
+    assert_eq!(payload["records"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn provider_fixture_import_rejects_provider_mismatch_without_partial_import() {
+    let temp = tempdir();
+    let fixture = temp.path().join("provider-mismatch.jsonl");
+    let codex = fs::read_to_string(provider_fixture("codex.jsonl")).unwrap();
+    let claude = fs::read_to_string(provider_fixture("claude.jsonl")).unwrap();
+    fs::write(
+        &fixture,
+        format!(
+            "{}\n{}\n",
+            claude.lines().next().unwrap(),
+            codex.lines().next().unwrap()
+        ),
+    )
+    .unwrap();
+
+    ctx(&temp)
+        .args([
+            "capture",
+            "import-provider",
+            "--provider",
+            "codex",
+            "--input",
+            fixture.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "provider fixture line 1 has provider `claude` but --provider is `codex`",
+        ));
+
+    let mut list = ctx(&temp);
+    list.args(["list", "--json"]);
+    let payload = json_output(&mut list);
+    assert_eq!(payload["records"].as_array().unwrap().len(), 0);
 }
 
 #[test]
@@ -675,6 +761,57 @@ fn dashboard_and_report_artifact_lane_is_rich_after_provider_import_evidence_and
     assert!(!html.contains("fake-password-123"));
     assert!(!html.contains("/home/alice/work"));
     assert!(!html.contains("fixture-token-value"));
+}
+
+#[test]
+fn active_review_surfaces_redact_record_secrets_paths_and_report_tags() {
+    let temp = tempdir();
+    let item = record(
+        &temp,
+        "Fix auth token=ghp_1234567890abcdef",
+        "body has password=hunter2 in /home/alice/src/acme-secret",
+        &["secret=fake_secret_value", "/Users/alice/src/acme-secret"],
+    );
+    let id = item["id"].as_str().unwrap();
+
+    ctx(&temp)
+        .args([
+            "link-pr",
+            id,
+            "https://x-access-token:ghp_secret@github.com/ctxrs/ctx/pull/99",
+        ])
+        .assert()
+        .success();
+
+    let mut saw_redaction_marker = false;
+    for args in [
+        vec!["show", id],
+        vec!["show", id, "--json"],
+        vec!["list"],
+        vec!["list", "--json"],
+        vec!["search", "password=hunter2"],
+        vec!["search", "password=hunter2", "--json"],
+        vec!["report"],
+        vec!["report", "--format", "json"],
+    ] {
+        let output = ctx(&temp)
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let rendered = String::from_utf8(output).unwrap();
+        saw_redaction_marker |=
+            rendered.contains("[REDACTED_SECRET]") || rendered.contains("[REDACTED_PATH]");
+        assert!(!rendered.contains("ghp_1234567890abcdef"));
+        assert!(!rendered.contains("hunter2"));
+        assert!(!rendered.contains("fake_secret_value"));
+        assert!(!rendered.contains("/home/alice/src/acme-secret"));
+        assert!(!rendered.contains("/Users/alice/src/acme-secret"));
+        assert!(!rendered.contains("x-access-token:ghp_secret@"));
+    }
+    assert!(saw_redaction_marker);
 }
 
 #[test]

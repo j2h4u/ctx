@@ -6,6 +6,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use sha2::{Digest, Sha256};
@@ -52,6 +55,8 @@ pub enum StoreError {
     ArchiveArtifactPathMismatch { id: Uuid },
     #[error("archive artifact {id} blob file is not a regular file: {path:?}")]
     ArchiveArtifactNonRegularFile { id: Uuid, path: PathBuf },
+    #[error("archive artifact {id} is missing matching blob content")]
+    ArchiveArtifactMissingContent { id: Uuid },
     #[error("provider event conflict for {provider}/{external_session_id} at index {provider_index}: existing hash {existing_hash}, new hash {new_hash}")]
     ProviderEventConflict {
         provider: String,
@@ -786,14 +791,27 @@ impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
+            if parent.file_name().and_then(|name| name.to_str()) == Some("work-record") {
+                if let Some(data_root) = parent.parent() {
+                    fs::create_dir_all(data_root)?;
+                    restrict_private_dir(data_root)?;
+                }
+            }
             fs::create_dir_all(parent)?;
+            restrict_private_dir(parent)?;
         }
         let blob_dir = path
             .parent()
             .map(|parent| parent.join("blobs"))
             .unwrap_or_else(|| PathBuf::from("blobs"));
         fs::create_dir_all(&blob_dir)?;
+        restrict_private_dir(&blob_dir)?;
+        if let Some(inbox_dir) = path.parent().map(|parent| parent.join("inbox")) {
+            fs::create_dir_all(&inbox_dir)?;
+            restrict_private_dir(&inbox_dir)?;
+        }
         let conn = Connection::open(&path)?;
+        restrict_private_file(&path)?;
         configure_connection(&conn)?;
         let store = Self {
             path,
@@ -2179,13 +2197,19 @@ impl Store {
         let relative_path = format!("blobs/{shard}/{hash}");
         let absolute_dir = self.blob_dir.join(shard);
         fs::create_dir_all(&absolute_dir)?;
+        restrict_private_dir(&absolute_dir)?;
         let absolute_path = absolute_dir.join(&hash);
-        if !absolute_path.exists() {
-            fs::write(&absolute_path, content.as_bytes())?;
-        }
+        let id = new_id();
+        store_blob_content_if_missing(
+            id,
+            &absolute_path,
+            content.as_bytes(),
+            &hash,
+            content.len() as u64,
+        )?;
 
         let now = timestamp_ms(Utc::now());
-        let id = new_id().to_string();
+        let id = id.to_string();
         self.conn.execute(
             r#"
             INSERT OR IGNORE INTO artifacts
@@ -2384,6 +2408,7 @@ impl Store {
 
     pub fn import_archive(&mut self, archive: &WorkRecordArchive, overwrite: bool) -> Result<()> {
         validate_archive_version(archive)?;
+        reject_archive_event_internal_conflicts(archive)?;
         validate_import_evidence_references(&self.conn, archive)?;
         let archive_artifacts = archive_artifacts_by_evidence(archive);
         let blob_dir = self.blob_dir.clone();
@@ -2403,8 +2428,8 @@ impl Store {
                 upsert_evidence_tx(&tx, &blob_dir, evidence, None)?;
             }
         }
+        import_rich_archive_entities_tx(&tx, &blob_dir, archive)?;
         tx.commit()?;
-        self.import_rich_archive_entities(archive)?;
         self.rebuild_search_projection()?;
         Ok(())
     }
@@ -2419,6 +2444,7 @@ impl Store {
         overwrite: bool,
     ) -> Result<()> {
         validate_archive_version(archive)?;
+        reject_archive_event_internal_conflicts(archive)?;
         validate_import_evidence_references(&self.conn, archive)?;
         let archive_artifacts = archive_artifacts_by_evidence(archive);
         let blob_dir = self.blob_dir.clone();
@@ -2443,8 +2469,8 @@ impl Store {
                 upsert_evidence_tx(&tx, &blob_dir, evidence, Some(source_id))?;
             }
         }
+        import_rich_archive_entities_tx(&tx, &blob_dir, archive)?;
         tx.commit()?;
-        self.import_rich_archive_entities(archive)?;
         self.rebuild_search_projection()?;
         Ok(())
     }
@@ -2480,58 +2506,6 @@ impl Store {
             ));
         }
         Ok(findings)
-    }
-
-    fn import_rich_archive_entities(&mut self, archive: &WorkRecordArchive) -> Result<()> {
-        if archive.schema_version < 2 && archive.version < 2 {
-            return Ok(());
-        }
-
-        for source in &archive.capture_sources {
-            self.upsert_capture_source(source)?;
-        }
-
-        for workspace in &archive.vcs_workspaces {
-            self.upsert_vcs_workspace(workspace)?;
-        }
-
-        let blob_dir = self.blob_dir.clone();
-        {
-            let tx = self.conn.transaction()?;
-            for artifact in &archive.artifacts {
-                store_archive_artifact_tx(&tx, &blob_dir, artifact)?;
-            }
-            tx.commit()?;
-        }
-        for artifact in &archive.artifact_records {
-            self.upsert_artifact(artifact)?;
-        }
-
-        for session in &archive.sessions {
-            self.upsert_session(session)?;
-        }
-        for run in &archive.runs {
-            self.upsert_run(run)?;
-        }
-        for event in &archive.events {
-            self.upsert_event(event)?;
-        }
-        for change in &archive.vcs_changes {
-            self.upsert_vcs_change(change)?;
-        }
-        for pr in &archive.pull_requests {
-            self.upsert_pull_request(pr)?;
-        }
-        for summary in &archive.summaries {
-            self.upsert_summary(summary)?;
-        }
-        for file in &archive.files_touched {
-            self.upsert_file_touched(file)?;
-        }
-        for link in &archive.work_record_links {
-            self.upsert_work_record_link(link)?;
-        }
-        Ok(())
     }
 
     fn archive_artifacts(&self) -> Result<Vec<WorkRecordArchiveArtifact>> {
@@ -2833,12 +2807,24 @@ fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
 }
 
 fn reject_provider_event_hash_conflict(conn: &Connection, dedupe_key: &str) -> Result<()> {
+    let mut stmt = conn.prepare("SELECT dedupe_key FROM events WHERE dedupe_key IS NOT NULL")?;
+    reject_provider_event_hash_conflict_from_rows(dedupe_key, &mut stmt)
+}
+
+fn reject_provider_event_hash_conflict_tx(tx: &Transaction<'_>, dedupe_key: &str) -> Result<()> {
+    let mut stmt = tx.prepare("SELECT dedupe_key FROM events WHERE dedupe_key IS NOT NULL")?;
+    reject_provider_event_hash_conflict_from_rows(dedupe_key, &mut stmt)
+}
+
+fn reject_provider_event_hash_conflict_from_rows(
+    dedupe_key: &str,
+    stmt: &mut rusqlite::Statement<'_>,
+) -> Result<()> {
     let Some((provider, external_session_id, provider_index, new_hash)) =
         parse_provider_event_dedupe_key(dedupe_key)
     else {
         return Ok(());
     };
-    let mut stmt = conn.prepare("SELECT dedupe_key FROM events WHERE dedupe_key IS NOT NULL")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     for row in rows {
         let existing_key = row?;
@@ -2999,6 +2985,72 @@ fn ensure_regular_blob_file(id: Uuid, path: &Path) -> Result<()> {
     }
 }
 
+fn ensure_existing_blob_content(
+    id: Uuid,
+    path: &Path,
+    expected_hash: &str,
+    expected_size: u64,
+) -> Result<()> {
+    ensure_regular_blob_file(id, path)?;
+    let content = fs::read(path)?;
+    let hash = sha256_hex(&content);
+    if hash != expected_hash {
+        return Err(StoreError::ArchiveArtifactHashMismatch { id });
+    }
+    if content.len() as u64 != expected_size {
+        return Err(StoreError::ArchiveArtifactSizeMismatch { id });
+    }
+    restrict_private_file(path)?;
+    Ok(())
+}
+
+fn store_blob_content_if_missing(
+    id: Uuid,
+    path: &Path,
+    content: &[u8],
+    expected_hash: &str,
+    expected_size: u64,
+) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => ensure_existing_blob_content(id, path, expected_hash, expected_size),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            use std::io::Write as _;
+
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)?;
+            file.write_all(content)?;
+            file.sync_all()?;
+            drop(file);
+            restrict_private_file(path)
+        }
+        Err(err) => Err(StoreError::Io(err)),
+    }
+}
+
+#[cfg(unix)]
+fn restrict_private_dir(path: &Path) -> Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_private_dir(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_private_file(path: &Path) -> Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_private_file(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
 pub fn validate_archive_version(archive: &WorkRecordArchive) -> Result<()> {
     if matches!((archive.schema_version, archive.version), (1, 1) | (2, 2)) {
         Ok(())
@@ -3072,6 +3124,7 @@ fn reject_import_conflicts(tx: &Transaction<'_>, archive: &WorkRecordArchive) ->
             });
         }
     }
+    reject_rich_import_conflicts(tx, archive)?;
     Ok(())
 }
 
@@ -3081,6 +3134,572 @@ fn row_exists(tx: &Transaction<'_>, table: &str, id: Uuid) -> Result<bool> {
         .query_row(&sql, params![id.to_string()], |_| Ok(()))
         .optional()?
         .is_some())
+}
+
+fn reject_rich_import_conflicts(tx: &Transaction<'_>, archive: &WorkRecordArchive) -> Result<()> {
+    if archive.schema_version < 2 && archive.version < 2 {
+        return Ok(());
+    }
+
+    for source in &archive.capture_sources {
+        reject_entity_conflict(
+            existing_capture_source_by_id(tx, source.id)?,
+            source,
+            "capture_source",
+            source.id,
+        )?;
+        if let Some(external_session_id) = &source.descriptor.external_session_id {
+            reject_entity_conflict(
+                existing_capture_source_by_external_session(
+                    tx,
+                    source.descriptor.provider,
+                    external_session_id,
+                )?,
+                source,
+                "capture_source",
+                source.id,
+            )?;
+        }
+    }
+    for workspace in &archive.vcs_workspaces {
+        reject_entity_conflict(
+            existing_vcs_workspace_by_id(tx, workspace.id)?,
+            workspace,
+            "vcs_workspace",
+            workspace.id,
+        )?;
+        reject_entity_conflict(
+            existing_vcs_workspace_by_identity(tx, workspace)?,
+            workspace,
+            "vcs_workspace",
+            workspace.id,
+        )?;
+    }
+    for artifact in &archive.artifacts {
+        reject_archive_artifact_conflict(tx, artifact)?;
+    }
+    for artifact in &archive.artifact_records {
+        reject_entity_conflict(
+            existing_artifact_by_id(tx, artifact.id)?,
+            artifact,
+            "artifact",
+            artifact.id,
+        )?;
+        reject_entity_conflict(
+            existing_artifact_by_identity(tx, artifact)?,
+            artifact,
+            "artifact",
+            artifact.id,
+        )?;
+    }
+    for session in &archive.sessions {
+        reject_entity_conflict(
+            existing_session_by_id(tx, session.id)?,
+            session,
+            "session",
+            session.id,
+        )?;
+        if let Some(external_session_id) = &session.external_session_id {
+            reject_entity_conflict(
+                existing_session_by_external_session(tx, session.provider, external_session_id)?,
+                session,
+                "session",
+                session.id,
+            )?;
+        }
+    }
+    for run in &archive.runs {
+        reject_entity_conflict(existing_run_by_id(tx, run.id)?, run, "run", run.id)?;
+    }
+    for event in &archive.events {
+        reject_entity_conflict(
+            existing_event_by_id(tx, event.id)?,
+            event,
+            "event",
+            event.id,
+        )?;
+        reject_entity_conflict(
+            existing_event_by_seq(tx, event.seq)?,
+            event,
+            "event",
+            event.id,
+        )?;
+        if let Some(dedupe_key) = &event.dedupe_key {
+            reject_provider_event_hash_conflict_tx(tx, dedupe_key)?;
+            reject_entity_conflict(
+                existing_event_by_dedupe_key(tx, dedupe_key)?,
+                event,
+                "event",
+                event.id,
+            )?;
+        }
+    }
+    for change in &archive.vcs_changes {
+        reject_entity_conflict(
+            existing_vcs_change_by_id(tx, change.id)?,
+            change,
+            "vcs_change",
+            change.id,
+        )?;
+        reject_entity_conflict(
+            existing_vcs_change_by_identity(tx, change)?,
+            change,
+            "vcs_change",
+            change.id,
+        )?;
+    }
+    for pr in &archive.pull_requests {
+        reject_entity_conflict(
+            existing_pull_request_by_id(tx, pr.id)?,
+            pr,
+            "pull_request",
+            pr.id,
+        )?;
+        if let (Some(owner), Some(repo), Some(number)) = (&pr.owner, &pr.repo, pr.number) {
+            reject_entity_conflict(
+                existing_pull_request_by_identity(tx, pr.provider, owner, repo, number)?,
+                pr,
+                "pull_request",
+                pr.id,
+            )?;
+        }
+    }
+    for summary in &archive.summaries {
+        reject_entity_conflict(
+            existing_summary_by_id(tx, summary.id)?,
+            summary,
+            "summary",
+            summary.id,
+        )?;
+    }
+    for file in &archive.files_touched {
+        reject_entity_conflict(
+            existing_file_touched_by_id(tx, file.id)?,
+            file,
+            "file_touched",
+            file.id,
+        )?;
+    }
+    for link in &archive.work_record_links {
+        reject_entity_conflict(
+            existing_work_record_link_by_id(tx, link.id)?,
+            link,
+            "work_record_link",
+            link.id,
+        )?;
+        reject_entity_conflict(
+            existing_work_record_link_by_identity(tx, link)?,
+            link,
+            "work_record_link",
+            link.id,
+        )?;
+    }
+    Ok(())
+}
+
+fn reject_archive_event_internal_conflicts(archive: &WorkRecordArchive) -> Result<()> {
+    let mut seen_seq: HashMap<u64, &Event> = HashMap::new();
+    let mut seen_provider_events: HashMap<(String, String, u64), String> = HashMap::new();
+
+    for event in &archive.events {
+        if let Some(existing) = seen_seq.insert(event.seq, event) {
+            if existing != event {
+                return Err(StoreError::ImportConflict {
+                    kind: "event",
+                    id: event.id,
+                });
+            }
+        }
+
+        let Some(dedupe_key) = &event.dedupe_key else {
+            continue;
+        };
+        let Some((provider, external_session_id, provider_index, payload_hash)) =
+            parse_provider_event_dedupe_key(dedupe_key)
+        else {
+            continue;
+        };
+        let key = (provider, external_session_id, provider_index);
+        if let Some(existing_hash) = seen_provider_events.get(&key) {
+            if existing_hash != &payload_hash {
+                return Err(StoreError::ProviderEventConflict {
+                    provider: key.0,
+                    external_session_id: key.1,
+                    provider_index: key.2,
+                    existing_hash: existing_hash.clone(),
+                    new_hash: payload_hash,
+                });
+            }
+        } else {
+            seen_provider_events.insert(key, payload_hash);
+        }
+    }
+
+    Ok(())
+}
+
+fn reject_entity_conflict<T: PartialEq>(
+    existing: Option<T>,
+    incoming: &T,
+    kind: &'static str,
+    id: Uuid,
+) -> Result<()> {
+    if let Some(existing) = existing {
+        if existing != *incoming {
+            return Err(StoreError::ImportConflict { kind, id });
+        }
+    }
+    Ok(())
+}
+
+fn existing_capture_source_by_id(tx: &Transaction<'_>, id: Uuid) -> Result<Option<CaptureSource>> {
+    tx.query_row(
+        "SELECT id, kind, provider, machine_id, process_id, cwd, raw_source_path, external_session_id, started_at_ms, ended_at_ms, fidelity, visibility, sync_state, sync_version, metadata_json FROM capture_sources WHERE id = ?1",
+        params![id.to_string()],
+        capture_source_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_capture_source_by_external_session(
+    tx: &Transaction<'_>,
+    provider: CaptureProvider,
+    external_session_id: &str,
+) -> Result<Option<CaptureSource>> {
+    tx.query_row(
+        "SELECT id, kind, provider, machine_id, process_id, cwd, raw_source_path, external_session_id, started_at_ms, ended_at_ms, fidelity, visibility, sync_state, sync_version, metadata_json FROM capture_sources WHERE provider = ?1 AND external_session_id = ?2 ORDER BY started_at_ms DESC LIMIT 1",
+        params![provider.as_str(), external_session_id],
+        capture_source_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_session_by_id(tx: &Transaction<'_>, id: Uuid) -> Result<Option<Session>> {
+    tx.query_row(
+        session_select_sql("WHERE id = ?1").as_str(),
+        params![id.to_string()],
+        session_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_session_by_external_session(
+    tx: &Transaction<'_>,
+    provider: CaptureProvider,
+    external_session_id: &str,
+) -> Result<Option<Session>> {
+    tx.query_row(
+        session_select_sql(
+            "WHERE provider = ?1 AND external_session_id = ?2 ORDER BY started_at_ms DESC LIMIT 1",
+        )
+        .as_str(),
+        params![provider.as_str(), external_session_id],
+        session_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_run_by_id(tx: &Transaction<'_>, id: Uuid) -> Result<Option<Run>> {
+    tx.query_row(
+        run_select_sql("WHERE id = ?1").as_str(),
+        params![id.to_string()],
+        run_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_event_by_id(tx: &Transaction<'_>, id: Uuid) -> Result<Option<Event>> {
+    tx.query_row(
+        event_select_sql("WHERE id = ?1").as_str(),
+        params![id.to_string()],
+        event_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_event_by_dedupe_key(tx: &Transaction<'_>, dedupe_key: &str) -> Result<Option<Event>> {
+    tx.query_row(
+        event_select_sql("WHERE dedupe_key = ?1").as_str(),
+        params![dedupe_key],
+        event_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_event_by_seq(tx: &Transaction<'_>, seq: u64) -> Result<Option<Event>> {
+    tx.query_row(
+        event_select_sql("WHERE seq = ?1").as_str(),
+        params![seq as i64],
+        event_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_artifact_by_id(tx: &Transaction<'_>, id: Uuid) -> Result<Option<Artifact>> {
+    tx.query_row(
+        artifact_select_sql("WHERE id = ?1").as_str(),
+        params![id.to_string()],
+        artifact_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_artifact_by_hash_kind(
+    tx: &Transaction<'_>,
+    blob_hash: &str,
+    kind: ArtifactKind,
+) -> Result<Option<Artifact>> {
+    tx.query_row(
+        artifact_select_sql("WHERE blob_hash = ?1 AND kind = ?2").as_str(),
+        params![blob_hash, kind.as_str()],
+        artifact_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_artifact_by_identity(
+    tx: &Transaction<'_>,
+    artifact: &Artifact,
+) -> Result<Option<Artifact>> {
+    existing_artifact_by_hash_kind(tx, &artifact.blob_hash, artifact.kind)
+}
+
+fn existing_vcs_workspace_by_id(tx: &Transaction<'_>, id: Uuid) -> Result<Option<VcsWorkspace>> {
+    tx.query_row(
+        vcs_workspace_select_sql("WHERE id = ?1").as_str(),
+        params![id.to_string()],
+        vcs_workspace_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_vcs_workspace_by_identity(
+    tx: &Transaction<'_>,
+    workspace: &VcsWorkspace,
+) -> Result<Option<VcsWorkspace>> {
+    tx.query_row(
+        vcs_workspace_select_sql("WHERE kind = ?1 AND repo_fingerprint = ?2").as_str(),
+        params![workspace.kind.as_str(), workspace.repo_fingerprint.as_str()],
+        vcs_workspace_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_vcs_change_by_id(tx: &Transaction<'_>, id: Uuid) -> Result<Option<VcsChange>> {
+    tx.query_row(
+        vcs_change_select_sql("WHERE id = ?1").as_str(),
+        params![id.to_string()],
+        vcs_change_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_vcs_change_by_identity(
+    tx: &Transaction<'_>,
+    change: &VcsChange,
+) -> Result<Option<VcsChange>> {
+    tx.query_row(
+        vcs_change_select_sql("WHERE vcs_workspace_id = ?1 AND kind = ?2 AND change_id = ?3")
+            .as_str(),
+        params![
+            change.vcs_workspace_id.to_string(),
+            change.kind.as_str(),
+            change.change_id.as_str()
+        ],
+        vcs_change_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_pull_request_by_id(tx: &Transaction<'_>, id: Uuid) -> Result<Option<PullRequest>> {
+    tx.query_row(
+        pull_request_select_sql("WHERE id = ?1").as_str(),
+        params![id.to_string()],
+        pull_request_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_pull_request_by_identity(
+    tx: &Transaction<'_>,
+    provider: work_record_core::PullRequestProvider,
+    owner: &str,
+    repo: &str,
+    number: u64,
+) -> Result<Option<PullRequest>> {
+    tx.query_row(
+        pull_request_select_sql("WHERE provider = ?1 AND owner = ?2 AND repo = ?3 AND number = ?4")
+            .as_str(),
+        params![provider.as_str(), owner, repo, number as i64],
+        pull_request_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_summary_by_id(tx: &Transaction<'_>, id: Uuid) -> Result<Option<Summary>> {
+    tx.query_row(
+        summary_select_sql("WHERE id = ?1").as_str(),
+        params![id.to_string()],
+        summary_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_file_touched_by_id(tx: &Transaction<'_>, id: Uuid) -> Result<Option<FileTouched>> {
+    tx.query_row(
+        file_touched_select_sql("WHERE id = ?1").as_str(),
+        params![id.to_string()],
+        file_touched_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_work_record_link_by_id(
+    tx: &Transaction<'_>,
+    id: Uuid,
+) -> Result<Option<WorkRecordLink>> {
+    tx.query_row(
+        work_record_link_select_sql("WHERE id = ?1").as_str(),
+        params![id.to_string()],
+        work_record_link_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn existing_work_record_link_by_identity(
+    tx: &Transaction<'_>,
+    link: &WorkRecordLink,
+) -> Result<Option<WorkRecordLink>> {
+    tx.query_row(
+        work_record_link_select_sql(
+            "WHERE work_record_id = ?1 AND target_type = ?2 AND target_id = ?3 AND link_type = ?4",
+        )
+        .as_str(),
+        params![
+            link.work_record_id.to_string(),
+            link.target_type.as_str(),
+            link.target_id.to_string(),
+            link.link_type.as_str()
+        ],
+        work_record_link_from_row,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn reject_archive_artifact_conflict(
+    tx: &Transaction<'_>,
+    artifact: &WorkRecordArchiveArtifact,
+) -> Result<()> {
+    let hash = sha256_hex(artifact.content.as_bytes());
+    if hash != artifact.blob_hash {
+        return Err(StoreError::ArchiveArtifactHashMismatch { id: artifact.id });
+    }
+    if artifact.content.len() as u64 != artifact.byte_size {
+        return Err(StoreError::ArchiveArtifactSizeMismatch { id: artifact.id });
+    }
+    let shard = &hash[..2];
+    let relative_path = format!("blobs/{shard}/{hash}");
+    if artifact.blob_path != relative_path {
+        return Err(StoreError::ArchiveArtifactPathMismatch { id: artifact.id });
+    }
+
+    for existing in [
+        existing_artifact_by_id(tx, artifact.id)?,
+        existing_artifact_by_hash_kind(tx, &artifact.blob_hash, artifact.kind)?,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if existing.kind != artifact.kind
+            || existing.blob_hash != artifact.blob_hash
+            || existing.blob_path != artifact.blob_path
+            || existing.byte_size != artifact.byte_size
+            || existing.media_type != artifact.media_type
+        {
+            return Err(StoreError::ImportConflict {
+                kind: "artifact",
+                id: artifact.id,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn expected_archive_blob_path(id: Uuid, blob_hash: &str) -> Result<String> {
+    let Some(shard) = blob_hash.get(..2) else {
+        return Err(StoreError::ArchiveArtifactPathMismatch { id });
+    };
+    Ok(format!("blobs/{shard}/{blob_hash}"))
+}
+
+fn validate_archive_artifact_record_blobs(
+    blob_dir: &Path,
+    archive: &WorkRecordArchive,
+) -> Result<()> {
+    for artifact in &archive.artifact_records {
+        validate_archive_artifact_record_blob(blob_dir, archive, artifact)?;
+    }
+    Ok(())
+}
+
+fn validate_archive_artifact_record_blob(
+    blob_dir: &Path,
+    archive: &WorkRecordArchive,
+    artifact: &Artifact,
+) -> Result<()> {
+    let expected_path = expected_archive_blob_path(artifact.id, &artifact.blob_hash)?;
+    if artifact.blob_path != expected_path {
+        return Err(StoreError::ArchiveArtifactPathMismatch { id: artifact.id });
+    }
+
+    if archive.artifacts.iter().any(|content| {
+        content.kind == artifact.kind
+            && content.blob_hash == artifact.blob_hash
+            && content.blob_path == artifact.blob_path
+            && content.byte_size == artifact.byte_size
+            && content.media_type == artifact.media_type
+            && sha256_hex(content.content.as_bytes()) == artifact.blob_hash
+            && content.content.len() as u64 == artifact.byte_size
+    }) {
+        return Ok(());
+    }
+
+    let absolute_path = blob_dir
+        .join(&artifact.blob_hash[..2])
+        .join(&artifact.blob_hash);
+    if !absolute_path.exists() {
+        return Err(StoreError::ArchiveArtifactMissingContent { id: artifact.id });
+    }
+    ensure_regular_blob_file(artifact.id, &absolute_path)?;
+    let content = fs::read(&absolute_path)?;
+    let hash = sha256_hex(&content);
+    if hash != artifact.blob_hash {
+        return Err(StoreError::ArchiveArtifactHashMismatch { id: artifact.id });
+    }
+    if content.len() as u64 != artifact.byte_size {
+        return Err(StoreError::ArchiveArtifactSizeMismatch { id: artifact.id });
+    }
+    Ok(())
 }
 
 fn record_exists(conn: &Connection, id: Uuid) -> Result<bool> {
@@ -3136,6 +3755,638 @@ fn upsert_capture_source_tx(
         ],
     )?;
     Ok(())
+}
+
+fn import_rich_archive_entities_tx(
+    tx: &Transaction<'_>,
+    blob_dir: &Path,
+    archive: &WorkRecordArchive,
+) -> Result<()> {
+    if archive.schema_version < 2 && archive.version < 2 {
+        return Ok(());
+    }
+
+    validate_archive_artifact_record_blobs(blob_dir, archive)?;
+
+    for source in &archive.capture_sources {
+        upsert_imported_capture_source_tx(tx, source)?;
+    }
+    for workspace in &archive.vcs_workspaces {
+        upsert_vcs_workspace_tx(tx, workspace)?;
+    }
+    for artifact in &archive.artifacts {
+        store_archive_artifact_tx(tx, blob_dir, artifact)?;
+    }
+    for artifact in &archive.artifact_records {
+        upsert_artifact_tx(tx, artifact)?;
+    }
+    for session in &archive.sessions {
+        upsert_session_tx(tx, session)?;
+    }
+    for run in &archive.runs {
+        upsert_run_tx(tx, run)?;
+    }
+    for event in &archive.events {
+        upsert_event_tx(tx, event)?;
+    }
+    for change in &archive.vcs_changes {
+        upsert_vcs_change_tx(tx, change)?;
+    }
+    for pr in &archive.pull_requests {
+        upsert_pull_request_tx(tx, pr)?;
+    }
+    for summary in &archive.summaries {
+        upsert_summary_tx(tx, summary)?;
+    }
+    for file in &archive.files_touched {
+        upsert_file_touched_tx(tx, file)?;
+    }
+    for link in &archive.work_record_links {
+        upsert_work_record_link_tx(tx, link)?;
+    }
+    Ok(())
+}
+
+fn upsert_imported_capture_source_tx(tx: &Transaction<'_>, source: &CaptureSource) -> Result<()> {
+    tx.execute(
+        r#"
+        INSERT INTO capture_sources
+        (id, kind, provider, machine_id, process_id, cwd, raw_source_path, external_session_id, started_at_ms, ended_at_ms, fidelity, visibility, sync_state, sync_version, metadata_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+        ON CONFLICT(id) DO UPDATE SET
+            kind = excluded.kind,
+            provider = excluded.provider,
+            machine_id = excluded.machine_id,
+            process_id = excluded.process_id,
+            cwd = excluded.cwd,
+            raw_source_path = excluded.raw_source_path,
+            external_session_id = excluded.external_session_id,
+            started_at_ms = excluded.started_at_ms,
+            ended_at_ms = excluded.ended_at_ms,
+            fidelity = excluded.fidelity,
+            visibility = excluded.visibility,
+            sync_state = excluded.sync_state,
+            sync_version = excluded.sync_version,
+            metadata_json = excluded.metadata_json
+        "#,
+        params![
+            source.id.to_string(),
+            source.descriptor.kind.as_str(),
+            source.descriptor.provider.as_str(),
+            source.descriptor.machine_id.as_str(),
+            source.descriptor.process_id.map(i64::from),
+            source.descriptor.cwd.as_deref(),
+            source.descriptor.raw_source_path.as_deref(),
+            source.descriptor.external_session_id.as_deref(),
+            timestamp_ms(source.started_at),
+            optional_timestamp_ms(source.ended_at),
+            source.sync.fidelity.as_str(),
+            source.sync.visibility.as_str(),
+            source.sync.sync_state.as_str(),
+            source.sync.sync_version as i64,
+            serde_json::to_string(&source.sync.metadata)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_session_tx(tx: &Transaction<'_>, session: &Session) -> Result<()> {
+    tx.execute(
+        r#"
+        INSERT INTO sessions
+        (id, work_record_id, parent_session_id, root_session_id, capture_source_id, provider, external_session_id, external_agent_id, agent_type, role_hint, is_primary, status, fidelity, transcript_blob_id, started_at_ms, ended_at_ms, created_at_ms, updated_at_ms, visibility, sync_state, sync_version, deleted_at_ms, metadata_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+        ON CONFLICT(id) DO UPDATE SET
+            work_record_id = excluded.work_record_id,
+            parent_session_id = excluded.parent_session_id,
+            root_session_id = excluded.root_session_id,
+            capture_source_id = excluded.capture_source_id,
+            provider = excluded.provider,
+            external_session_id = excluded.external_session_id,
+            external_agent_id = excluded.external_agent_id,
+            agent_type = excluded.agent_type,
+            role_hint = excluded.role_hint,
+            is_primary = excluded.is_primary,
+            status = excluded.status,
+            fidelity = excluded.fidelity,
+            transcript_blob_id = excluded.transcript_blob_id,
+            started_at_ms = excluded.started_at_ms,
+            ended_at_ms = excluded.ended_at_ms,
+            updated_at_ms = excluded.updated_at_ms,
+            visibility = excluded.visibility,
+            sync_state = excluded.sync_state,
+            sync_version = excluded.sync_version,
+            deleted_at_ms = excluded.deleted_at_ms,
+            metadata_json = excluded.metadata_json
+        "#,
+        params![
+            session.id.to_string(),
+            optional_uuid_string(session.work_record_id),
+            optional_uuid_string(session.parent_session_id),
+            optional_uuid_string(session.root_session_id),
+            optional_uuid_string(session.capture_source_id),
+            session.provider.as_str(),
+            session.external_session_id.as_deref(),
+            session.external_agent_id.as_deref(),
+            session.agent_type.as_str(),
+            session.role_hint.as_deref(),
+            session.is_primary as i64,
+            session.status.as_str(),
+            session.sync.fidelity.as_str(),
+            optional_uuid_string(session.transcript_blob_id),
+            timestamp_ms(session.started_at),
+            optional_timestamp_ms(session.ended_at),
+            timestamp_ms(session.timestamps.created_at),
+            timestamp_ms(session.timestamps.updated_at),
+            session.sync.visibility.as_str(),
+            session.sync.sync_state.as_str(),
+            session.sync.sync_version as i64,
+            optional_timestamp_ms(session.sync.deleted_at),
+            serde_json::to_string(&session.sync.metadata)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_run_tx(tx: &Transaction<'_>, run: &Run) -> Result<()> {
+    tx.execute(
+        r#"
+        INSERT INTO runs
+        (id, work_record_id, session_id, run_type, status, started_at_ms, ended_at_ms, exit_code, cwd, command_preview, input_blob_id, output_blob_id, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+        ON CONFLICT(id) DO UPDATE SET
+            work_record_id = excluded.work_record_id,
+            session_id = excluded.session_id,
+            run_type = excluded.run_type,
+            status = excluded.status,
+            started_at_ms = excluded.started_at_ms,
+            ended_at_ms = excluded.ended_at_ms,
+            exit_code = excluded.exit_code,
+            cwd = excluded.cwd,
+            command_preview = excluded.command_preview,
+            input_blob_id = excluded.input_blob_id,
+            output_blob_id = excluded.output_blob_id,
+            updated_at_ms = excluded.updated_at_ms,
+            source_id = excluded.source_id,
+            visibility = excluded.visibility,
+            fidelity = excluded.fidelity,
+            sync_state = excluded.sync_state,
+            sync_version = excluded.sync_version,
+            deleted_at_ms = excluded.deleted_at_ms,
+            metadata_json = excluded.metadata_json
+        "#,
+        params![
+            run.id.to_string(),
+            optional_uuid_string(run.work_record_id),
+            optional_uuid_string(run.session_id),
+            run.run_type.as_str(),
+            run.status.as_str(),
+            timestamp_ms(run.started_at),
+            optional_timestamp_ms(run.ended_at),
+            run.exit_code,
+            run.cwd.as_deref(),
+            run.command_preview.as_deref(),
+            optional_uuid_string(run.input_blob_id),
+            optional_uuid_string(run.output_blob_id),
+            timestamp_ms(run.timestamps.created_at),
+            timestamp_ms(run.timestamps.updated_at),
+            optional_uuid_string(run.source_id),
+            run.sync.visibility.as_str(),
+            run.sync.fidelity.as_str(),
+            run.sync.sync_state.as_str(),
+            run.sync.sync_version as i64,
+            optional_timestamp_ms(run.sync.deleted_at),
+            serde_json::to_string(&run.sync.metadata)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_event_tx(tx: &Transaction<'_>, event: &Event) -> Result<Uuid> {
+    let event_id = if let Some(dedupe_key) = &event.dedupe_key {
+        if let Some(existing) = tx
+            .query_row(
+                "SELECT id FROM events WHERE dedupe_key = ?1",
+                params![dedupe_key],
+                |row| parse_uuid(row.get::<_, String>(0)?),
+            )
+            .optional()?
+        {
+            existing
+        } else {
+            event.id
+        }
+    } else {
+        event.id
+    };
+
+    tx.execute(
+        r#"
+        INSERT INTO events
+        (id, seq, work_record_id, session_id, run_id, event_type, role, occurred_at_ms, capture_source_id, payload_json, payload_blob_id, dedupe_key, visibility, redaction_state, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+        ON CONFLICT(id) DO UPDATE SET
+            seq = excluded.seq,
+            work_record_id = excluded.work_record_id,
+            session_id = excluded.session_id,
+            run_id = excluded.run_id,
+            event_type = excluded.event_type,
+            role = excluded.role,
+            occurred_at_ms = excluded.occurred_at_ms,
+            capture_source_id = excluded.capture_source_id,
+            payload_json = excluded.payload_json,
+            payload_blob_id = excluded.payload_blob_id,
+            dedupe_key = excluded.dedupe_key,
+            visibility = excluded.visibility,
+            redaction_state = excluded.redaction_state,
+            fidelity = excluded.fidelity,
+            sync_state = excluded.sync_state,
+            sync_version = excluded.sync_version,
+            deleted_at_ms = excluded.deleted_at_ms,
+            metadata_json = excluded.metadata_json
+        "#,
+        params![
+            event_id.to_string(),
+            event.seq as i64,
+            optional_uuid_string(event.work_record_id),
+            optional_uuid_string(event.session_id),
+            optional_uuid_string(event.run_id),
+            event.event_type.as_str(),
+            event.role.map(|role| role.as_str()),
+            timestamp_ms(event.occurred_at),
+            optional_uuid_string(event.capture_source_id),
+            serde_json::to_string(&event.payload)?,
+            optional_uuid_string(event.payload_blob_id),
+            event.dedupe_key.as_deref(),
+            event.sync.visibility.as_str(),
+            event.redaction_state.as_str(),
+            event.sync.fidelity.as_str(),
+            event.sync.sync_state.as_str(),
+            event.sync.sync_version as i64,
+            optional_timestamp_ms(event.sync.deleted_at),
+            serde_json::to_string(&event.sync.metadata)?,
+        ],
+    )?;
+    Ok(event_id)
+}
+
+fn upsert_artifact_tx(tx: &Transaction<'_>, artifact: &Artifact) -> Result<Uuid> {
+    tx.execute(
+        r#"
+        INSERT INTO artifacts
+        (id, kind, blob_hash, blob_path, byte_size, media_type, preview_text, redaction_state, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+        ON CONFLICT DO UPDATE SET
+            blob_path = excluded.blob_path,
+            byte_size = excluded.byte_size,
+            media_type = excluded.media_type,
+            preview_text = excluded.preview_text,
+            redaction_state = excluded.redaction_state,
+            updated_at_ms = excluded.updated_at_ms,
+            source_id = excluded.source_id,
+            visibility = excluded.visibility,
+            fidelity = excluded.fidelity,
+            sync_state = excluded.sync_state,
+            sync_version = excluded.sync_version,
+            deleted_at_ms = excluded.deleted_at_ms,
+            metadata_json = excluded.metadata_json
+        "#,
+        params![
+            artifact.id.to_string(),
+            artifact.kind.as_str(),
+            artifact.blob_hash.as_str(),
+            artifact.blob_path.as_str(),
+            artifact.byte_size as i64,
+            artifact.media_type.as_deref(),
+            artifact.preview_text.as_deref(),
+            artifact.redaction_state.as_str(),
+            timestamp_ms(artifact.timestamps.created_at),
+            timestamp_ms(artifact.timestamps.updated_at),
+            optional_uuid_string(artifact.source_id),
+            artifact.sync.visibility.as_str(),
+            artifact.sync.fidelity.as_str(),
+            artifact.sync.sync_state.as_str(),
+            artifact.sync.sync_version as i64,
+            optional_timestamp_ms(artifact.sync.deleted_at),
+            serde_json::to_string(&artifact.sync.metadata)?,
+        ],
+    )?;
+    tx.query_row(
+        "SELECT id FROM artifacts WHERE blob_hash = ?1 AND kind = ?2",
+        params![artifact.blob_hash.as_str(), artifact.kind.as_str()],
+        |row| parse_uuid(row.get::<_, String>(0)?),
+    )
+    .map_err(StoreError::from)
+}
+
+fn upsert_vcs_workspace_tx(tx: &Transaction<'_>, workspace: &VcsWorkspace) -> Result<Uuid> {
+    tx.execute(
+        r#"
+        INSERT INTO vcs_workspaces
+        (id, kind, root_path, repo_fingerprint, primary_remote_url_normalized, host, owner, name, monorepo_subpath, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+        ON CONFLICT(kind, repo_fingerprint) DO UPDATE SET
+            root_path = excluded.root_path,
+            primary_remote_url_normalized = excluded.primary_remote_url_normalized,
+            host = excluded.host,
+            owner = excluded.owner,
+            name = excluded.name,
+            monorepo_subpath = excluded.monorepo_subpath,
+            updated_at_ms = excluded.updated_at_ms,
+            source_id = excluded.source_id,
+            visibility = excluded.visibility,
+            fidelity = excluded.fidelity,
+            sync_state = excluded.sync_state,
+            sync_version = excluded.sync_version,
+            deleted_at_ms = excluded.deleted_at_ms,
+            metadata_json = excluded.metadata_json
+        "#,
+        params![
+            workspace.id.to_string(),
+            workspace.kind.as_str(),
+            workspace.root_path.as_str(),
+            workspace.repo_fingerprint.as_str(),
+            workspace.primary_remote_url_normalized.as_deref(),
+            workspace.host.as_str(),
+            workspace.owner.as_deref(),
+            workspace.name.as_deref(),
+            workspace.monorepo_subpath.as_deref(),
+            timestamp_ms(workspace.timestamps.created_at),
+            timestamp_ms(workspace.timestamps.updated_at),
+            optional_uuid_string(workspace.source_id),
+            workspace.sync.visibility.as_str(),
+            workspace.sync.fidelity.as_str(),
+            workspace.sync.sync_state.as_str(),
+            workspace.sync.sync_version as i64,
+            optional_timestamp_ms(workspace.sync.deleted_at),
+            serde_json::to_string(&workspace.sync.metadata)?,
+        ],
+    )?;
+    tx.query_row(
+        "SELECT id FROM vcs_workspaces WHERE kind = ?1 AND repo_fingerprint = ?2",
+        params![workspace.kind.as_str(), workspace.repo_fingerprint.as_str()],
+        |row| parse_uuid(row.get::<_, String>(0)?),
+    )
+    .map_err(StoreError::from)
+}
+
+fn upsert_vcs_change_tx(tx: &Transaction<'_>, change: &VcsChange) -> Result<Uuid> {
+    tx.execute(
+        r#"
+        INSERT INTO vcs_changes
+        (id, vcs_workspace_id, kind, change_id, parent_change_ids_json, branch_or_bookmark, tree_hash, author_time_ms, confidence, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+        ON CONFLICT(vcs_workspace_id, kind, change_id) DO UPDATE SET
+            parent_change_ids_json = excluded.parent_change_ids_json,
+            branch_or_bookmark = excluded.branch_or_bookmark,
+            tree_hash = excluded.tree_hash,
+            author_time_ms = excluded.author_time_ms,
+            confidence = excluded.confidence,
+            updated_at_ms = excluded.updated_at_ms,
+            source_id = excluded.source_id,
+            visibility = excluded.visibility,
+            fidelity = excluded.fidelity,
+            sync_state = excluded.sync_state,
+            sync_version = excluded.sync_version,
+            deleted_at_ms = excluded.deleted_at_ms,
+            metadata_json = excluded.metadata_json
+        "#,
+        params![
+            change.id.to_string(),
+            change.vcs_workspace_id.to_string(),
+            change.kind.as_str(),
+            change.change_id.as_str(),
+            serde_json::to_string(&change.parent_change_ids)?,
+            change.branch_or_bookmark.as_deref(),
+            change.tree_hash.as_deref(),
+            optional_timestamp_ms(change.author_time),
+            change.confidence.as_str(),
+            timestamp_ms(change.timestamps.created_at),
+            timestamp_ms(change.timestamps.updated_at),
+            optional_uuid_string(change.source_id),
+            change.sync.visibility.as_str(),
+            change.sync.fidelity.as_str(),
+            change.sync.sync_state.as_str(),
+            change.sync.sync_version as i64,
+            optional_timestamp_ms(change.sync.deleted_at),
+            serde_json::to_string(&change.sync.metadata)?,
+        ],
+    )?;
+    tx.query_row(
+        "SELECT id FROM vcs_changes WHERE vcs_workspace_id = ?1 AND kind = ?2 AND change_id = ?3",
+        params![
+            change.vcs_workspace_id.to_string(),
+            change.kind.as_str(),
+            change.change_id.as_str()
+        ],
+        |row| parse_uuid(row.get::<_, String>(0)?),
+    )
+    .map_err(StoreError::from)
+}
+
+fn upsert_pull_request_tx(tx: &Transaction<'_>, pr: &PullRequest) -> Result<Uuid> {
+    tx.execute(
+        r#"
+        INSERT INTO pull_requests
+        (id, vcs_workspace_id, provider, url, number, owner, repo, title, state, head_ref, base_ref, head_sha, confidence, link_source, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+        ON CONFLICT DO UPDATE SET
+            vcs_workspace_id = excluded.vcs_workspace_id,
+            url = excluded.url,
+            title = excluded.title,
+            state = excluded.state,
+            head_ref = excluded.head_ref,
+            base_ref = excluded.base_ref,
+            head_sha = excluded.head_sha,
+            confidence = excluded.confidence,
+            link_source = excluded.link_source,
+            updated_at_ms = excluded.updated_at_ms,
+            source_id = excluded.source_id,
+            visibility = excluded.visibility,
+            fidelity = excluded.fidelity,
+            sync_state = excluded.sync_state,
+            sync_version = excluded.sync_version,
+            deleted_at_ms = excluded.deleted_at_ms,
+            metadata_json = excluded.metadata_json
+        "#,
+        params![
+            pr.id.to_string(),
+            optional_uuid_string(pr.vcs_workspace_id),
+            pr.provider.as_str(),
+            pr.url.as_str(),
+            pr.number.map(|n| n as i64),
+            pr.owner.as_deref(),
+            pr.repo.as_deref(),
+            pr.title.as_deref(),
+            pr.state.as_deref(),
+            pr.head_ref.as_deref(),
+            pr.base_ref.as_deref(),
+            pr.head_sha.as_deref(),
+            pr.confidence.as_str(),
+            pr.link_source.as_str(),
+            timestamp_ms(pr.timestamps.created_at),
+            timestamp_ms(pr.timestamps.updated_at),
+            optional_uuid_string(pr.source_id),
+            pr.sync.visibility.as_str(),
+            pr.sync.fidelity.as_str(),
+            pr.sync.sync_state.as_str(),
+            pr.sync.sync_version as i64,
+            optional_timestamp_ms(pr.sync.deleted_at),
+            serde_json::to_string(&pr.sync.metadata)?,
+        ],
+    )?;
+    if let (Some(owner), Some(repo), Some(number)) = (&pr.owner, &pr.repo, pr.number) {
+        return tx
+            .query_row(
+                "SELECT id FROM pull_requests WHERE provider = ?1 AND owner = ?2 AND repo = ?3 AND number = ?4",
+                params![pr.provider.as_str(), owner, repo, number as i64],
+                |row| parse_uuid(row.get::<_, String>(0)?),
+            )
+            .map_err(StoreError::from);
+    }
+    Ok(pr.id)
+}
+
+fn upsert_summary_tx(tx: &Transaction<'_>, summary: &Summary) -> Result<()> {
+    tx.execute(
+        r#"
+        INSERT INTO summaries
+        (id, work_record_id, session_id, kind, model_or_source, text, citations_json, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+        ON CONFLICT(id) DO UPDATE SET
+            work_record_id = excluded.work_record_id,
+            session_id = excluded.session_id,
+            kind = excluded.kind,
+            model_or_source = excluded.model_or_source,
+            text = excluded.text,
+            citations_json = excluded.citations_json,
+            updated_at_ms = excluded.updated_at_ms,
+            source_id = excluded.source_id,
+            visibility = excluded.visibility,
+            fidelity = excluded.fidelity,
+            sync_state = excluded.sync_state,
+            sync_version = excluded.sync_version,
+            deleted_at_ms = excluded.deleted_at_ms,
+            metadata_json = excluded.metadata_json
+        "#,
+        params![
+            summary.id.to_string(),
+            optional_uuid_string(summary.work_record_id),
+            optional_uuid_string(summary.session_id),
+            summary.kind.as_str(),
+            summary.model_or_source.as_deref(),
+            summary.text.as_str(),
+            serde_json::to_string(&summary.citations)?,
+            timestamp_ms(summary.timestamps.created_at),
+            timestamp_ms(summary.timestamps.updated_at),
+            optional_uuid_string(summary.source_id),
+            summary.sync.visibility.as_str(),
+            summary.sync.fidelity.as_str(),
+            summary.sync.sync_state.as_str(),
+            summary.sync.sync_version as i64,
+            optional_timestamp_ms(summary.sync.deleted_at),
+            serde_json::to_string(&summary.sync.metadata)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_file_touched_tx(tx: &Transaction<'_>, file: &FileTouched) -> Result<()> {
+    tx.execute(
+        r#"
+        INSERT INTO files_touched
+        (id, work_record_id, run_id, event_id, vcs_workspace_id, path, change_kind, old_path, line_count_delta, confidence, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+        ON CONFLICT(id) DO UPDATE SET
+            work_record_id = excluded.work_record_id,
+            run_id = excluded.run_id,
+            event_id = excluded.event_id,
+            vcs_workspace_id = excluded.vcs_workspace_id,
+            path = excluded.path,
+            change_kind = excluded.change_kind,
+            old_path = excluded.old_path,
+            line_count_delta = excluded.line_count_delta,
+            confidence = excluded.confidence,
+            updated_at_ms = excluded.updated_at_ms,
+            source_id = excluded.source_id,
+            visibility = excluded.visibility,
+            fidelity = excluded.fidelity,
+            sync_state = excluded.sync_state,
+            sync_version = excluded.sync_version,
+            deleted_at_ms = excluded.deleted_at_ms,
+            metadata_json = excluded.metadata_json
+        "#,
+        params![
+            file.id.to_string(),
+            optional_uuid_string(file.work_record_id),
+            optional_uuid_string(file.run_id),
+            optional_uuid_string(file.event_id),
+            optional_uuid_string(file.vcs_workspace_id),
+            file.path.as_str(),
+            file.change_kind.map(|kind| kind.as_str()),
+            file.old_path.as_deref(),
+            file.line_count_delta,
+            file.confidence.as_str(),
+            timestamp_ms(file.timestamps.created_at),
+            timestamp_ms(file.timestamps.updated_at),
+            optional_uuid_string(file.source_id),
+            file.sync.visibility.as_str(),
+            file.sync.fidelity.as_str(),
+            file.sync.sync_state.as_str(),
+            file.sync.sync_version as i64,
+            optional_timestamp_ms(file.sync.deleted_at),
+            serde_json::to_string(&file.sync.metadata)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_work_record_link_tx(tx: &Transaction<'_>, link: &WorkRecordLink) -> Result<Uuid> {
+    tx.execute(
+        r#"
+        INSERT INTO work_record_links
+        (id, work_record_id, target_type, target_id, link_type, confidence, source_id, created_at_ms, updated_at_ms, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+        ON CONFLICT(work_record_id, target_type, target_id, link_type) DO UPDATE SET
+            confidence = excluded.confidence,
+            source_id = excluded.source_id,
+            updated_at_ms = excluded.updated_at_ms,
+            visibility = excluded.visibility,
+            fidelity = excluded.fidelity,
+            sync_state = excluded.sync_state,
+            sync_version = excluded.sync_version,
+            deleted_at_ms = excluded.deleted_at_ms,
+            metadata_json = excluded.metadata_json
+        "#,
+        params![
+            link.id.to_string(),
+            link.work_record_id.to_string(),
+            link.target_type.as_str(),
+            link.target_id.to_string(),
+            link.link_type.as_str(),
+            link.confidence.as_str(),
+            optional_uuid_string(link.source_id),
+            timestamp_ms(link.timestamps.created_at),
+            timestamp_ms(link.timestamps.updated_at),
+            link.sync.visibility.as_str(),
+            link.sync.fidelity.as_str(),
+            link.sync.sync_state.as_str(),
+            link.sync.sync_version as i64,
+            optional_timestamp_ms(link.sync.deleted_at),
+            serde_json::to_string(&link.sync.metadata)?,
+        ],
+    )?;
+    tx.query_row(
+        "SELECT id FROM work_record_links WHERE work_record_id = ?1 AND target_type = ?2 AND target_id = ?3 AND link_type = ?4",
+        params![
+            link.work_record_id.to_string(),
+            link.target_type.as_str(),
+            link.target_id.to_string(),
+            link.link_type.as_str()
+        ],
+        |row| parse_uuid(row.get::<_, String>(0)?),
+    )
+    .map_err(StoreError::from)
 }
 
 fn upsert_record_tx(
@@ -3373,13 +4624,15 @@ fn store_archive_artifact_tx(
     }
     let absolute_dir = blob_dir.join(shard);
     fs::create_dir_all(&absolute_dir)?;
+    restrict_private_dir(&absolute_dir)?;
     let absolute_path = absolute_dir.join(&hash);
-    if absolute_path.exists() {
-        ensure_regular_blob_file(artifact.id, &absolute_path)?;
-    }
-    if !absolute_path.exists() {
-        fs::write(&absolute_path, artifact.content.as_bytes())?;
-    }
+    store_blob_content_if_missing(
+        artifact.id,
+        &absolute_path,
+        artifact.content.as_bytes(),
+        &artifact.blob_hash,
+        artifact.byte_size,
+    )?;
 
     let now = timestamp_ms(Utc::now());
     tx.execute(
@@ -3427,13 +4680,19 @@ fn store_output_artifact_tx(
     let relative_path = format!("blobs/{shard}/{hash}");
     let absolute_dir = blob_dir.join(shard);
     fs::create_dir_all(&absolute_dir)?;
+    restrict_private_dir(&absolute_dir)?;
     let absolute_path = absolute_dir.join(&hash);
-    if !absolute_path.exists() {
-        fs::write(&absolute_path, content.as_bytes())?;
-    }
+    let id = new_id();
+    store_blob_content_if_missing(
+        id,
+        &absolute_path,
+        content.as_bytes(),
+        &hash,
+        content.len() as u64,
+    )?;
 
     let now = timestamp_ms(Utc::now());
-    let id = new_id().to_string();
+    let id = id.to_string();
     tx.execute(
         r#"
         INSERT OR IGNORE INTO artifacts
@@ -4053,6 +5312,56 @@ mod tests {
         }
     }
 
+    fn event_for_record(record_id: Uuid, seq: u64, text: &str) -> Event {
+        provider_event_for_record(record_id, seq, 7, "payload-hash", text)
+    }
+
+    fn provider_event_for_record(
+        record_id: Uuid,
+        seq: u64,
+        provider_index: u64,
+        payload_hash: &str,
+        text: &str,
+    ) -> Event {
+        Event {
+            id: new_id(),
+            seq,
+            work_record_id: Some(record_id),
+            session_id: None,
+            run_id: None,
+            event_type: EventType::Message,
+            role: Some(EventRole::Assistant),
+            occurred_at: fixed_time(),
+            capture_source_id: None,
+            payload: serde_json::json!({ "text": text }),
+            payload_blob_id: None,
+            dedupe_key: Some(Store::provider_event_dedupe_key(
+                CaptureProvider::Codex,
+                "shared-session",
+                provider_index,
+                payload_hash,
+            )),
+            redaction_state: RedactionState::SafePreview,
+            sync: sync_metadata(),
+        }
+    }
+
+    fn artifact_record_from_archive_artifact(artifact: &WorkRecordArchiveArtifact) -> Artifact {
+        Artifact {
+            id: artifact.id,
+            kind: artifact.kind,
+            blob_hash: artifact.blob_hash.clone(),
+            blob_path: artifact.blob_path.clone(),
+            byte_size: artifact.byte_size,
+            media_type: artifact.media_type.clone(),
+            preview_text: artifact.preview_text.clone(),
+            redaction_state: artifact.redaction_state,
+            timestamps: timestamps(),
+            source_id: None,
+            sync: sync_metadata(),
+        }
+    }
+
     #[test]
     fn migration_creates_foundation_schema_and_indexes() {
         let temp = tempdir();
@@ -4216,6 +5525,37 @@ mod tests {
             .collect::<std::result::Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(redaction_states, vec!["safe_preview", "safe_preview"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn evidence_output_rejects_preexisting_symlink_blob_path() {
+        let temp = tempdir();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let record = WorkRecord::new("Output", "blob evidence", Vec::new(), "task", None);
+        store.insert_record(&record).unwrap();
+        let stdout = "preexisting symlink blob content";
+        let hash = sha256_hex(stdout.as_bytes());
+        let shard = &hash[..2];
+        let blob_dir = temp.path().join("blobs").join(shard);
+        fs::create_dir_all(&blob_dir).unwrap();
+        let target = temp.path().join("dangling-outside-target");
+        std::os::unix::fs::symlink(&target, blob_dir.join(&hash)).unwrap();
+        let evidence = Evidence::new(
+            Some(record.id),
+            "cargo test",
+            0,
+            stdout.into(),
+            String::new(),
+            Utc::now(),
+            1,
+        );
+
+        assert!(matches!(
+            store.insert_evidence(&evidence),
+            Err(StoreError::ArchiveArtifactNonRegularFile { .. })
+        ));
+        assert!(store.evidence_for_record(record.id).unwrap().is_empty());
     }
 
     #[test]
@@ -5231,6 +6571,377 @@ mod tests {
             Err(StoreError::NotFound(_))
         ));
         assert!(!temp.path().join("outside").exists());
+    }
+
+    #[test]
+    fn v2_import_rolls_back_records_evidence_and_rich_rows_on_rich_failure() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let mut archive = archive_with_stdout_artifact("safe output");
+        archive.schema_version = 2;
+        archive.version = 2;
+        let record_id = archive.records[0].id;
+        let evidence_id = archive.evidence[0].id;
+        archive.sessions.push(Session {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-00000000b001").unwrap(),
+            work_record_id: Some(record_id),
+            parent_session_id: None,
+            root_session_id: None,
+            capture_source_id: None,
+            provider: CaptureProvider::Codex,
+            external_session_id: Some("rich-rollback".into()),
+            external_agent_id: None,
+            agent_type: AgentType::Primary,
+            role_hint: None,
+            is_primary: true,
+            status: SessionStatus::Imported,
+            transcript_blob_id: Some(
+                Uuid::parse_str("018f45d0-0000-7000-8000-00000000ffff").unwrap(),
+            ),
+            started_at: fixed_time(),
+            ended_at: None,
+            timestamps: timestamps(),
+            sync: sync_metadata(),
+        });
+
+        assert!(matches!(
+            store.import_archive(&archive, false),
+            Err(StoreError::Sql(_))
+        ));
+        assert!(matches!(
+            store.get_record(record_id),
+            Err(StoreError::NotFound(_))
+        ));
+        for (table, id) in [
+            ("evidence", evidence_id),
+            ("sessions", archive.sessions[0].id),
+        ] {
+            let count: i64 = store
+                .conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE id = ?1"),
+                    params![id.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 0, "{table} row should roll back");
+        }
+    }
+
+    #[test]
+    fn import_rejects_rich_dedupe_conflicts_without_overwrite() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let existing_record = WorkRecord::new("Existing", "body", Vec::new(), "task", None);
+        store.insert_record(&existing_record).unwrap();
+        let existing_event = event_for_record(existing_record.id, 1, "existing payload");
+        store.upsert_event(&existing_event).unwrap();
+
+        let mut archive = archive_with_stdout_artifact("safe output");
+        archive.schema_version = 2;
+        archive.version = 2;
+        archive.events.push(event_for_record(
+            archive.records[0].id,
+            2,
+            "different imported payload",
+        ));
+        let imported_record_id = archive.records[0].id;
+
+        assert!(matches!(
+            store.import_archive(&archive, false),
+            Err(StoreError::ImportConflict { kind: "event", id }) if id == archive.events[0].id
+        ));
+        assert!(matches!(
+            store.get_record(imported_record_id),
+            Err(StoreError::NotFound(_))
+        ));
+        assert_eq!(
+            store
+                .event_id_by_dedupe_key("provider:codex:shared-session:7:payload-hash")
+                .unwrap(),
+            existing_event.id
+        );
+    }
+
+    #[test]
+    fn v2_import_rejects_provider_event_hash_conflicts_without_overwrite() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let existing_record = WorkRecord::new("Existing", "body", Vec::new(), "task", None);
+        store.insert_record(&existing_record).unwrap();
+        let existing_event =
+            provider_event_for_record(existing_record.id, 1, 9, "existing-hash", "existing");
+        store.upsert_event(&existing_event).unwrap();
+
+        let mut archive = archive_with_stdout_artifact("safe output");
+        archive.schema_version = 2;
+        archive.version = 2;
+        archive.events.push(provider_event_for_record(
+            archive.records[0].id,
+            2,
+            9,
+            "incoming-hash",
+            "incoming",
+        ));
+        let imported_record_id = archive.records[0].id;
+
+        assert!(matches!(
+            store.import_archive(&archive, false),
+            Err(StoreError::ProviderEventConflict {
+                existing_hash,
+                new_hash,
+                ..
+            }) if existing_hash == "existing-hash" && new_hash == "incoming-hash"
+        ));
+        assert!(matches!(
+            store.get_record(imported_record_id),
+            Err(StoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn v2_capture_source_import_rejects_internal_provider_event_hash_conflicts() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let mut archive = archive_with_stdout_artifact("safe output");
+        archive.schema_version = 2;
+        archive.version = 2;
+        archive.events.push(provider_event_for_record(
+            archive.records[0].id,
+            31,
+            12,
+            "first-hash",
+            "first",
+        ));
+        archive.events.push(provider_event_for_record(
+            archive.records[0].id,
+            32,
+            12,
+            "second-hash",
+            "second",
+        ));
+        let imported_record_id = archive.records[0].id;
+        let source_id = new_id();
+        let source = CaptureSourceDescriptor {
+            kind: work_record_core::CaptureSourceKind::ProviderImport,
+            provider: CaptureProvider::Codex,
+            machine_id: "machine-1".into(),
+            process_id: Some(42),
+            cwd: Some("/repo".into()),
+            raw_source_path: Some("/sessions/codex.jsonl".into()),
+            external_session_id: Some("codex-session-1".into()),
+        };
+
+        assert!(matches!(
+            store.import_archive_from_capture_source(
+                &archive,
+                source_id,
+                &source,
+                fixed_time(),
+                Fidelity::Imported,
+                false,
+            ),
+            Err(StoreError::ProviderEventConflict {
+                existing_hash,
+                new_hash,
+                ..
+            }) if existing_hash == "first-hash" && new_hash == "second-hash"
+        ));
+        assert!(matches!(
+            store.get_record(imported_record_id),
+            Err(StoreError::NotFound(_))
+        ));
+        assert!(matches!(
+            store.get_capture_source(source_id),
+            Err(StoreError::NotFound(_))
+        ));
+        assert!(matches!(
+            store.import_archive_from_capture_source(
+                &archive,
+                source_id,
+                &source,
+                fixed_time(),
+                Fidelity::Imported,
+                true,
+            ),
+            Err(StoreError::ProviderEventConflict {
+                existing_hash,
+                new_hash,
+                ..
+            }) if existing_hash == "first-hash" && new_hash == "second-hash"
+        ));
+        assert!(matches!(
+            store.get_record(imported_record_id),
+            Err(StoreError::NotFound(_))
+        ));
+        assert!(matches!(
+            store.get_capture_source(source_id),
+            Err(StoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn v2_import_rejects_internal_provider_event_hash_conflicts() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let mut archive = archive_with_stdout_artifact("safe output");
+        archive.schema_version = 2;
+        archive.version = 2;
+        archive.events.push(provider_event_for_record(
+            archive.records[0].id,
+            31,
+            12,
+            "first-hash",
+            "first",
+        ));
+        archive.events.push(provider_event_for_record(
+            archive.records[0].id,
+            32,
+            12,
+            "second-hash",
+            "second",
+        ));
+        let imported_record_id = archive.records[0].id;
+
+        assert!(matches!(
+            store.import_archive(&archive, false),
+            Err(StoreError::ProviderEventConflict {
+                existing_hash,
+                new_hash,
+                ..
+            }) if existing_hash == "first-hash" && new_hash == "second-hash"
+        ));
+        assert!(matches!(
+            store.get_record(imported_record_id),
+            Err(StoreError::NotFound(_))
+        ));
+        assert!(matches!(
+            store.import_archive(&archive, true),
+            Err(StoreError::ProviderEventConflict {
+                existing_hash,
+                new_hash,
+                ..
+            }) if existing_hash == "first-hash" && new_hash == "second-hash"
+        ));
+        assert!(matches!(
+            store.get_record(imported_record_id),
+            Err(StoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn v2_import_rejects_event_seq_conflicts_without_overwrite() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let existing_record = WorkRecord::new("Existing", "body", Vec::new(), "task", None);
+        store.insert_record(&existing_record).unwrap();
+        let mut existing_event = event_for_record(existing_record.id, 11, "existing");
+        existing_event.dedupe_key = None;
+        store.upsert_event(&existing_event).unwrap();
+
+        let mut archive = archive_with_stdout_artifact("safe output");
+        archive.schema_version = 2;
+        archive.version = 2;
+        let mut imported_event = event_for_record(archive.records[0].id, 11, "incoming");
+        imported_event.dedupe_key = None;
+        archive.events.push(imported_event);
+        let imported_record_id = archive.records[0].id;
+
+        assert!(matches!(
+            store.import_archive(&archive, false),
+            Err(StoreError::ImportConflict { kind: "event", id }) if id == archive.events[0].id
+        ));
+        assert!(matches!(
+            store.get_record(imported_record_id),
+            Err(StoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn v2_import_rejects_invalid_artifact_record_blob_path() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let mut archive = archive_with_stdout_artifact("safe output");
+        archive.schema_version = 2;
+        archive.version = 2;
+        let record_id = archive.records[0].id;
+        let artifact_id = archive.artifacts[0].id;
+        let mut artifact_record = artifact_record_from_archive_artifact(&archive.artifacts[0]);
+        artifact_record.blob_path = "blobs/ff/not-the-hash".into();
+        archive.artifact_records.push(artifact_record);
+
+        assert!(matches!(
+            store.import_archive(&archive, false),
+            Err(StoreError::ArchiveArtifactPathMismatch { id }) if id == artifact_id
+        ));
+        assert!(matches!(
+            store.get_record(record_id),
+            Err(StoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn v2_import_rejects_artifact_record_missing_blob_content() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let mut archive = archive_with_stdout_artifact("safe output");
+        archive.schema_version = 2;
+        archive.version = 2;
+        let record_id = archive.records[0].id;
+        let artifact_id = archive.artifacts[0].id;
+        let artifact_record = artifact_record_from_archive_artifact(&archive.artifacts[0]);
+        archive.artifacts.clear();
+        archive.artifact_records.push(artifact_record);
+
+        assert!(matches!(
+            store.import_archive(&archive, false),
+            Err(StoreError::ArchiveArtifactMissingContent { id }) if id == artifact_id
+        ));
+        assert!(matches!(
+            store.get_record(record_id),
+            Err(StoreError::NotFound(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn store_open_and_blob_writes_repair_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempdir();
+        let path = temp.path().join("work-record").join("work.sqlite");
+        let store = Store::open(&path).unwrap();
+        let record = WorkRecord::new("Private", "body", Vec::new(), "task", None);
+        store.insert_record(&record).unwrap();
+        let evidence = Evidence::new(
+            Some(record.id),
+            "cargo test",
+            0,
+            "secret stdout".into(),
+            String::new(),
+            fixed_time(),
+            1,
+        );
+        store.insert_evidence(&evidence).unwrap();
+
+        let blob_path: String = store
+            .conn
+            .query_row("SELECT blob_path FROM artifacts LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        for (path, mode) in [
+            (temp.path().to_path_buf(), 0o700),
+            (temp.path().join("work-record"), 0o700),
+            (temp.path().join("work-record").join("inbox"), 0o700),
+            (temp.path().join("work-record").join("blobs"), 0o700),
+            (temp.path().join("work-record").join(&blob_path[..8]), 0o700),
+            (temp.path().join("work-record").join(blob_path), 0o600),
+            (path, 0o600),
+        ] {
+            let actual = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(actual, mode, "{path:?}");
+        }
     }
 
     #[cfg(unix)]

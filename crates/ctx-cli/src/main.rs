@@ -18,10 +18,10 @@ use work_record_capture::{
     FixtureOptions, ProviderFixtureImportOptions, ProviderImportSummary, ShimCommandOptions,
 };
 use work_record_core::{
-    blob_dir, database_path, default_data_root, device_path, inbox_dir, new_id, work_record_dir,
-    Artifact, CaptureProvider, EntityTimestamps, Evidence, EvidenceMetadata, Fidelity, FileTouched,
-    PullRequest, Run, Session, Summary, SummaryKind, SyncMetadata, VcsChange, VcsWorkspace,
-    WorkRecord, WorkRecordArchive,
+    blob_dir, database_path, default_data_root, device_path, inbox_dir, new_id,
+    redact_share_safe_markers, work_record_dir, Artifact, CaptureProvider, EntityTimestamps,
+    Evidence, EvidenceMetadata, Fidelity, FileTouched, PullRequest, Run, Session, Summary,
+    SummaryKind, SyncMetadata, VcsChange, VcsWorkspace, WorkRecord, WorkRecordArchive,
 };
 use work_record_publish::{
     render_pr_comment, upsert_github_pr_comment, GhCliGitHubPrCommentClient, PublishOptions,
@@ -903,7 +903,7 @@ fn run_work_subcommand(command: WorkSubcommand, data_root: PathBuf) -> Result<()
                     &args.query,
                     &packet_options(args.limit, None),
                 )?;
-                println!("{}", serde_json::to_string_pretty(&packet)?);
+                print_share_safe_value(serde_json::to_value(packet)?)?;
             } else {
                 let records = store.search_records(&args.query, args.limit)?;
                 print_records(&records, false)?;
@@ -916,7 +916,7 @@ fn run_work_subcommand(command: WorkSubcommand, data_root: PathBuf) -> Result<()
                     args.query.as_deref(),
                     &packet_options(args.limit, Some(args.max_tokens)),
                 )?;
-                println!("{}", serde_json::to_string_pretty(&packet)?);
+                print_share_safe_value(serde_json::to_value(packet)?)?;
             } else {
                 let context = store.context(args.query.as_deref(), args.limit)?;
                 println!("{}", work_record_report::context_markdown(&context));
@@ -1339,6 +1339,7 @@ fn run_capture(command: CaptureCommand, data_root: PathBuf) -> Result<()> {
                 ProviderFixtureImportOptions {
                     source_path: Some(args.input.clone()),
                     work_record_id: Some(import_record_id),
+                    expected_provider: Some(args.provider.capture_provider()),
                     ..ProviderFixtureImportOptions::default()
                 },
             )?;
@@ -1355,12 +1356,15 @@ fn run_capture(command: CaptureCommand, data_root: PathBuf) -> Result<()> {
                 None
             };
             if args.json {
+                let mut import = serde_json::to_value(&summary)?;
+                redact_json_strings(&mut import);
                 print_json(serde_json::json!({
                     "schema_version": 1,
+                    "share_safe": true,
                     "provider": args.provider.as_str(),
-                    "input": args.input,
-                    "import": summary,
-                    "record": record,
+                    "input": redact_share_safe_markers(&args.input.display().to_string()),
+                    "import": import,
+                    "record": record.as_ref().map(share_safe_record_value),
                 }))?;
             } else {
                 println!(
@@ -1405,10 +1409,12 @@ fn read_provider_fixture_summary(
         }
         let value: serde_json::Value = serde_json::from_str(line)
             .with_context(|| format!("parse provider fixture line {line_number}"))?;
-        let provider = value["provider"].as_str().unwrap_or_default();
+        let provider = value["provider"].as_str().ok_or_else(|| {
+            anyhow!("provider fixture line {line_number} is missing a string provider")
+        })?;
         if provider != expected {
             return Err(anyhow!(
-                "provider fixture line {} is `{}` but --provider is `{}`",
+                "provider fixture line {} has provider `{}` but --provider is `{}`",
                 line_number,
                 provider,
                 expected
@@ -1477,6 +1483,9 @@ fn provider_import_record(
             import.skipped,
             import.redacted
         ));
+        if import.failed > 0 {
+            body.push_str(&format!(" Failed {} line(s).", import.failed));
+        }
     } else {
         body.push_str("Provider sessions and events are linked to this Work Record.");
     }
@@ -1622,7 +1631,12 @@ old_ifs=$IFS
 IFS=:
 clean_path=
 for entry in $PATH; do
-    if [ "$entry" = "$shim_dir" ]; then
+    if [ -n "$entry" ]; then
+        entry_dir=$(CDPATH= cd -- "$entry" 2>/dev/null && pwd)
+    else
+        entry_dir=$(pwd)
+    fi
+    if [ "$entry_dir" = "$shim_dir" ]; then
         continue
     fi
     if [ -z "$clean_path" ]; then
@@ -1637,7 +1651,15 @@ if [ -z "$real_cmd" ]; then
     echo "ctx shim: real $tool not found outside $shim_dir" >&2
     exit 127
 fi
-tmpdir=$(mktemp -d "${{TMPDIR:-/tmp}}/ctx-shim-$tool.XXXXXX") || exit 125
+tmpbase=${{CTX_SHIM_TMPDIR:-}}
+if [ -z "$tmpbase" ] && [ -n "${{CTX_DATA_ROOT:-}}" ]; then
+    tmpbase=$CTX_DATA_ROOT
+fi
+if [ -z "$tmpbase" ]; then
+    tmpbase=${{TMPDIR:-/tmp}}
+fi
+mkdir -p "$tmpbase" || exit 125
+tmpdir=$(mktemp -d "$tmpbase/ctx-shim-$tool.XXXXXX") || exit 125
 stdout_file=$tmpdir/stdout
 stderr_file=$tmpdir/stderr
 started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -1909,18 +1931,26 @@ fn print_record(record: &WorkRecord, json: bool) -> Result<()> {
     if json {
         print_json(serde_json::json!({
             "schema_version": 1,
-            "record": record,
+            "share_safe": true,
+            "record": share_safe_record_value(record),
         }))?;
     } else {
-        println!("{} {}", record.id, record.title);
-        if !record.body.is_empty() {
-            println!("{}", record.body);
+        let title = redact_share_safe_markers(&record.title);
+        let body = redact_share_safe_markers(&record.body);
+        println!("{} {}", record.id, title);
+        if !body.is_empty() {
+            println!("{body}");
         }
         if !record.tags.is_empty() {
-            println!("tags: {}", record.tags.join(", "));
+            let tags = record
+                .tags
+                .iter()
+                .map(|tag| redact_share_safe_markers(tag))
+                .collect::<Vec<_>>();
+            println!("tags: {}", tags.join(", "));
         }
         if let Some(pr_url) = &record.pr_url {
-            println!("pr: {pr_url}");
+            println!("pr: {}", redact_share_safe_markers(pr_url));
         }
     }
     Ok(())
@@ -1928,16 +1958,87 @@ fn print_record(record: &WorkRecord, json: bool) -> Result<()> {
 
 fn print_records(records: &[WorkRecord], json: bool) -> Result<()> {
     if json {
+        let records = records
+            .iter()
+            .map(share_safe_record_value)
+            .collect::<Vec<_>>();
         print_json(serde_json::json!({
             "schema_version": 1,
+            "share_safe": true,
             "records": records,
         }))?;
     } else {
         for record in records {
-            println!("{} [{}] {}", record.id, record.kind, record.title);
+            println!(
+                "{} [{}] {}",
+                record.id,
+                redact_share_safe_markers(&record.kind),
+                redact_share_safe_markers(&record.title)
+            );
         }
     }
     Ok(())
+}
+
+fn share_safe_record_value(record: &WorkRecord) -> serde_json::Value {
+    serde_json::json!({
+        "id": record.id,
+        "title": redact_share_safe_markers(&record.title),
+        "body": redact_share_safe_markers(&record.body),
+        "tags": record
+            .tags
+            .iter()
+            .map(|tag| redact_share_safe_markers(tag))
+            .collect::<Vec<_>>(),
+        "kind": redact_share_safe_markers(&record.kind),
+        "workspace": record.workspace.as_deref().map(redact_share_safe_markers),
+        "pr_url": record.pr_url.as_deref().map(redact_share_safe_markers),
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    })
+}
+
+fn print_share_safe_value(mut value: serde_json::Value) -> Result<()> {
+    redact_json_string_field(&mut value, "query");
+    print_json(value)
+}
+
+fn redact_json_strings(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => {
+            *text = redact_share_safe_markers(text);
+        }
+        serde_json::Value::Object(object) => {
+            for child in object.values_mut() {
+                redact_json_strings(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                redact_json_strings(child);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn redact_json_string_field(value: &mut serde_json::Value, field: &str) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(serde_json::Value::String(text)) = object.get_mut(field) {
+                *text = redact_share_safe_markers(text);
+            }
+            for child in object.values_mut() {
+                redact_json_string_field(child, field);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                redact_json_string_field(child, field);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn print_json(value: serde_json::Value) -> Result<()> {

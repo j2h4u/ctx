@@ -46,6 +46,9 @@ ctx search checkout --limit 10 --json
 - `--kind` defaults to `note`.
 - `--workspace` can set an explicit workspace path.
 - `list`, `show`, and `search` read records back from the local store.
+- Human `list`, `show`, and `search` output plus `list --json`, `show --json`,
+  and `search --json` are share-safe by default: secret-like values, credential
+  URLs, and local paths are redacted.
 
 ## Context and reports
 
@@ -59,7 +62,8 @@ ctx dashboard export --output ./work-record-dashboard
 ```
 
 - `context` renders records and evidence for a query as Markdown by default.
-- `report` summarizes recent records and evidence as text or JSON.
+- `report` summarizes recent records and evidence as share-safe text or JSON.
+  Summary tags and report records are redacted by default.
 - `dashboard export` writes a static local HTML report to `index.html` in the
   output directory. It includes summary metrics, recent records, PR links,
   evidence previews, tags, and capture/search cues. The file has no hosted
@@ -128,6 +132,11 @@ capture library path and creates a local summary Work Record when new sessions
 or events are imported, so `ctx search`, `ctx context`, `ctx report`, and
 `ctx dashboard export` have useful review material immediately. Re-running the
 same fixture is idempotent for the summary record.
+
+Malformed provider fixture JSONL and provider mismatches are rejected before
+the CLI imports the file, so a bad fixture does not leave a partial summary
+record behind. Rows that pass CLI preflight but fail during the lower capture
+import are reported as failed in text or JSON output.
 
 These commands do not scan existing agent transcript directories. Local
 Git/jj/gh wrapper shims are opt-in through `ctx shim`; provider-native hooks
