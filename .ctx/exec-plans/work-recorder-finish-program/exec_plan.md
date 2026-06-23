@@ -463,3 +463,12 @@ Do not report final completion until all are true:
     internal orchestration details. The first three are being addressed in this
     checkpoint; the public `.ctx` files remain intentionally present because the
     user asked to keep execution/status provenance on disk for this branch.
+  - Buildkite #66 passed docs, check, clippy, Rust tests, and examples, then
+    failed in the Bazel lane because `BUILD.bazel` omitted the tracked
+    `apps/work-recorder-dashboard/dist/**` files needed by `work-record-report`
+    `include_bytes!`/`include_str!` calls inside the sandbox.
+  - Fix in progress on the next head: include the dashboard dist files in the
+    Bazel test runfiles. Docs review also found stale `SECURITY.md` wording that
+    excluded PR comment publishing; the next head corrects it to cover local
+    GitHub PR comment upsert via authenticated `gh` while keeping hosted/GitLab
+    publishing out of launch scope.

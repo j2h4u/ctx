@@ -2,7 +2,7 @@
 
 ctx Work Recorder is currently a local-first CLI. The launch branch does not
 include hosted sync, hosted accounts, team policy enforcement, public installer
-URLs, or pull request comment publishing.
+URLs, hosted publishing, or GitLab publishing.
 
 ## Supported Surface
 
@@ -13,7 +13,9 @@ Security review for this branch covers the local Work Recorder surface:
 - explicit `ctx record`, `ctx evidence run`, export/import, search, report, and
   dashboard export commands;
 - opt-in local Git/jj/gh wrapper shims;
-- pull request URL parsing and local `ctx link-pr`.
+- pull request URL parsing and local `ctx link-pr`;
+- dry-run and live GitHub PR comment publishing through the authenticated local
+  `gh` CLI, using one marker-bounded ctx-owned comment.
 
 Provider transcript importers, shell hooks, hosted team workflows, and hosted
 publish commands are product direction unless the CLI reference documents a

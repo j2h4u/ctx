@@ -4,6 +4,7 @@ sh_test(
     data = glob([
         "Cargo.lock",
         "Cargo.toml",
+        "apps/work-recorder-dashboard/dist/**",
         "crates/**",
         "tests/**",
     ]),
