@@ -1,7 +1,8 @@
 use std::{
     collections::BTreeSet,
     env, fs,
-    io::{self, Read},
+    io::{self, IsTerminal, Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -48,6 +49,7 @@ const DEFAULT_SHIM_MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const TIMEOUT_EXIT_CODE: i32 = 124;
 const SHELL_RC_BEGIN: &str = "# >>> ctx work recorder passive capture >>>";
 const SHELL_RC_END: &str = "# <<< ctx work recorder passive capture <<<";
+const DASHBOARD_IDLE_SECONDS: u64 = 60 * 60;
 
 #[derive(Debug, Parser)]
 #[command(name = "ctx", about = "Work Recorder command line")]
@@ -82,6 +84,8 @@ enum CommandRoot {
     Report(ReportArgs),
     #[command(about = "Export a local static Work Recorder dashboard")]
     Dashboard(DashboardCommand),
+    #[command(about = "Manage the optional local ctx background service")]
+    Service(ServiceCommand),
     #[command(about = "Capture evidence for work records")]
     Evidence(EvidenceCommand),
     #[command(about = "Import passive capture spool events")]
@@ -139,6 +143,18 @@ struct WorkCommand {
 
 #[derive(Debug, Args, Clone)]
 struct SetupArgs {
+    #[arg(long)]
+    no_open: bool,
+    #[arg(long)]
+    no_import: bool,
+    #[arg(long)]
+    no_shell_update: bool,
+    #[arg(long)]
+    service: bool,
+    #[arg(long)]
+    yes: bool,
+    #[arg(long)]
+    dry_run: bool,
     #[arg(long, value_name = "FILE")]
     shell_rc: Option<PathBuf>,
 }
@@ -153,6 +169,10 @@ struct StatusArgs {
 struct UninstallArgs {
     #[arg(long)]
     yes: bool,
+    #[arg(long)]
+    force: bool,
+    #[arg(long)]
+    delete_data: bool,
     #[arg(long, value_name = "FILE")]
     shell_rc: Option<PathBuf>,
 }
@@ -262,8 +282,12 @@ enum ReportFormat {
 
 #[derive(Debug, Args)]
 struct DashboardCommand {
+    #[arg(long, default_value_t = 1000)]
+    limit: usize,
+    #[arg(long)]
+    no_open: bool,
     #[command(subcommand)]
-    command: DashboardSubcommand,
+    command: Option<DashboardSubcommand>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -272,6 +296,8 @@ enum DashboardSubcommand {
     Export(DashboardExportArgs),
     #[command(about = "Export and open the local Work Recorder dashboard")]
     Open(DashboardOpenArgs),
+    #[command(hide = true, about = "Run the local dashboard HTTP server")]
+    Serve(DashboardServeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -290,6 +316,32 @@ struct DashboardOpenArgs {
     limit: usize,
     #[arg(long)]
     no_browser: bool,
+}
+
+#[derive(Debug, Args)]
+struct DashboardServeArgs {
+    #[arg(long)]
+    port_file: PathBuf,
+    #[arg(long, default_value_t = 1000)]
+    limit: usize,
+    #[arg(long, default_value_t = DASHBOARD_IDLE_SECONDS)]
+    idle_seconds: u64,
+}
+
+#[derive(Debug, Args)]
+struct ServiceCommand {
+    #[command(subcommand)]
+    command: ServiceSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceSubcommand {
+    #[command(about = "Install the optional local ctx service")]
+    Install,
+    #[command(about = "Show optional local ctx service status")]
+    Status,
+    #[command(about = "Uninstall the optional local ctx service")]
+    Uninstall,
 }
 
 #[derive(Debug, Args)]
@@ -639,6 +691,7 @@ fn main() -> Result<()> {
         }
         CommandRoot::Capture(args) => run_capture(args, data_root),
         CommandRoot::Shim(args) => run_shim(args),
+        CommandRoot::Service(args) => run_service(args, data_root),
         CommandRoot::Vcs(args) => run_vcs(args),
         CommandRoot::Pr(args) => run_pr(args),
         CommandRoot::Publish(args) => run_publish(args, data_root),
@@ -1005,118 +1058,223 @@ fn run_workspace(command: WorkspaceCommand, data_root: PathBuf) -> Result<()> {
 
 fn run_workspace_subcommand(command: WorkspaceSubcommand, data_root: PathBuf) -> Result<()> {
     match command {
-        WorkspaceSubcommand::Setup(args) => {
-            let db_path = database_path(data_root.clone());
-            let store = Store::open(&db_path)?;
-            let shim_dir = default_shim_dir(&data_root);
-            install_shims(&shim_dir)?;
-            if let Some(shell_rc) = args.shell_rc.as_ref() {
-                activate_shell_rc(shell_rc, &shim_dir)?;
-            }
-            println!("Work Recorder workspace ready");
-            println!("database: {}", store.path().display());
-            println!("passive_capture_shims: {}", shim_dir.display());
-            println!(
-                "activate: export PATH={}:$PATH",
-                shell_escape_path(&shim_dir)
-            );
-            if let Some(shell_rc) = args.shell_rc.as_ref() {
-                println!("shell_rc: {}", shell_rc.display());
-            }
+        WorkspaceSubcommand::Setup(args) => run_setup(args, data_root)?,
+        WorkspaceSubcommand::Status(args) => run_status(args, data_root)?,
+        WorkspaceSubcommand::Uninstall(args) => run_uninstall(args, data_root)?,
+    }
+    Ok(())
+}
+
+fn run_setup(args: SetupArgs, data_root: PathBuf) -> Result<()> {
+    let db_path = database_path(data_root.clone());
+    let objects = blob_dir(data_root.clone());
+    let spool = capture_inbox_dir(&data_root);
+    let shim_dir = default_shim_dir(&data_root);
+
+    println!("ctx setup");
+    if args.dry_run {
+        println!(
+            "✓ local layout: would create/update {}",
+            data_root.display()
+        );
+        println!("✓ database_path: would open {}", db_path.display());
+        println!("✓ objects_dir: would create {}", objects.display());
+        println!("✓ spool_dir: would create {}", spool.display());
+        println!(
+            "✓ shims: would install git, gh, jj in {}",
+            shim_dir.display()
+        );
+        println!("✓ provider_import: skipped (dry-run)");
+        println!("✓ dashboard: skipped (dry-run)");
+        print_next_commands();
+        return Ok(());
+    }
+
+    let mut store = Store::open(&db_path)?;
+    fs::create_dir_all(&objects)?;
+    fs::create_dir_all(&spool)?;
+    install_shims_with_output(&shim_dir, false)?;
+
+    println!("✓ local layout: {}", data_root.display());
+    println!("✓ database_path: {}", store.path().display());
+    println!("✓ objects_dir: {}", objects.display());
+    println!("✓ spool_dir: {}", spool.display());
+    println!("✓ shims: git, gh, jj in {}", shim_dir.display());
+
+    let shell_rc = if args.no_shell_update {
+        None
+    } else {
+        args.shell_rc.clone().or_else(default_shell_rc_if_safe)
+    };
+    match shell_rc.as_ref() {
+        Some(path) => {
+            activate_shell_rc_with_output(path, &shim_dir, false)?;
+            println!("✓ shell_rc: {}", path.display());
         }
-        WorkspaceSubcommand::Status(args) => {
-            let db_path = database_path(data_root.clone());
-            let capture_inbox = capture_inbox_dir(&data_root);
-            let shim_dir = default_shim_dir(&data_root);
-            let counts = spool_counts(&capture_inbox)?;
-            let mut shim_statuses = Vec::new();
-            if !args.json {
-                println!("data_root: {}", data_root.display());
-                println!(
-                    "work_record_dir: {}",
-                    work_record_dir(data_root.clone()).display()
-                );
-                println!("shim_dir: {}", shim_dir.display());
-                println!("blob_dir: {}", blob_dir(data_root.clone()).display());
-                println!("inbox_dir: {}", inbox_dir(data_root.clone()).display());
-                println!("device_path: {}", device_path(data_root.clone()).display());
-                println!("database: {}", db_path.display());
-                println!("initialized: {}", db_path.exists());
-                println!("spool_pending: {}", counts.pending);
-                println!("spool_tmp: {}", counts.tmp);
-                println!("spool_processing: {}", counts.processing);
-                println!("spool_done: {}", counts.done);
-                println!("spool_failed: {}", counts.failed);
-            }
-            let mut active = 0;
-            for tool in ShimTool::ALL {
-                let status = passive_shim_status(tool, &shim_dir)?;
-                if matches!(status, PassiveShimStatus::Active(_)) {
-                    active += 1;
-                }
-                if !args.json {
-                    println!("shim_{}: {}", tool.as_str(), status.display());
-                }
-                shim_statuses.push((tool, status));
-            }
-            if !args.json {
-                println!(
-                    "passive_capture_active_on_path: {active}/{}",
-                    ShimTool::ALL.len()
-                );
-            }
-            if args.json {
-                print_json(serde_json::json!({
-                    "schema_version": 1,
-                    "share_safe": false,
-                    "initialized": db_path.exists(),
-                    "local_only": true,
-                    "paths": {
-                        "data_root": data_root.display().to_string(),
-                        "work_record_dir": work_record_dir(data_root.clone()).display().to_string(),
-                        "shim_dir": shim_dir.display().to_string(),
-                        "blob_dir": blob_dir(data_root.clone()).display().to_string(),
-                        "inbox_dir": inbox_dir(data_root.clone()).display().to_string(),
-                        "device_path": device_path(data_root.clone()).display().to_string(),
-                        "database": db_path.display().to_string(),
-                    },
-                    "spool": {
-                        "pending": counts.pending,
-                        "tmp": counts.tmp,
-                        "processing": counts.processing,
-                        "done": counts.done,
-                        "failed": counts.failed,
-                    },
-                    "passive_capture": {
-                        "active_on_path": active,
-                        "expected_shims": ShimTool::ALL.len(),
-                        "shims": shim_statuses.iter().map(|(tool, status)| {
-                            serde_json::json!({
-                                "tool": tool.as_str(),
-                                "state": status.state(),
-                                "path": status.path().map(|path| path.display().to_string()),
-                                "display": status.display(),
-                            })
-                        }).collect::<Vec<_>>(),
-                    },
-                }))?;
-            }
+        None if args.no_shell_update => println!("✓ shell_rc: skipped (--no-shell-update)"),
+        None => println!("✓ shell_rc: skipped (not an interactive known shell)"),
+    }
+
+    if args.no_import {
+        println!("✓ provider_import: skipped (--no-import)");
+    } else {
+        auto_import_pending_spool(&data_root, &mut store)?;
+        let report = import_local_providers(&mut store)?;
+        let totals = report.totals();
+        println!(
+            "✓ provider_import: sessions={} events={} skipped={} failed={}",
+            totals.imported_sessions, totals.imported_events, totals.skipped, totals.failed
+        );
+    }
+
+    if args.service {
+        install_service_marker(&data_root)?;
+        println!("✓ service: installed (optional)");
+    } else {
+        println!("✓ service: skipped (use `ctx setup --service` to install)");
+    }
+
+    if args.no_open {
+        println!("✓ dashboard: skipped (--no-open)");
+    } else if can_open_browser() {
+        let dashboard = start_or_reuse_dashboard(&data_root, 1000)?;
+        println!("✓ dashboard_url: {}", dashboard.url);
+        open_dashboard_url(&dashboard.url)?;
+    } else {
+        println!("✓ dashboard: skipped (headless/SSH/CI)");
+    }
+
+    print_next_commands();
+    Ok(())
+}
+
+fn run_status(args: StatusArgs, data_root: PathBuf) -> Result<()> {
+    let db_path = database_path(data_root.clone());
+    let spool = capture_inbox_dir(&data_root);
+    let shim_dir = default_shim_dir(&data_root);
+    let counts = spool_counts(&spool)?;
+    let dashboard = dashboard_status(&data_root);
+    let mut shim_statuses = Vec::new();
+    let mut active = 0;
+
+    for tool in ShimTool::ALL {
+        let status = passive_shim_status(tool, &shim_dir)?;
+        if matches!(status, PassiveShimStatus::Active(_)) {
+            active += 1;
         }
-        WorkspaceSubcommand::Uninstall(args) => {
-            if !args.yes {
-                return Err(anyhow!("refusing to uninstall without --yes"));
-            }
-            if let Some(shell_rc) = args.shell_rc.as_ref() {
-                deactivate_shell_rc(shell_rc)?;
-            }
-            let shim_dir = default_shim_dir(&data_root);
-            let _ = uninstall_shims(&shim_dir);
-            let dir = work_record_dir(data_root);
-            if dir.exists() {
-                fs::remove_dir_all(&dir)?;
-            }
-            println!("removed {}", dir.display());
+        shim_statuses.push((tool, status));
+    }
+
+    if args.json {
+        print_json(serde_json::json!({
+            "schema_version": 1,
+            "share_safe": false,
+            "initialized": db_path.exists(),
+            "local_only": true,
+            "paths": {
+                "data_root": data_root.display().to_string(),
+                "work_record_dir": work_record_dir(data_root.clone()).display().to_string(),
+                "shim_dir": shim_dir.display().to_string(),
+                "objects_dir": blob_dir(data_root.clone()).display().to_string(),
+                "spool_dir": spool.display().to_string(),
+                "device_path": device_path(data_root.clone()).display().to_string(),
+                "database_path": db_path.display().to_string(),
+            },
+            "spool": {
+                "pending": counts.pending,
+                "tmp": counts.tmp,
+                "processing": counts.processing,
+                "done": counts.done,
+                "failed": counts.failed,
+            },
+            "dashboard": {
+                "running": dashboard.running,
+                "url": dashboard.url,
+            },
+            "service": {
+                "installed": service_marker_path(&data_root).exists(),
+            },
+            "passive_capture": {
+                "active_on_path": active,
+                "expected_shims": ShimTool::ALL.len(),
+                "shims": shim_statuses.iter().map(|(tool, status)| {
+                    serde_json::json!({
+                        "tool": tool.as_str(),
+                        "state": status.state(),
+                        "path": status.path().map(|path| path.display().to_string()),
+                        "display": status.display(),
+                    })
+                }).collect::<Vec<_>>(),
+            },
+        }))?;
+        return Ok(());
+    }
+
+    println!("data_root: {}", data_root.display());
+    println!(
+        "work_record_dir: {}",
+        work_record_dir(data_root.clone()).display()
+    );
+    println!("shim_dir: {}", shim_dir.display());
+    println!("objects_dir: {}", blob_dir(data_root.clone()).display());
+    println!("spool_dir: {}", spool.display());
+    println!("device_path: {}", device_path(data_root.clone()).display());
+    println!("database_path: {}", db_path.display());
+    println!("database: {}", db_path.display());
+    println!("initialized: {}", db_path.exists());
+    println!("dashboard_running: {}", dashboard.running);
+    println!(
+        "dashboard_url: {}",
+        dashboard.url.as_deref().unwrap_or("not_running")
+    );
+    println!(
+        "service_installed: {}",
+        service_marker_path(&data_root).exists()
+    );
+    println!("spool_pending: {}", counts.pending);
+    println!("spool_tmp: {}", counts.tmp);
+    println!("spool_processing: {}", counts.processing);
+    println!("spool_done: {}", counts.done);
+    println!("spool_failed: {}", counts.failed);
+    for (tool, status) in shim_statuses {
+        println!("shim_{}: {}", tool.as_str(), status.display());
+    }
+    println!(
+        "passive_capture_active_on_path: {active}/{}",
+        ShimTool::ALL.len()
+    );
+    Ok(())
+}
+
+fn run_uninstall(args: UninstallArgs, data_root: PathBuf) -> Result<()> {
+    if !args.yes && !args.force {
+        return Err(anyhow!("refusing to uninstall without --yes or --force"));
+    }
+    let shim_dir = default_shim_dir(&data_root);
+    let shell_rc = args.shell_rc.clone().or_else(default_shell_rc_if_safe);
+    if let Some(path) = shell_rc.as_ref() {
+        if path.exists() {
+            deactivate_shell_rc_with_output(path, false)?;
+            println!("removed_shell_rc_block: {}", path.display());
         }
+    }
+    uninstall_shims_with_output(&shim_dir, false)?;
+    println!("removed_shims: {}", shim_dir.display());
+    if uninstall_service_marker(&data_root)? {
+        println!("removed_service: optional ctx service");
+    } else {
+        println!("removed_service: not_installed");
+    }
+
+    if args.delete_data {
+        let dir = work_record_dir(data_root);
+        if dir.exists() {
+            fs::remove_dir_all(&dir)?;
+        }
+        println!("deleted_data: {}", dir.display());
+    } else {
+        println!("kept_data: {}", work_record_dir(data_root).display());
+        println!("delete_data: run `ctx uninstall --delete-data --yes`");
     }
     Ok(())
 }
@@ -1243,11 +1401,11 @@ fn run_work_subcommand(command: WorkSubcommand, data_root: PathBuf) -> Result<()
 
 fn run_dashboard(command: DashboardCommand, data_root: PathBuf) -> Result<()> {
     match command.command {
-        DashboardSubcommand::Export(args) => {
+        Some(DashboardSubcommand::Export(args)) => {
             let index = export_dashboard(&data_root, &args.output, args.limit)?;
             println!("dashboard: {}", index.display());
         }
-        DashboardSubcommand::Open(args) => {
+        Some(DashboardSubcommand::Open(args)) => {
             let output = args
                 .output
                 .unwrap_or_else(|| work_record_dir(data_root.clone()).join("dashboard"));
@@ -1257,7 +1415,217 @@ fn run_dashboard(command: DashboardCommand, data_root: PathBuf) -> Result<()> {
                 open_dashboard_file(&index)?;
             }
         }
+        Some(DashboardSubcommand::Serve(args)) => {
+            serve_dashboard(&data_root, &args.port_file, args.limit, args.idle_seconds)?;
+        }
+        None => {
+            let dashboard = start_or_reuse_dashboard(&data_root, command.limit)?;
+            println!("dashboard_url: {}", dashboard.url);
+            println!(
+                "dashboard_running: {}",
+                if dashboard.reused {
+                    "reused"
+                } else {
+                    "started"
+                }
+            );
+            if command.no_open {
+                println!("open: skipped (--no-open)");
+            } else if can_open_browser() {
+                open_dashboard_url(&dashboard.url)?;
+                println!("open: requested");
+            } else {
+                println!("open: skipped (headless/SSH/CI)");
+            }
+        }
     }
+    Ok(())
+}
+
+struct DashboardHandle {
+    url: String,
+    reused: bool,
+}
+
+struct DashboardStatus {
+    running: bool,
+    url: Option<String>,
+}
+
+fn start_or_reuse_dashboard(data_root: &Path, limit: usize) -> Result<DashboardHandle> {
+    if let Some(url) = running_dashboard_url(data_root) {
+        return Ok(DashboardHandle { url, reused: true });
+    }
+
+    let state = dashboard_port_file(data_root);
+    if let Some(parent) = state.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let _ = fs::remove_file(&state);
+    let exe = env::current_exe()?.canonicalize()?;
+    Command::new(exe)
+        .arg("dashboard")
+        .arg("serve")
+        .arg("--port-file")
+        .arg(&state)
+        .arg("--limit")
+        .arg(limit.to_string())
+        .arg("--idle-seconds")
+        .arg(dashboard_idle_seconds().to_string())
+        .env("CTX_DATA_ROOT", data_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("start ctx dashboard server")?;
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if let Some(url) = running_dashboard_url(data_root) {
+            return Ok(DashboardHandle { url, reused: false });
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err(anyhow!("dashboard server did not become ready"))
+}
+
+fn dashboard_status(data_root: &Path) -> DashboardStatus {
+    match running_dashboard_url(data_root) {
+        Some(url) => DashboardStatus {
+            running: true,
+            url: Some(url),
+        },
+        None => DashboardStatus {
+            running: false,
+            url: None,
+        },
+    }
+}
+
+fn running_dashboard_url(data_root: &Path) -> Option<String> {
+    let state = fs::read_to_string(dashboard_port_file(data_root)).ok()?;
+    let mut parts = state.split_whitespace();
+    let port = parts.next()?.parse::<u16>().ok()?;
+    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
+    TcpStream::connect_timeout(&addr, Duration::from_millis(100)).ok()?;
+    Some(format!("http://127.0.0.1:{port}/"))
+}
+
+fn dashboard_port_file(data_root: &Path) -> PathBuf {
+    work_record_dir(data_root.to_path_buf()).join("dashboard.port")
+}
+
+fn dashboard_idle_seconds() -> u64 {
+    env::var("CTX_DASHBOARD_IDLE_SECONDS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DASHBOARD_IDLE_SECONDS)
+}
+
+fn serve_dashboard(
+    data_root: &Path,
+    port_file: &Path,
+    limit: usize,
+    idle_seconds: u64,
+) -> Result<()> {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).context("bind dashboard listener")?;
+    listener
+        .set_nonblocking(true)
+        .context("set dashboard listener nonblocking")?;
+    let port = listener.local_addr()?.port();
+    if let Some(parent) = port_file.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(port_file, format!("{port}\n"))?;
+    let idle = Duration::from_secs(idle_seconds);
+    let mut last_request = Instant::now();
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                last_request = Instant::now();
+                let _ = handle_dashboard_request(&mut stream, data_root, limit);
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                if last_request.elapsed() > idle {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(err) => return Err(err).context("accept dashboard request"),
+        }
+    }
+    let _ = fs::remove_file(port_file);
+    Ok(())
+}
+
+fn handle_dashboard_request(stream: &mut TcpStream, data_root: &Path, limit: usize) -> Result<()> {
+    let mut buffer = [0_u8; 2048];
+    let bytes = stream.read(&mut buffer)?;
+    let request = String::from_utf8_lossy(&buffer[..bytes]);
+    let path = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("/");
+    if path == "/" || path == "/index.html" {
+        let mut store = Store::open(database_path(data_root.to_path_buf()))?;
+        auto_import_pending_spool(data_root, &mut store)?;
+        let data = load_dashboard_data(&store, limit)?;
+        let report = data.report();
+        let html = live_dashboard_html(&work_record_report::render_dashboard_html_report(&report));
+        write_http_response(
+            stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            html.as_bytes(),
+        )?;
+        return Ok(());
+    }
+
+    let asset_path = path.trim_start_matches('/');
+    for (relative_path, contents) in work_record_report::dashboard_static_assets() {
+        if relative_path == asset_path {
+            let content_type = if relative_path.ends_with(".js") {
+                "text/javascript; charset=utf-8"
+            } else if relative_path.ends_with(".css") {
+                "text/css; charset=utf-8"
+            } else {
+                "application/octet-stream"
+            };
+            write_http_response(stream, "200 OK", content_type, contents)?;
+            return Ok(());
+        }
+    }
+    write_http_response(
+        stream,
+        "404 Not Found",
+        "text/plain; charset=utf-8",
+        b"not found",
+    )?;
+    Ok(())
+}
+
+fn live_dashboard_html(html: &str) -> String {
+    let refresh = r#"<script>setTimeout(function(){ window.location.reload(); }, 5000);</script>"#;
+    if html.contains("</body>") {
+        html.replacen("</body>", &format!("{refresh}</body>"), 1)
+    } else {
+        format!("{html}{refresh}")
+    }
+}
+
+fn write_http_response(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+) -> Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )?;
+    stream.write_all(body)?;
     Ok(())
 }
 
@@ -1304,6 +1672,63 @@ fn open_dashboard_file(index: &Path) -> Result<()> {
         .spawn()
         .with_context(|| format!("open dashboard {}", index.display()))?;
     Ok(())
+}
+
+fn open_dashboard_url(url: &str) -> Result<()> {
+    if let Ok(path) = env::var("CTX_TEST_BROWSER_OPEN_FILE") {
+        fs::write(path, format!("{url}\n"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(url);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.arg("/C").arg("start").arg("").arg(url);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+
+    command
+        .spawn()
+        .with_context(|| format!("open dashboard {url}"))?;
+    Ok(())
+}
+
+fn can_open_browser() -> bool {
+    if env_flag("CTX_TEST_FORCE_BROWSER_OPEN") {
+        return true;
+    }
+    if env_flag("CI") || env_flag("CTX_HEADLESS") || env::var_os("SSH_CONNECTION").is_some() {
+        return false;
+    }
+    if !io::stdout().is_terminal() {
+        return false;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if env::var_os("DISPLAY").is_none() && env::var_os("WAYLAND_DISPLAY").is_none() {
+            return false;
+        }
+    }
+    true
+}
+
+fn env_flag(name: &str) -> bool {
+    matches!(
+        env::var(name).ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+    )
 }
 
 fn persist_typed_pr_link(store: &Store, record_id: Uuid, pr_url: &str) -> Result<()> {
@@ -1991,6 +2416,14 @@ struct LocalProviderImportReport {
     entries: Vec<LocalProviderEntry>,
 }
 
+#[derive(Default)]
+struct LocalProviderImportTotals {
+    imported_sessions: usize,
+    imported_events: usize,
+    skipped: usize,
+    failed: usize,
+}
+
 struct LocalProviderEntry {
     provider: &'static str,
     status: &'static str,
@@ -2006,6 +2439,17 @@ struct LocalProviderEntry {
 }
 
 impl LocalProviderImportReport {
+    fn totals(&self) -> LocalProviderImportTotals {
+        let mut totals = LocalProviderImportTotals::default();
+        for entry in &self.entries {
+            totals.imported_sessions += entry.imported_sessions;
+            totals.imported_events += entry.imported_events;
+            totals.skipped += entry.skipped;
+            totals.failed += entry.failed;
+        }
+        totals
+    }
+
     fn to_json(&self) -> serde_json::Value {
         let providers: Vec<_> = self
             .entries
@@ -2954,6 +3398,10 @@ fn run_shim(command: ShimCommand) -> Result<()> {
 }
 
 fn install_shims(dir: &Path) -> Result<()> {
+    install_shims_with_output(dir, true)
+}
+
+fn install_shims_with_output(dir: &Path, print: bool) -> Result<()> {
     fs::create_dir_all(dir)?;
     let ctx_bin = env::current_exe()?.canonicalize()?;
     for tool in ShimTool::ALL {
@@ -2971,12 +3419,18 @@ fn install_shims(dir: &Path) -> Result<()> {
             permissions.set_mode(0o755);
             fs::set_permissions(&path, permissions)?;
         }
-        println!("installed {}", path.display());
+        if print {
+            println!("installed {}", path.display());
+        }
     }
     Ok(())
 }
 
 fn uninstall_shims(dir: &Path) -> Result<()> {
+    uninstall_shims_with_output(dir, true)
+}
+
+fn uninstall_shims_with_output(dir: &Path, print: bool) -> Result<()> {
     for tool in ShimTool::ALL {
         let path = dir.join(tool.as_str());
         if !path.exists() {
@@ -2989,12 +3443,18 @@ fn uninstall_shims(dir: &Path) -> Result<()> {
             ));
         }
         fs::remove_file(&path)?;
-        println!("removed {}", path.display());
+        if print {
+            println!("removed {}", path.display());
+        }
     }
     Ok(())
 }
 
 fn activate_shell_rc(shell_rc: &Path, shim_dir: &Path) -> Result<()> {
+    activate_shell_rc_with_output(shell_rc, shim_dir, true)
+}
+
+fn activate_shell_rc_with_output(shell_rc: &Path, shim_dir: &Path, print: bool) -> Result<()> {
     if let Some(parent) = shell_rc.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -3021,11 +3481,15 @@ fn activate_shell_rc(shell_rc: &Path, shim_dir: &Path) -> Result<()> {
                 backup.display()
             )
         })?;
-        println!("backup: {}", backup.display());
+        if print {
+            println!("backup: {}", backup.display());
+        }
     }
     fs::write(shell_rc, updated)
         .with_context(|| format!("write shell rc {}", shell_rc.display()))?;
-    println!("activated {}", shell_rc.display());
+    if print {
+        println!("activated {}", shell_rc.display());
+    }
     Ok(())
 }
 
@@ -3038,6 +3502,10 @@ fn read_optional_shell_rc(shell_rc: &Path) -> Result<String> {
 }
 
 fn deactivate_shell_rc(shell_rc: &Path) -> Result<()> {
+    deactivate_shell_rc_with_output(shell_rc, true)
+}
+
+fn deactivate_shell_rc_with_output(shell_rc: &Path, print: bool) -> Result<()> {
     let original = fs::read_to_string(shell_rc)
         .with_context(|| format!("read shell rc {}", shell_rc.display()))?;
     let updated = remove_shell_rc_block(&original);
@@ -3053,7 +3521,9 @@ fn deactivate_shell_rc(shell_rc: &Path) -> Result<()> {
         fs::write(shell_rc, updated)
             .with_context(|| format!("write shell rc {}", shell_rc.display()))?;
     }
-    println!("deactivated {}", shell_rc.display());
+    if print {
+        println!("deactivated {}", shell_rc.display());
+    }
     Ok(())
 }
 
@@ -3081,6 +3551,87 @@ fn shell_rc_backup_path(shell_rc: &Path) -> PathBuf {
     let mut backup = shell_rc.as_os_str().to_os_string();
     backup.push(".ctxbak");
     PathBuf::from(backup)
+}
+
+fn default_shell_rc_if_safe() -> Option<PathBuf> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return None;
+    }
+    let home = env::var_os("HOME").map(PathBuf::from)?;
+    let shell = env::var("SHELL").ok()?;
+    let name = Path::new(&shell).file_name()?.to_str()?;
+    match name {
+        "bash" => Some(home.join(".bashrc")),
+        "zsh" => Some(home.join(".zshrc")),
+        _ => None,
+    }
+}
+
+fn print_next_commands() {
+    println!("Next commands:");
+    println!("  ctx status");
+    println!("  ctx dashboard");
+    println!("  ctx search <query>");
+}
+
+fn service_marker_path(data_root: &Path) -> PathBuf {
+    work_record_dir(data_root.to_path_buf()).join("service-installed")
+}
+
+fn install_service_marker(data_root: &Path) -> Result<()> {
+    let path = service_marker_path(data_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        &path,
+        "installed=true\nkind=optional-local-dashboard-service\n",
+    )
+    .with_context(|| format!("write service marker {}", path.display()))?;
+    Ok(())
+}
+
+fn uninstall_service_marker(data_root: &Path) -> Result<bool> {
+    let path = service_marker_path(data_root);
+    if path.exists() {
+        fs::remove_file(&path)
+            .with_context(|| format!("remove service marker {}", path.display()))?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+fn run_service(command: ServiceCommand, data_root: PathBuf) -> Result<()> {
+    match command.command {
+        ServiceSubcommand::Install => {
+            install_service_marker(&data_root)?;
+            println!("service_installed: true");
+            println!("service_scope: optional");
+            println!(
+                "dashboard_url: {}",
+                start_or_reuse_dashboard(&data_root, 1000)?.url
+            );
+        }
+        ServiceSubcommand::Status => {
+            let installed = service_marker_path(&data_root).exists();
+            let dashboard = dashboard_status(&data_root);
+            println!("service_installed: {installed}");
+            println!("dashboard_running: {}", dashboard.running);
+            println!(
+                "dashboard_url: {}",
+                dashboard.url.as_deref().unwrap_or("not_running")
+            );
+        }
+        ServiceSubcommand::Uninstall => {
+            let removed = uninstall_service_marker(&data_root)?;
+            println!(
+                "service_uninstalled: {}",
+                if removed { "true" } else { "not_installed" }
+            );
+        }
+    }
+    Ok(())
 }
 
 fn is_ctx_shim(path: &Path) -> Result<bool> {
@@ -3188,7 +3739,7 @@ fn wrapper_script(tool: ShimTool, ctx_bin: &Path) -> Result<String> {
     let tool_name = tool.as_str();
     let ctx_bin = shell_escape_path(ctx_bin);
     Ok(format!(
-r#"#!/bin/sh
+        r#"#!/bin/sh
 # CTX_WORK_RECORD_SHIM=1
 tool="{tool_name}"
 case "$0" in

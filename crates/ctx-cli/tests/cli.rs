@@ -675,16 +675,30 @@ fn root_status_reports_unreadable_path_shim_without_failing() {
 fn root_setup_status_schema_and_validate_work() {
     let temp = tempdir();
     ctx(&temp)
-        .args(["setup"])
+        .args(["setup", "--no-open", "--no-import", "--no-shell-update"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Work Recorder workspace ready"))
-        .stdout(predicate::str::contains("passive_capture_shims:"))
-        .stdout(predicate::str::contains("activate: export PATH="));
+        .stdout(predicate::str::contains("ctx setup"))
+        .stdout(predicate::str::contains("✓ local layout:"))
+        .stdout(predicate::str::contains("✓ database_path:"))
+        .stdout(predicate::str::contains("✓ objects_dir:"))
+        .stdout(predicate::str::contains("✓ spool_dir:"))
+        .stdout(predicate::str::contains("✓ shims: git, gh, jj"))
+        .stdout(predicate::str::contains(
+            "✓ provider_import: skipped (--no-import)",
+        ))
+        .stdout(predicate::str::contains("✓ dashboard: skipped (--no-open)"))
+        .stdout(predicate::str::contains("Next commands:"));
     let default_shim_dir = temp.path().join("work-record").join("shims");
     assert!(default_shim_dir.join("git").exists());
     assert!(default_shim_dir.join("jj").exists());
     assert!(default_shim_dir.join("gh").exists());
+
+    ctx(&temp)
+        .args(["setup", "--no-open", "--no-import", "--no-shell-update"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("✓ shims: git, gh, jj"));
 
     ctx(&temp)
         .args(["status"])
@@ -692,8 +706,11 @@ fn root_setup_status_schema_and_validate_work() {
         .success()
         .stdout(predicate::str::contains("initialized: true"))
         .stdout(predicate::str::contains("shim_dir:"))
-        .stdout(predicate::str::contains("blob_dir:"))
-        .stdout(predicate::str::contains("inbox_dir:"))
+        .stdout(predicate::str::contains("objects_dir:"))
+        .stdout(predicate::str::contains("spool_dir:"))
+        .stdout(predicate::str::contains("database_path:"))
+        .stdout(predicate::str::contains("dashboard_running:"))
+        .stdout(predicate::str::contains("dashboard_url:"))
         .stdout(predicate::str::contains("device_path:"))
         .stdout(predicate::str::contains("spool_pending: 0"))
         .stdout(predicate::str::contains("spool_processing: 0"))
@@ -713,6 +730,11 @@ fn root_setup_status_schema_and_validate_work() {
     assert_eq!(status["initialized"], true);
     assert_eq!(status["local_only"], true);
     assert_eq!(status["spool"]["pending"], 0);
+    assert!(status["paths"]["database_path"]
+        .as_str()
+        .unwrap()
+        .contains("work.sqlite"));
+    assert_eq!(status["dashboard"]["running"], false);
     assert_eq!(status["passive_capture"]["active_on_path"], 0);
     assert_eq!(
         status["passive_capture"]["shims"].as_array().unwrap().len(),
@@ -738,6 +760,103 @@ fn root_setup_status_schema_and_validate_work() {
     assert_eq!(validate["share_safe"], false);
     assert_eq!(validate["valid"], true);
     assert_eq!(validate["findings"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn setup_headless_skips_dashboard_without_no_open() {
+    let temp = tempdir();
+    ctx(&temp)
+        .env("CI", "true")
+        .args(["setup", "--no-import", "--no-shell-update"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "✓ dashboard: skipped (headless/SSH/CI)",
+        ));
+}
+
+#[test]
+fn dashboard_starts_reuses_and_respects_open_modes() {
+    let temp = tempdir();
+    ctx(&temp)
+        .env("CTX_DASHBOARD_IDLE_SECONDS", "1")
+        .args(["dashboard", "--no-open"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dashboard_url: http://127.0.0.1:"))
+        .stdout(predicate::str::contains("dashboard_running: started"))
+        .stdout(predicate::str::contains("open: skipped (--no-open)"));
+
+    ctx(&temp)
+        .env("CTX_DASHBOARD_IDLE_SECONDS", "1")
+        .args(["dashboard", "--no-open"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dashboard_running: reused"));
+
+    ctx(&temp)
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dashboard_running: true"))
+        .stdout(predicate::str::contains("dashboard_url: http://127.0.0.1:"));
+
+    let headless = tempdir();
+    ctx(&headless)
+        .env("CI", "true")
+        .env("CTX_DASHBOARD_IDLE_SECONDS", "1")
+        .args(["dashboard"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("open: skipped (headless/SSH/CI)"));
+
+    let opened = tempdir();
+    let open_file = opened.path().join("opened-url.txt");
+    ctx(&opened)
+        .env_remove("CI")
+        .env("CTX_TEST_FORCE_BROWSER_OPEN", "1")
+        .env("CTX_TEST_BROWSER_OPEN_FILE", &open_file)
+        .env("CTX_DASHBOARD_IDLE_SECONDS", "1")
+        .args(["dashboard"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("open: requested"));
+    let opened_url = fs::read_to_string(open_file).unwrap();
+    assert!(opened_url.starts_with("http://127.0.0.1:"));
+}
+
+#[test]
+fn optional_service_is_explicit_and_reversible() {
+    let temp = tempdir();
+    ctx(&temp)
+        .args([
+            "setup",
+            "--service",
+            "--no-open",
+            "--no-import",
+            "--no-shell-update",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("✓ service: installed (optional)"));
+
+    ctx(&temp)
+        .args(["service", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("service_installed: true"));
+
+    ctx(&temp)
+        .args(["service", "uninstall"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("service_uninstalled: true"));
+
+    ctx(&temp)
+        .args(["service", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("service_installed: false"));
 }
 
 #[cfg(unix)]
@@ -781,10 +900,16 @@ fn setup_can_activate_passive_capture_in_shell_rc_and_deactivate_it() {
     fs::write(&shell_rc, "export EXISTING=1\n").unwrap();
 
     ctx(&temp)
-        .args(["setup", "--shell-rc", shell_rc.to_str().unwrap()])
+        .args([
+            "setup",
+            "--no-open",
+            "--no-import",
+            "--shell-rc",
+            shell_rc.to_str().unwrap(),
+        ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("shell_rc:"));
+        .stdout(predicate::str::contains("✓ shell_rc:"));
 
     let contents = fs::read_to_string(&shell_rc).unwrap();
     assert!(contents.contains("# >>> ctx work recorder passive capture >>>"));
@@ -814,7 +939,13 @@ fn setup_can_activate_passive_capture_in_shell_rc_and_deactivate_it() {
     assert!(contents.contains("export EXISTING=1"));
 
     ctx(&temp)
-        .args(["setup", "--shell-rc", shell_rc.to_str().unwrap()])
+        .args([
+            "setup",
+            "--no-open",
+            "--no-import",
+            "--shell-rc",
+            shell_rc.to_str().unwrap(),
+        ])
         .assert()
         .success();
     ctx(&temp)
@@ -826,10 +957,12 @@ fn setup_can_activate_passive_capture_in_shell_rc_and_deactivate_it() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("removed"));
+        .stdout(predicate::str::contains("removed_shell_rc_block:"))
+        .stdout(predicate::str::contains("removed_shims:"))
+        .stdout(predicate::str::contains("kept_data:"));
     let contents = fs::read_to_string(&shell_rc).unwrap();
     assert!(!contents.contains("ctx work recorder passive capture"));
-    assert!(!temp.path().join("work-record").exists());
+    assert!(temp.path().join("work-record").exists());
 }
 
 #[test]
@@ -2612,7 +2745,10 @@ fn import_rejects_conflicts_and_overwrites_when_explicit() {
 #[test]
 fn root_uninstall_removes_product_data() {
     let temp = tempdir();
-    ctx(&temp).args(["setup"]).assert().success();
+    ctx(&temp)
+        .args(["setup", "--no-open", "--no-import", "--no-shell-update"])
+        .assert()
+        .success();
     assert!(temp
         .path()
         .join("work-record")
@@ -2624,8 +2760,21 @@ fn root_uninstall_removes_product_data() {
         .args(["uninstall", "--yes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("removed"));
+        .stdout(predicate::str::contains("removed_shims:"))
+        .stdout(predicate::str::contains("kept_data:"));
     assert!(!temp.path().join("work-record").join("shims").exists());
+    assert!(temp.path().join("work-record").join("work.sqlite").exists());
+    ctx(&temp)
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("initialized: true"));
+
+    ctx(&temp)
+        .args(["uninstall", "--delete-data", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("deleted_data:"));
     ctx(&temp)
         .args(["status"])
         .assert()
@@ -2637,10 +2786,16 @@ fn root_uninstall_removes_product_data() {
 fn nested_workspace_and_work_commands_remain_compatibility_aliases() {
     let temp = tempdir();
     ctx(&temp)
-        .args(["workspace", "setup"])
+        .args([
+            "workspace",
+            "setup",
+            "--no-open",
+            "--no-import",
+            "--no-shell-update",
+        ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Work Recorder workspace ready"));
+        .stdout(predicate::str::contains("ctx setup"));
     ctx(&temp)
         .args(["workspace", "status"])
         .assert()
@@ -2680,5 +2835,5 @@ fn nested_workspace_and_work_commands_remain_compatibility_aliases() {
         .args(["workspace", "uninstall", "--yes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("removed"));
+        .stdout(predicate::str::contains("kept_data:"));
 }
