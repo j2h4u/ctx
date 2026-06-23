@@ -312,6 +312,67 @@ ADE desktop release, `ade.ctx.rs` migration, production hosted launch, and
     --test-threads 1` passed.
   - `bash scripts/check.sh product-decisions` passed after docs/site and CLI UX
     integration.
+- Integrated spool/shim fallback:
+  `aae6e61 Isolate shim capture fallback to spool`.
+- Manager follow-up checkpoint:
+  `6f0c7ee Validate spool fallback under ctx root`.
+- Spool/shim integration review:
+  - Nash (`019ef686-a9d0-71c1-9ee7-e75d10da4072`) reviewed the merged slice
+    read-only and found stale test paths that still referenced the old
+    `work-record/inbox`, `work-record/shims`, and `work-record/work.sqlite`
+    layout.
+  - The review also identified missing locked-database fallback coverage for
+    `gh` and `jj`; the manager added those tests alongside the existing `git`
+    fallback case.
+- Manager follow-up fixes:
+  - Added the missing `ArchiveCounts::add` helper required by multi-envelope
+    spool imports.
+  - Updated CLI tests to use the flat ctx root layout: `work.sqlite`,
+    `spool/`, and `shims/`.
+  - Added locked-DB fallback coverage for all installed passive capture shims:
+    `git`, `gh`, and `jj`.
+  - Updated the path-shadowing shim test to match direct SQLite capture: no
+    queued spool import remains, but the captured command evidence is present in
+    the local store and export output.
+  - Committed the `rusqlite` test dependency lockfile update used by the
+    locked-DB CLI fallback tests.
+- Spool/shim validations run serially under `/usr/local/bin/cargo-lowio` with
+  `TMPDIR=$PWD/target/tmp`:
+  - `cargo-lowio test -p work-record-capture
+    shim_capture_imports_directly_when_database_is_available --
+    --test-threads 1` passed after the accumulator fix.
+  - `cargo-lowio test -p work-record-capture -- --test-threads 1` passed:
+    19 tests, including direct import, DB-lock fallback, malformed spool,
+    symlink rejection, failed spool retention, provider fixture replay, and Pi
+    session replay.
+  - `cargo-lowio test -p ctx --test cli
+    installed_git_shim_runs_real_command_and_records_capture --
+    --test-threads 1` passed.
+  - `cargo-lowio test -p ctx --test cli
+    falls_back_to_spool_when_database_is_locked -- --test-threads 1` passed:
+    `git`, `gh`, and `jj` variants.
+  - `cargo-lowio test -p ctx --test cli
+    installed_jj_shim_runs_real_command_and_records_capture --
+    --test-threads 1` passed.
+  - `cargo-lowio test -p ctx --test cli
+    installed_gh_shim_runs_real_command_and_records_capture --
+    --test-threads 1` passed.
+  - `cargo-lowio test -p ctx --test cli
+    shim_capture_command_isolates_scratch_read_and_timestamp_errors --
+    --test-threads 1` passed.
+  - `cargo-lowio test -p ctx --test cli
+    doctor_and_repair_retry_failed_capture_spool_files -- --test-threads 1`
+    passed.
+  - `cargo-lowio test -p ctx --test cli
+    validate_reports_failed_and_processing_capture_spool_files --
+    --test-threads 1` passed.
+  - `cargo-lowio test -p ctx --test cli -- --test-threads 1` passed: 61 CLI
+    tests.
+  - `cargo fmt --manifest-path Cargo.toml --all -- --check` passed after
+    running `cargo fmt`.
+  - `bash scripts/check.sh product-decisions` passed.
+  - `bash scripts/check-docs.sh` passed.
+  - `git diff --check` passed.
 
 Concurrent worker Cargo/rustc processes were stopped by the manager after they
 violated the host-level resource-safety rule. Remaining validation should be
