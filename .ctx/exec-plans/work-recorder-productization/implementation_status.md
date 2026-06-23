@@ -623,7 +623,7 @@ None accepted yet.
 - Private repo/worktree:
   `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx-private/work-recorder-hosted-team`
 - Private branch/head:
-  `ctx/work-recorder-hosted-team` / `cd0361115`
+  `ctx/work-recorder-hosted-team` / `006e25706`
 - Hosted implementation landed:
   - Cloudflare Worker package `work-recorder-worker`;
   - Neon migration `0013_work_recorder_foundation.sql`;
@@ -639,21 +639,34 @@ None accepted yet.
   - Buildkite pipeline wrapper `.buildkite/pipelines/work-recorder-worker.yml`.
 - Hosted validation:
   - `pnpm typecheck`: PASS;
-  - `pnpm test`: PASS, 11 tests;
+  - `pnpm test`: PASS, 21 tests;
   - `pnpm exec vitest run test/cloudflare-neon-readiness.test.mjs
     --pool=threads` in `llm-relay-worker`: PASS, 8 tests;
   - `pnpm readiness:check:local`: PASS with dummy local-only env and no
     Cloudflare/Neon API calls;
   - `wrangler deploy --dry-run --env staging`: PASS through
     `scripts/buildkite/run_work_recorder_worker_check.sh`;
+  - real staging readiness against `ctx-work-recorder-staging`: PASS;
+  - live staging smoke against
+    `https://ctx-work-recorder-staging.fancy-sea-92df.workers.dev`: PASS for
+    health, device registration, metadata sync, cursor read, and SHA-256
+    verified blob upload;
   - `git diff --check`: PASS.
-- Remaining external hosted gaps:
-  - real read-only readiness found Cloudflare/Neon operator credentials, but
-    `ctx-work-recorder` Worker does not exist yet;
-  - Infisical lacks `WORK_RECORDER_DATABASE_URL`,
+- Hosted staging provisioned:
+  - Neon role `ctx_work_recorder` was provisioned through the Neon branch-role
+    API;
+  - Neon migration `0013_work_recorder_foundation.sql` was applied to the
+    primary production Neon branch;
+  - Infisical prod contains `WORK_RECORDER_DATABASE_URL`,
     `WORK_RECORDER_SHARED_TOKEN`, and `CTX_WORK_RECORDS_R2_BUCKET`;
-  - no live Cloudflare deployment has been performed from this branch;
-  - no live Neon migration has been applied from this branch;
-  - no live R2 bucket proof has been run against real Cloudflare credentials;
+  - R2 buckets `ctx-work-record-blobs-staging` and `ctx-work-record-blobs`
+    exist;
+  - Cloudflare Worker `ctx-work-recorder-staging` is deployed with required
+    secrets.
+- Remaining external hosted gaps:
+  - production Worker `ctx-work-recorder` has not been deployed or routed;
+  - GitHub app/webhook configuration and PR comment mutation are still not
+    wired;
+  - hosted full-transcript sync remains intentionally disabled;
   - local `buildkite-agent pipeline upload --dry-run` is blocked by missing
     Buildkite agent access token in this session.

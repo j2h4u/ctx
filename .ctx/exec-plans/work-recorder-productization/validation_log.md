@@ -105,12 +105,12 @@ Updated: 2026-06-22T20:02:05-05:00
 - Repo/worktree:
   `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx-private/work-recorder-hosted-team`
 - Branch/head:
-  `ctx/work-recorder-hosted-team` / `cd0361115`
+  `ctx/work-recorder-hosted-team` / `006e25706`
 - Outcome: PASS
 - Coverage:
   - `pnpm install --frozen-lockfile`;
   - `pnpm typecheck`;
-  - `pnpm test`, 11 tests;
+  - `pnpm test`, 21 tests;
   - `pnpm readiness:check:local` with local-only dummy env and Cloudflare/Neon
     API calls disabled;
   - `wrangler deploy --dry-run --env staging`.
@@ -120,7 +120,7 @@ Updated: 2026-06-22T20:02:05-05:00
 - Repo/worktree:
   `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx-private/work-recorder-hosted-team/llm-relay-worker`
 - Branch/head:
-  `ctx/work-recorder-hosted-team` / `cd0361115`
+  `ctx/work-recorder-hosted-team` / `006e25706`
 - Outcome: PASS
 - Coverage:
   - shared readiness script tests, 8 tests;
@@ -132,23 +132,40 @@ Updated: 2026-06-22T20:02:05-05:00
 - Repo/worktree:
   `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx-private/work-recorder-hosted-team/work-recorder-worker`
 - Branch/head:
-  `ctx/work-recorder-hosted-team` / `cd0361115`
-- Outcome: BLOCKED
+  `ctx/work-recorder-hosted-team` / `006e25706`
+- Outcome: PASS for staging
 - Findings:
   - Cloudflare operator credentials: present;
   - Neon API credentials: present and project exists;
-  - Cloudflare Worker `ctx-work-recorder`: missing;
+  - Cloudflare Worker `ctx-work-recorder-staging`: present;
   - Worker secrets `WORK_RECORDER_DATABASE_URL` and
-    `WORK_RECORDER_SHARED_TOKEN`: missing because Worker is absent;
+    `WORK_RECORDER_SHARED_TOKEN`: present;
   - Infisical keys `WORK_RECORDER_DATABASE_URL`,
-    `WORK_RECORDER_SHARED_TOKEN`, and `CTX_WORK_RECORDS_R2_BUCKET`: missing.
+    `WORK_RECORDER_SHARED_TOKEN`, and `CTX_WORK_RECORDS_R2_BUCKET`: present;
+  - staging wrangler vars: present.
+
+- Command:
+  live staging smoke via `curl` against
+  `https://ctx-work-recorder-staging.fancy-sea-92df.workers.dev`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx-private/work-recorder-hosted-team/work-recorder-worker`
+- Branch/head:
+  `ctx/work-recorder-hosted-team` / `006e25706`
+- Outcome: PASS
+- Coverage:
+  - `GET /v1/work-recorder/health` returned `database_configured=true` and
+    `blobs_configured=true`;
+  - authenticated device registration returned `ok`;
+  - authenticated metadata sync batch returned `accepted=true`;
+  - authenticated cursor read returned the expected latest batch and timestamp;
+  - authenticated blob upload returned the SHA-256 storage key.
 
 - Command:
   `buildkite-agent pipeline upload --dry-run .buildkite/pipelines/work-recorder-worker.yml`
 - Repo/worktree:
   `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx-private/work-recorder-hosted-team`
 - Branch/head:
-  `ctx/work-recorder-hosted-team` / `cd0361115`
+  `ctx/work-recorder-hosted-team` / `006e25706`
 - Outcome: BLOCKED
 - Blocker:
   - `buildkite-agent` reported `Missing agent-access-token`.

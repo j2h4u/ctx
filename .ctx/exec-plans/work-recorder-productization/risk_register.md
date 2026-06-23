@@ -20,7 +20,7 @@ Updated: 2026-06-22T20:02:05-05:00
 | Local Git/jj/gh wrapper shims can capture sensitive command output. | Accidental local retention of secrets, source, paths, or private PR data. | Shims are opt-in, local-only, capped per stream, imported explicitly, documented as sensitive, and not connected to hosted sync in this branch. |
 | Hosted worker could accidentally become raw transcript sync before policy exists. | Private prompts, tool output, source snippets, or credentials could leave the machine. | Hosted sync endpoint rejects raw transcript/prompt/tool-output-like keys by default; initial hosted API accepts metadata batches and explicit blob uploads only. |
 | Buildkite runner routing can block live proof even when the pipeline syntax is valid. | Matrix jobs can remain scheduled and prevent release evidence. | Build 25 proved pipeline expansion; Linux verification lanes were rerouted from idle `main-linux` to the known working managed Linux queue and runner class. |
-| Hosted staging is not provisioned yet. | Hosted/team story cannot be claimed as live. | Read-only readiness proves operator credentials exist, but Work Recorder-specific Infisical keys, Worker, and R2 bucket config are missing; keep public docs local-first until provisioning is completed. |
+| Production hosted endpoint is not deployed. | Team sync cannot be claimed production-ready. | Staging Worker, Neon role/migration, Infisical secrets, R2 buckets, readiness, and live smoke are proven; production route deployment remains deliberately uncut. |
 
 ## Accepted Risks
 
