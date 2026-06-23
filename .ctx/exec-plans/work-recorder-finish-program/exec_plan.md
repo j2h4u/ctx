@@ -78,8 +78,9 @@ Active workers started from checkpoint `b7c61ab`:
 - CI/Release worker: `agent_I27Kk4yTT3-zrznV85mVnA`, branch/worktree `ctx/wr-finish-ci-release` at `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/wr-finish-ci-release`.
 - Docs/Security worker: `agent_VFC6aSrIRAKBU1rpWy_G2w`, branch/worktree `ctx/wr-finish-docs-security` at `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/wr-finish-docs-security`.
 - Hosted/Staging worker: `agent_24FWhnb-QNiB3GAiGAtgiw`, private branch/worktree `ctx/work-recorder-hosted-team` at `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx-private/work-recorder-hosted-team`.
+- Provider Integrations worker: `agent_7w_qRF3-QrWnZnNCdPTjGA`, branch/worktree `ctx/wr-finish-provider-integrations` at `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/wr-finish-provider-integrations`.
 - Integration Captain: `agent_mkTqn_PgQ_GVZWL00IYr_A`, read-only branch inventory and merge-order analysis.
-- Completion Gap Audit: `agent_AsX0BlUZTfmd-pE84bmanA`, read-only strict criteria matrix before final certification.
+- Completion Gap Audit: `agent_AsX0BlUZTfmd-pE84bmanA`, read-only strict criteria matrix before final certification. Result: not a completion pass. Highest-risk blockers are React/Vite dashboard, passive capture, jj e2e, hosted staging truth, current Buildkite/release proof, and branch push status.
 
 ## Non-Negotiable Product Decisions
 
