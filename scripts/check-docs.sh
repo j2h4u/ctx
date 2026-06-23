@@ -27,7 +27,7 @@ for path in "${required_paths[@]}"; do
   test -f "${path}"
 done
 
-for script in examples/*.sh scripts/check-docs.sh scripts/install.sh scripts/release-*.sh; do
+for script in examples/*.sh scripts/check.sh scripts/check-docs.sh scripts/check-buildkite-pipeline.sh scripts/install.sh scripts/release-*.sh; do
   bash -n "${script}"
 done
 
@@ -60,13 +60,18 @@ doc_search "curl -fsSLO" docs/release-install.md >/dev/null
 doc_search "SHA-256" docs/release-install.md docs/release-supply-chain.md >/dev/null
 doc_search "SBOM" docs/release-supply-chain.md >/dev/null
 doc_search "notarization" docs/release-supply-chain.md >/dev/null
+doc_search "Finished-Product Evidence Matrix" docs/release-supply-chain.md >/dev/null
+doc_search "provider fixture import" docs/release-supply-chain.md release/completion-certificate-template.md >/dev/null
+doc_search "PR publish dry-run" docs/release-supply-chain.md >/dev/null
+doc_search "installer dry-run smoke lane" docs/release-install.md >/dev/null
+doc_search "jj e2e blocker status" docs/release-supply-chain.md release/completion-certificate-template.md >/dev/null
 
 if doc_search "does not ship a local dashboard|does not include a dashboard|local dashboard;" docs README.md >/dev/null; then
   printf 'dashboard appears to be documented as missing\n' >&2
   exit 1
 fi
 
-if doc_search "ctx publish" docs README.md | doc_search_inverse "does not include|Not implemented yet|not ship|such as" >/dev/null; then
+if doc_search "ctx publish" docs README.md | doc_search_inverse "does not include|Not implemented yet|not ship|such as|--dry-run|dry-run" >/dev/null; then
   printf 'publish appears to be documented as shipped\n' >&2
   exit 1
 fi

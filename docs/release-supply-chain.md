@@ -5,6 +5,29 @@ build host binaries, write manifests, write SHA-256 checksum files, and produce
 a completion certificate scaffold. They do not upload, sign, notarize, or move
 a release channel.
 
+## Finished-Product Evidence Matrix
+
+The Buildkite pipeline includes non-publishing, resource-capped evidence lanes
+for the finished-product review:
+
+- provider fixture import validates inert Codex, Pi, and Claude provider JSONL
+  fixtures and the focused provider replay import tests;
+- rich search/context creates local records and evidence, then stores search
+  and context JSON artifacts;
+- dashboard/report artifact review exports local report JSON and dashboard HTML
+  for inspection;
+- PR publish dry-run renders the marker-bounded pull request comment without a
+  network write;
+- security/malicious archive fixtures check redaction corpus coverage and
+  hostile archive test markers;
+- jj e2e blocker status records whether `jj` is available on the runner without
+  installing external tools;
+- installer dry-run smoke validates local release metadata and an installer
+  plan without downloading or installing binaries.
+
+The completion certificate references these artifacts beside the platform
+release dry-run manifests and FreeBSD blocker artifact.
+
 ## Checksums
 
 Every installable artifact must have one SHA-256 digest in release metadata and

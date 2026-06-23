@@ -39,6 +39,10 @@ beside the manifest and checksum artifact for the native release lanes. Real
 releases must replace every placeholder checksum with the SHA-256 digest of
 the final published artifact.
 
+The installer dry-run smoke lane validates this metadata shape with local
+fixture metadata and `scripts/install.sh --dry-run`. It does not download,
+install, upload, sign, or publish artifacts.
+
 Required keys:
 
 - `CTX_RELEASE_SCHEMA_VERSION=1`
