@@ -284,12 +284,19 @@ EOF
       --output "${dogfood_dir}" \
       --data-root "${CTX_ARTIFACT_DIR}/dogfood-data"
   file_contains "${dogfood_dir}/manifest.json" '"raw_archive_exported": false'
+  file_contains "${dogfood_dir}/manifest.json" '"artifact_dir": "."'
+  file_contains "${dogfood_dir}/manifest.json" '"data_root": "[LOCAL_DATA_ROOT]"'
+  file_contains "${dogfood_dir}/manifest.json" '"dashboard": "dashboard/index.html"'
   if grep -R -F -q -- "${repo_root}" "${dogfood_dir}"; then
     printf 'dogfood sanitizer leaked repo root into default artifacts\n' >&2
     return 1
   fi
   if [[ -n "${HOME:-}" ]] && grep -R -F -q -- "${HOME}" "${dogfood_dir}"; then
     printf 'dogfood sanitizer leaked home path into default artifacts\n' >&2
+    return 1
+  fi
+  if grep -R -F -q -- "${CTX_ARTIFACT_DIR}/dogfood-data" "${dogfood_dir}"; then
+    printf 'dogfood sanitizer leaked raw data-root path into default artifacts\n' >&2
     return 1
   fi
   if grep -R -E -q 'ghp_1234567890abcdef|hunter2|fake_secret_value|chrome-profile|firefox-tmp' "${dogfood_dir}"; then

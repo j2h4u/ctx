@@ -177,9 +177,10 @@ Claude, Cursor provider hooks or shell hooks that write the spool
 automatically.
 
 Provider fixture imports fail closed on malformed JSONL or provider mismatches
-before import, so a bad fixture does not leave partial summary records behind.
-Rows that pass CLI preflight but fail during the lower capture import are
-reported in the failed count.
+during CLI preflight, before any provider summary record is created. Rows that
+pass CLI preflight but fail during the lower typed capture import are reported
+in the failed count and can leave the provisional local summary Work Record
+that links the attempted import.
 
 See [../examples/local-record-workflow.sh](../examples/local-record-workflow.sh)
 and [../examples/capture-spool-fixture.sh](../examples/capture-spool-fixture.sh)

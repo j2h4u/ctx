@@ -193,6 +193,8 @@ Controls:
 
 - dashboard export writes local files only;
 - docs say to review outputs before sharing;
+- dashboard dogfood manifests use artifact-relative paths and omit raw local
+  data-root, repository, home, and browser scratch paths;
 - `CTX_DASHBOARD_URL` is only a link base for share-safe URLs in JSON packets,
   not hosted sync.
 

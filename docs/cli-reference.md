@@ -133,10 +133,11 @@ or events are imported, so `ctx search`, `ctx context`, `ctx report`, and
 `ctx dashboard export` have useful review material immediately. Re-running the
 same fixture is idempotent for the summary record.
 
-Malformed provider fixture JSONL and provider mismatches are rejected before
-the CLI imports the file, so a bad fixture does not leave a partial summary
-record behind. Rows that pass CLI preflight but fail during the lower capture
-import are reported as failed in text or JSON output.
+Malformed provider fixture JSONL and provider mismatches fail during CLI
+preflight before any provider summary record is created. Rows that pass CLI
+preflight but fail during the lower typed capture import are reported as failed
+in text or JSON output; that lower-import failure can leave the provisional
+local summary Work Record that links the attempted import.
 
 These commands do not scan existing agent transcript directories. Local
 Git/jj/gh wrapper shims are opt-in through `ctx shim`; provider-native hooks

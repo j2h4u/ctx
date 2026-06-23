@@ -56,8 +56,9 @@ Work Records can contain:
 Treat the ctx data directory like source code. Do not publish it unless the
 record has been reviewed for sensitive content. Default review surfaces such as
 `ctx list`, `ctx show`, `ctx search`, `ctx context`, `ctx report`, dashboard
-HTML, and PR comment rendering redact secret-like values and local paths, but
-raw JSON archives and the local data root remain private data.
+HTML, PR comment rendering, and dashboard dogfood manifests redact secret-like
+values and local paths or use artifact-relative paths, but raw JSON archives
+and the local data root remain private data.
 
 The redaction corpus fixture in [redaction-corpus.md](redaction-corpus.md)
 documents synthetic examples covered by share-safe review output tests.

@@ -16,13 +16,19 @@ Default outputs are written to `target/ctx-artifacts/dashboard-review`:
 - `context.md` and `search.json` exercise handoff/search review paths.
 - provider import JSON files are present for live-seeded Codex, Claude, and Pi
   fixtures when `--seed-live` is used.
-- `manifest.json` lists artifact paths and screenshot status.
+- `manifest.json` lists artifact-relative paths and screenshot status. It
+  intentionally omits raw absolute data-root, repository, home, and browser
+  scratch paths so the default artifact set can be attached for review after
+  checking its contents.
 - `screenshots/desktop.png` and `screenshots/mobile.png` are present only when
   Node, Playwright, and a launchable Chromium/Chrome browser are available.
 
 The default artifact set does not include `ctx export` output. Raw archives are
 portable/private data and may contain raw command or artifact content; generate
 one explicitly only when reviewing private local data.
+The script fails if generated default artifacts contain the repository root,
+`$HOME`, the raw `CTX_DATA_ROOT`, browser profile/cache scratch paths, or known
+synthetic secret markers.
 
 The default fixture is `examples/dogfood-dashboard-review-archive.json`. It has
 fixed IDs, timestamps, tags, linked PRs, passing evidence, one failing evidence

@@ -107,6 +107,7 @@ sanitize_share_artifact() {
   local tmp
   local escaped_repo
   local escaped_home
+  local escaped_data_root
 
   if [[ ! -f "${path}" ]]; then
     return 0
@@ -114,17 +115,51 @@ sanitize_share_artifact() {
 
   tmp="$(mktemp "${path}.XXXXXX")"
   escaped_repo="$(sed_literal "${repo_root}")"
+  escaped_data_root="$(sed_literal "${data_root}")"
   escaped_home="$(sed_literal "${HOME:-}")"
   if [[ -n "${escaped_home}" ]]; then
     sed \
+      -e "s#${escaped_data_root}/[^[:space:]\"']*#[REDACTED_PATH]#g" \
+      -e "s#${escaped_data_root}#[REDACTED_PATH]#g" \
+      -e "s#${escaped_repo}/[^[:space:]\"']*#[REDACTED_PATH]#g" \
       -e "s#${escaped_repo}#[REDACTED_PATH]#g" \
       -e "s#${escaped_home}/[^[:space:]\"']*#[REDACTED_PATH]#g" \
       -e "s#${escaped_home}#[REDACTED_PATH]#g" \
       "${path}" >"${tmp}"
   else
-    sed -e "s#${escaped_repo}#[REDACTED_PATH]#g" "${path}" >"${tmp}"
+    sed \
+      -e "s#${escaped_data_root}/[^[:space:]\"']*#[REDACTED_PATH]#g" \
+      -e "s#${escaped_data_root}#[REDACTED_PATH]#g" \
+      -e "s#${escaped_repo}/[^[:space:]\"']*#[REDACTED_PATH]#g" \
+      -e "s#${escaped_repo}#[REDACTED_PATH]#g" \
+      "${path}" >"${tmp}"
   fi
   mv "${tmp}" "${path}"
+}
+
+verify_share_artifacts() {
+  local leaked=0
+
+  if grep -R -F -q -- "${repo_root}" "${artifact_dir}"; then
+    printf 'blocker: dogfood artifact set leaked repo root: %s\n' "${repo_root}" >&2
+    leaked=1
+  fi
+  if [[ -n "${HOME:-}" ]] && grep -R -F -q -- "${HOME}" "${artifact_dir}"; then
+    printf 'blocker: dogfood artifact set leaked HOME path: %s\n' "${HOME}" >&2
+    leaked=1
+  fi
+  if grep -R -F -q -- "${data_root}" "${artifact_dir}"; then
+    printf 'blocker: dogfood artifact set leaked raw data root: %s\n' "${data_root}" >&2
+    leaked=1
+  fi
+  if grep -R -E -q 'chrome-profile|chrome-cache|firefox-tmp|ctx-dashboard-screenshot' "${artifact_dir}"; then
+    printf 'blocker: dogfood artifact set leaked browser scratch paths\n' >&2
+    leaked=1
+  fi
+
+  if [[ "${leaked}" -ne 0 ]]; then
+    return 1
+  fi
 }
 
 safe_reset_data_root() {
@@ -367,19 +402,22 @@ main() {
     printf '{\n'
     printf '  "schema_version": 1,\n'
     printf '  "local_only": true,\n'
-    printf '  "data_root": "%s",\n' "$(json_escape "${data_root}")"
-    printf '  "artifact_dir": "%s",\n' "$(json_escape "${artifact_dir}")"
+    printf '  "path_policy": "artifact paths are relative to this manifest; raw local data root is intentionally omitted",\n'
+    printf '  "data_root": "[LOCAL_DATA_ROOT]",\n'
+    printf '  "artifact_dir": ".",\n'
     printf '  "seed_mode": "%s",\n' "$(json_escape "${seed_mode}")"
-    printf '  "dashboard": "%s",\n' "$(json_escape "${artifact_dir}/dashboard/index.html")"
-    printf '  "report_text": "%s",\n' "$(json_escape "${artifact_dir}/report.txt")"
-    printf '  "report_json": "%s",\n' "$(json_escape "${artifact_dir}/report.json")"
-    printf '  "context": "%s",\n' "$(json_escape "${artifact_dir}/context.md")"
-    printf '  "search": "%s",\n' "$(json_escape "${artifact_dir}/search.json")"
+    printf '  "dashboard": "dashboard/index.html",\n'
+    printf '  "report_text": "report.txt",\n'
+    printf '  "report_json": "report.json",\n'
+    printf '  "context": "context.md",\n'
+    printf '  "search": "search.json",\n'
     printf '  "raw_archive_exported": false,\n'
     printf '  "raw_archive_note": "omitted from default dogfood artifacts because ctx export is portable/private and may contain raw command or artifact content",\n'
     printf '  "screenshot_status": "%s"\n' "$(json_escape "$(tr '\n' ' ' <"${screenshot_status}")")"
     printf '}\n'
   } >"${artifact_dir}/manifest.json"
+
+  verify_share_artifacts
 
   printf 'dashboard-review artifacts: %s\n' "${artifact_dir}"
   printf 'dashboard: %s\n' "${artifact_dir}/dashboard/index.html"
