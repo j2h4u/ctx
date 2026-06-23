@@ -1,6 +1,6 @@
 # Work Recorder Productization Implementation Status
 
-Updated: 2026-06-22T21:39:55-05:00
+Updated: 2026-06-22T21:44:30-05:00
 
 Task: `feb64c1c-e58c-40f8-b1e9-1094dca0646e`
 
@@ -745,3 +745,27 @@ None accepted yet.
     sets `CTX_REQUIRE_BAZEL=1`;
   - native FreeBSD remains blocked until a runner/pool or proven cross-build
     lane exists.
+
+## 2026-06-22 Buildkite Docs Tooling Remediation
+
+- Build 28:
+  - URL: `https://buildkite.com/luca-king/ctx-public-release-verification/builds/28`
+  - Triggered on `work-record` at `f1770b2`.
+  - Pipeline upload, contract, and fmt lanes passed.
+  - Docs lane failed on `ctx-runner-class=release-linux-x64-stage` because
+    `scripts/check-docs.sh` required `rg`, which is not installed on that
+    Buildkite host.
+- Repo-owned remediation:
+  - `scripts/check-docs.sh` now uses `rg` when available and falls back to
+    recursive `grep -E` otherwise;
+  - the docs check still fails closed on missing required docs/examples and on
+    false shipped-feature wording.
+- Local validation on `work-record` with uncommitted docs fallback changes on
+  `60d92cc`:
+  - `./scripts/check-docs.sh`: PASS;
+  - `PATH=/usr/bin:/bin bash scripts/check-docs.sh`: PASS, proving the no-`rg`
+    path;
+  - `git diff --check`: PASS.
+- Remaining external evidence gap:
+  - commit and push the docs tooling remediation;
+  - trigger and observe a fresh public Buildkite build.

@@ -1,6 +1,6 @@
 # Work Recorder Productization Validation Log
 
-Updated: 2026-06-22T21:39:55-05:00
+Updated: 2026-06-22T21:44:30-05:00
 
 ## 2026-06-22 Baseline Public Branch Check
 
@@ -1161,3 +1161,38 @@ Future entries must include:
   - `target/ctx-artifacts/release-dry-run/manifest.json`;
   - `target/ctx-artifacts/release-dry-run/checksums.sha256`;
   - `target/ctx-artifacts/release-dry-run/timings.json`.
+
+## 2026-06-22 Docs Check No-rg Fallback
+
+- Remote Buildkite evidence:
+  - build `https://buildkite.com/luca-king/ctx-public-release-verification/builds/28`
+    passed pipeline upload, contract, and fmt lanes, then failed the docs lane
+    on `ctx-runner-class=release-linux-x64-stage` because `rg` was unavailable
+    on that Buildkite host.
+
+- Command:
+  `./scripts/check-docs.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted docs fallback changes on `60d92cc`
+- Outcome: PASS.
+
+- Command:
+  `PATH=/usr/bin:/bin bash scripts/check-docs.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted docs fallback changes on `60d92cc`
+- Outcome: PASS.
+- Coverage:
+  - proves the docs check works when `rg` is absent and recursive `grep -E` is
+    used instead.
+
+- Command:
+  `git diff --check`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted docs fallback changes on `60d92cc`
+- Outcome: PASS.
