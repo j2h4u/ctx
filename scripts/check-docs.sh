@@ -20,11 +20,14 @@ required_paths=(
   tests/fixtures/redaction/redaction-corpus.jsonl
   docs/release-install.md
   docs/release-supply-chain.md
+  docs/release-r2-layout.md
+  docs/freebsd-release-worker.md
   examples/local-record-workflow.sh
   examples/capture-spool-fixture.sh
   apps/work-recorder-dashboard/site-preview.html
   release/install/ctx-release-metadata.env.template
   release/completion-certificate-template.md
+  release/r2-artifact-layout.json
 )
 
 for path in "${required_paths[@]}"; do
@@ -72,6 +75,9 @@ doc_search "provider fixture import" docs/release-supply-chain.md release/comple
 doc_search "PR publish dry-run" docs/release-supply-chain.md >/dev/null
 doc_search "installer dry-run smoke lane" docs/release-install.md >/dev/null
 doc_search "jj e2e blocker status" docs/release-supply-chain.md release/completion-certificate-template.md >/dev/null
+doc_search "R2 upload plan" docs/release-supply-chain.md docs/release-r2-layout.md release/completion-certificate-template.md >/dev/null
+doc_search "CTX_LIVE_PROVIDER_E2E=1" docs/release-supply-chain.md >/dev/null
+doc_search "freebsd-x64" docs/freebsd-release-worker.md docs/release-supply-chain.md >/dev/null
 
 if doc_search "does not ship a local dashboard|does not include a dashboard|local dashboard;" docs README.md >/dev/null; then
   printf 'dashboard appears to be documented as missing\n' >&2

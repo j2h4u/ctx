@@ -21,7 +21,10 @@
 - Windows x64 release dry-run manifest: `${windows_x64_manifest}`
 - Windows x64 release dry-run install metadata: `${windows_x64_metadata}`
 - FreeBSD x64 blocker artifact: `${freebsd_x64_blocker}`
+- Release candidate metadata: `${release_candidate_metadata}`
+- Release candidate R2 upload plan: `${release_candidate_r2_upload_plan}`
 - Provider fixture import artifact: `${provider_fixtures_artifact}`
+- Provider live E2E lane definitions: `${provider_live_e2e_lane_definitions}`
 - Rich search/context artifact: `${rich_search_context_artifact}`
 - Dashboard/report artifact review: `${dashboard_report_artifact}`
 - PR publish dry-run artifact: `${pr_publish_dry_run_artifact}`
@@ -30,10 +33,13 @@
 - Installer dry-run smoke artifact: `${installer_dry_run_smoke_artifact}`
 - Release install documentation: `docs/release-install.md`
 - Release supply-chain documentation: `docs/release-supply-chain.md`
+- Release R2 layout documentation: `docs/release-r2-layout.md`
+- FreeBSD release worker notes: `docs/freebsd-release-worker.md`
 
 ## External Release Blockers
 
 - FreeBSD native release lane requires a documented native `freebsd-x64` Buildkite queue or a separately proven cross-build lane.
+- Provider live E2E lanes are defined but remain opt-in; providers cannot be marked `supported-live` without real lane artifacts.
 - Full jj e2e validation requires a runner image with `jj` installed; the CI lane records availability and blocker status without installing external tools.
 - Production release publication requires final release metadata with non-placeholder SHA-256 checksums for every published artifact.
 - Signing, notarization, SBOM publication, and provenance publication require configured external credentials and policy approval.

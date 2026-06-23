@@ -459,7 +459,7 @@ write_release_evidence_self_test_fixture() {
     suffix=".exe"
     line_end=$'\r\n'
   fi
-  artifact="ctx-0.0.0-smoke-${target}${suffix}"
+  artifact="ctx-0.1.0-${target}${suffix}"
   artifact_path="artifacts/buildkite/release-dry-run/${platform}/${artifact}"
   mkdir -p "${dir}"
   printf 'ctx dry-run artifact self-test fixture for %s\n' "${platform}" > "${root}/${artifact_path}"
@@ -473,7 +473,7 @@ write_release_evidence_self_test_fixture() {
   "dry_run": true,
   "upload": false,
   "package": "ctx",
-  "version": "0.0.0-smoke",
+  "version": "0.1.0",
   "platform": "${platform}",
   "target_triple": "${target}",
   "host_triple": "${target}",
@@ -494,7 +494,7 @@ EOF
   {
     printf 'CTX_RELEASE_SCHEMA_VERSION=1%s' "${line_end}"
     printf 'CTX_RELEASE_CHANNEL=dry-run%s' "${line_end}"
-    printf 'CTX_RELEASE_VERSION=0.0.0-smoke%s' "${line_end}"
+    printf 'CTX_RELEASE_VERSION=0.1.0%s' "${line_end}"
     printf 'CTX_RELEASE_BASE_URL=https://example.invalid/ctx%s' "${line_end}"
     printf 'CTX_RELEASE_ARTIFACT_%s=%s%s' "${platform_key}" "${artifact}" "${line_end}"
     printf 'CTX_RELEASE_SHA256_%s=%s%s' "${platform_key}" "${checksum}" "${line_end}"
@@ -506,6 +506,7 @@ run_completion_certificate_prerequisites() {
 
   CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/pipeline-contract" bash scripts/check-buildkite-pipeline.sh
   CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/release-blockers/freebsd-x64" bash scripts/release-platform-blocker.sh freebsd-x64
+  CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/provider-live-e2e-lanes" bash scripts/release-provider-live-e2e-lanes.sh definitions
 
   CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/finished-product/provider-fixtures" run_provider_fixtures
   CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/finished-product/rich-search-context" run_rich_search_context
@@ -551,6 +552,20 @@ run_completion_certificate_release_prerequisites() {
   esac
 }
 
+run_completion_certificate_candidate_metadata_if_possible() {
+  local root="$1"
+
+  if [[ -s "${root}/artifacts/buildkite/release-dry-run/linux-x64/ctx-release-metadata.env" \
+    && -s "${root}/artifacts/buildkite/release-dry-run/macos-arm64/ctx-release-metadata.env" \
+    && -s "${root}/artifacts/buildkite/release-dry-run/macos-x64/ctx-release-metadata.env" \
+    && -s "${root}/artifacts/buildkite/release-dry-run/windows-x64/ctx-release-metadata.env" ]]; then
+    CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/release-candidate" \
+      bash scripts/release-candidate-metadata.sh \
+        "${root}/artifacts/buildkite/release-dry-run" \
+        "${root}/artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json"
+  fi
+}
+
 run_completion_certificate() {
   local root="${CTX_ARTIFACT_DIR}/completion-evidence-root"
 
@@ -558,6 +573,7 @@ run_completion_certificate() {
   mkdir -p "${root}"
   run_completion_certificate_prerequisites "${root}"
   run_completion_certificate_release_prerequisites "${root}"
+  run_completion_certificate_candidate_metadata_if_possible "${root}"
 
   CTX_COMPLETION_EVIDENCE_ROOT="${root}" bash scripts/release-completion-certificate.sh
 }
@@ -575,6 +591,10 @@ run_completion_certificate_self_test() {
   write_release_evidence_self_test_fixture "${root}" "macos-arm64" "aarch64-apple-darwin"
   write_release_evidence_self_test_fixture "${root}" "macos-x64" "x86_64-apple-darwin"
   write_release_evidence_self_test_fixture "${root}" "windows-x64" "x86_64-pc-windows-gnu"
+  CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/release-candidate" \
+    bash scripts/release-candidate-metadata.sh \
+      "${root}/artifacts/buildkite/release-dry-run" \
+      "${root}/artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json"
 
   CTX_COMPLETION_CERTIFICATE_ALLOW_SELF_TEST_FIXTURES=1 \
     CTX_COMPLETION_EVIDENCE_ROOT="${root}" \

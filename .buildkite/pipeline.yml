@@ -150,9 +150,38 @@ steps:
       - "artifacts/buildkite/finished-product/provider-fixtures/*"
       - "artifacts/buildkite/finished-product/provider-fixtures/**/*"
 
+  - label: ":satellite: provider live E2E lane definitions"
+    key: "provider-live-e2e-lanes"
+    depends_on: "provider-fixtures"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/provider-live-e2e-lanes ./scripts/release-provider-live-e2e-lanes.sh definitions"
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 5
+    artifact_paths:
+      - "artifacts/buildkite/provider-live-e2e-lanes/*"
+      - "artifacts/buildkite/provider-live-e2e-lanes/**/*"
+
+  - label: ":satellite: gated live provider E2E"
+    key: "provider-live-e2e-gated"
+    depends_on: "provider-live-e2e-lanes"
+    if: build.env("CTX_LIVE_PROVIDER_E2E") == "1"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/provider-live-e2e ./scripts/release-provider-live-e2e-lanes.sh run-selected"
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 60
+    artifact_paths:
+      - "artifacts/buildkite/provider-live-e2e/*"
+      - "artifacts/buildkite/provider-live-e2e/**/*"
+
   - label: ":mag: rich search/context"
     key: "rich-search-context"
-    depends_on: "provider-fixtures"
+    depends_on: "provider-live-e2e-lanes"
     command: "CTX_ARTIFACT_DIR=artifacts/buildkite/finished-product/rich-search-context ./scripts/check.sh rich-search-context"
     agents:
       queue: "release-linux-managed"
@@ -450,6 +479,74 @@ steps:
       - "artifacts/buildkite/release-blockers/freebsd-x64/*"
       - "artifacts/buildkite/release-blockers/freebsd-x64/**/*"
 
+  - label: ":package: release candidate metadata"
+    key: "release-candidate-metadata"
+    depends_on:
+      - "release-dry-run-linux-x64"
+      - "release-dry-run-macos-arm64"
+      - "release-dry-run-macos-x64"
+      - "release-dry-run-windows-x64"
+      - "freebsd-x64-blocker"
+    command: |
+      normalize_downloaded_artifact_paths() {
+        local file rel normalized normalized_dir conflict_path
+
+        while IFS= read -r -d '' file; do
+          rel="$${file#./}"
+          normalized="$${rel//\\//}"
+          if [[ "$${normalized}" == "$${rel}" ]]; then
+            continue
+          fi
+
+          normalized_dir="$$(dirname "$${normalized}")"
+          mkdir -p "$${normalized_dir}"
+          if [[ -e "$${normalized}" ]]; then
+            if cmp -s "$${file}" "$${normalized}"; then
+              rm -f "$${file}"
+            else
+              conflict_path="$${normalized}.windows-path-conflict"
+              mv "$${file}" "$${conflict_path}"
+              printf 'conflicting downloaded artifact path: %s -> %s; kept %s\n' "$${rel}" "$${normalized}" "$${conflict_path}" >&2
+            fi
+          else
+            mv "$${file}" "$${normalized}"
+          fi
+        done < <(find . -type f -name '*\\*' -print0)
+      }
+
+      download_artifacts() {
+        local prefix="$$1"
+        local windows_prefix
+
+        windows_prefix="$${prefix//\//\\}"
+
+        buildkite-agent artifact download "$${prefix}/*" . || true
+        buildkite-agent artifact download "$${prefix}/**/*" . || true
+        if [[ "$${windows_prefix}" != "$${prefix}" ]]; then
+          buildkite-agent artifact download "$${windows_prefix}\\*" . || true
+          buildkite-agent artifact download "$${windows_prefix}\\**\\*" . || true
+        fi
+        normalize_downloaded_artifact_paths
+      }
+
+      download_artifacts "artifacts/buildkite/release-dry-run/linux-x64"
+      download_artifacts "artifacts/buildkite/release-dry-run/macos-arm64"
+      download_artifacts "artifacts/buildkite/release-dry-run/macos-x64"
+      download_artifacts "artifacts/buildkite/release-dry-run/windows-x64"
+      download_artifacts "artifacts/buildkite/release-blockers/freebsd-x64"
+      CTX_ARTIFACT_DIR=artifacts/buildkite/release-candidate ./scripts/release-candidate-metadata.sh \
+        artifacts/buildkite/release-dry-run \
+        artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 10
+    artifact_paths:
+      - "artifacts/buildkite/release-candidate/*"
+      - "artifacts/buildkite/release-candidate/**/*"
+
   - label: ":clipboard: completion certificate"
     key: "release-completion-certificate"
     depends_on:
@@ -458,7 +555,9 @@ steps:
       - "release-dry-run-macos-x64"
       - "release-dry-run-windows-x64"
       - "freebsd-x64-blocker"
+      - "release-candidate-metadata"
       - "provider-fixtures"
+      - "provider-live-e2e-lanes"
       - "rich-search-context"
       - "dashboard-report-artifact-review"
       - "pr-publish-dry-run"
@@ -513,7 +612,9 @@ steps:
       download_artifacts "artifacts/buildkite/release-dry-run/macos-x64"
       download_artifacts "artifacts/buildkite/release-dry-run/windows-x64"
       download_artifacts "artifacts/buildkite/release-blockers/freebsd-x64"
+      download_artifacts "artifacts/buildkite/release-candidate"
       download_artifacts "artifacts/buildkite/finished-product/provider-fixtures"
+      download_artifacts "artifacts/buildkite/provider-live-e2e-lanes"
       download_artifacts "artifacts/buildkite/finished-product/rich-search-context"
       download_artifacts "artifacts/buildkite/finished-product/dashboard-report-artifact-review"
       download_artifacts "artifacts/buildkite/finished-product/pr-publish-dry-run"

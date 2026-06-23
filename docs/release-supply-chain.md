@@ -26,7 +26,9 @@ for the finished-product review:
   plan without downloading or installing binaries.
 
 The completion certificate references these artifacts beside the platform
-release dry-run manifests and FreeBSD blocker artifact.
+release dry-run manifests, provider live E2E lane definitions, the combined
+release-candidate metadata, the R2 upload plan, and the FreeBSD blocker
+artifact.
 
 Current-head release completion is not implied by local self-tests. The
 certificate validator requires Linux x64, macOS arm64, macOS x64, and Windows
@@ -37,7 +39,38 @@ marked as fixtures and are rejected by normal certificate runs.
 Installer/release smoke status for this branch is dry-run only. The installer
 smoke validates metadata parsing, unsafe input refusals, and the planned
 install path, but it does not download, install, sign, notarize, or publish a
-release artifact.
+release artifact. The R2 upload plan is generated as commands and cleanup
+instructions only; it is not executed by CI.
+
+## Provider Live E2E
+
+Normal CI records provider live E2E lane definitions in
+`artifacts/buildkite/provider-live-e2e-lanes`. The live lanes are disabled by
+default and require `CTX_LIVE_PROVIDER_E2E=1` plus a provider-specific opt-in
+variable such as `CTX_LIVE_PROVIDER_CODEX=1`. The current release/CI slice
+emits blocker artifacts for live runs until provider workers add real
+deterministic commands and redaction assertions.
+
+No provider may be documented as `supported-live` unless its support-matrix row
+has a real live E2E artifact from the gated lane.
+
+## R2 Staging Layout
+
+The release-candidate metadata lane writes:
+
+- `install.sh`
+- `install.ps1`
+- `ctx-release-metadata.env`
+- `checksums.sha256`
+- `release-candidate-manifest.json`
+- `r2-upload-plan.md`
+- `r2-upload-commands.sh`
+
+The default staging prefix is
+`work-recorder/ctx/release-candidate/v0.1.0/<git-commit>` in the
+`ctx-work-recorder-releases` bucket. The public installer base URL must be
+provided by `CTX_RELEASE_PUBLIC_BASE_URL` before an installer smoke can target
+real R2 objects.
 
 ## Checksums
 

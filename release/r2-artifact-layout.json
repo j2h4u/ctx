@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "kind": "r2_artifact_layout",
+  "publishing": false,
+  "package": "ctx",
+  "version": "0.1.0",
+  "default_bucket": "ctx-work-recorder-releases",
+  "bucket_env": "CTX_RELEASE_R2_BUCKET",
+  "prefix_env": "CTX_RELEASE_R2_PREFIX",
+  "public_base_url_env": "CTX_RELEASE_PUBLIC_BASE_URL",
+  "prefix_template": "work-recorder/ctx/release-candidate/v0.1.0/<git-commit>",
+  "objects": [
+    {
+      "platform": "linux-x64",
+      "target_triple": "x86_64-unknown-linux-gnu",
+      "object": "ctx-0.1.0-x86_64-unknown-linux-gnu"
+    },
+    {
+      "platform": "macos-arm64",
+      "target_triple": "aarch64-apple-darwin",
+      "object": "ctx-0.1.0-aarch64-apple-darwin"
+    },
+    {
+      "platform": "macos-x64",
+      "target_triple": "x86_64-apple-darwin",
+      "object": "ctx-0.1.0-x86_64-apple-darwin"
+    },
+    {
+      "platform": "windows-x64",
+      "target_triple": "x86_64-pc-windows-gnu",
+      "object": "ctx-0.1.0-x86_64-pc-windows-gnu.exe"
+    },
+    {
+      "platform": "installer",
+      "object": "install.sh",
+      "source": "scripts/install.sh"
+    },
+    {
+      "platform": "installer",
+      "object": "install.ps1",
+      "source": "scripts/install.ps1"
+    },
+    {
+      "platform": "all",
+      "object": "ctx-release-metadata.env"
+    },
+    {
+      "platform": "all",
+      "object": "checksums.sha256"
+    },
+    {
+      "platform": "all",
+      "object": "release-candidate-manifest.json"
+    }
+  ],
+  "freebsd_x64": {
+    "status": "blocked_until_native_runner_exists",
+    "target_triple": "x86_64-unknown-freebsd",
+    "blocker_artifact": "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json"
+  }
+}

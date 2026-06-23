@@ -49,9 +49,11 @@ binary into the chosen bin directory.
 
 Release metadata uses `release/install/ctx-release-metadata.env.template` as
 the schema reference. Release dry-runs generate host-specific metadata files
-beside the manifest and checksum artifact for the native release lanes. Real
-releases must replace every placeholder checksum with the SHA-256 digest of
-the final published artifact.
+beside the manifest and checksum artifact for the native release lanes. The
+release-candidate metadata lane assembles those platform files into one
+installer metadata file for the R2 staging layout in `docs/release-r2-layout.md`.
+Real releases must replace every placeholder checksum with the SHA-256 digest
+of the final published artifact.
 
 The installer dry-run smoke lane validates this metadata shape with local
 fixture metadata and `scripts/install.sh --dry-run`. It does not download,
@@ -65,9 +67,17 @@ Required keys:
 - `CTX_RELEASE_ARTIFACT_<platform>`
 - `CTX_RELEASE_SHA256_<platform>`
 
-Supported platform keys are `linux_x64`, `macos_arm64`, `macos_x64`,
-`windows_x64`, and `freebsd_x64`. FreeBSD remains blocked until native release
-evidence exists.
+Release-candidate metadata also records the inert audit keys
+`CTX_RELEASE_R2_BUCKET`, `CTX_RELEASE_R2_PREFIX`, and
+`CTX_RELEASE_R2_OBJECT_<platform>`, plus installer script object keys
+`CTX_RELEASE_INSTALLER_SH_R2_OBJECT` and
+`CTX_RELEASE_INSTALLER_PS1_R2_OBJECT`. The installers ignore these keys; they
+are for release review and upload cleanup.
+
+Supported platform keys are `linux_x64`, `macos_arm64`, `macos_x64`, and
+`windows_x64`. `freebsd_x64` stays omitted from candidate install metadata
+until native release evidence exists; the candidate metadata records
+`CTX_RELEASE_BLOCKER_FREEBSD_X64` instead.
 
 ## Public wording rules
 

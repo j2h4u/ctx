@@ -131,6 +131,29 @@ require_env_sha256() {
   fi
 }
 
+require_env_present() {
+  local path="$1"
+  local key="$2"
+  local description="$3"
+  local actual
+
+  actual="$(env_value "${path}" "${key}")"
+  if [[ -z "${actual}" ]]; then
+    fail_certificate "${description}: ${path} must set ${key}"
+  fi
+}
+
+require_env_https() {
+  local path="$1"
+  local key="$2"
+  local actual
+
+  actual="$(env_value "${path}" "${key}")"
+  if [[ "${actual}" != https://* ]]; then
+    fail_certificate "${path} must set ${key} to an HTTPS URL"
+  fi
+}
+
 env_value() {
   local path="$1"
   local key="$2"
@@ -289,6 +312,108 @@ validate_release_dry_run() {
   fi
 }
 
+validate_release_candidate_metadata() {
+  local manifest="artifacts/buildkite/release-candidate/release-candidate-manifest.json"
+  local metadata="artifacts/buildkite/release-candidate/ctx-release-metadata.env"
+  local checksums="artifacts/buildkite/release-candidate/checksums.sha256"
+  local plan="artifacts/buildkite/release-candidate/r2-upload-plan.md"
+  local commands="artifacts/buildkite/release-candidate/r2-upload-commands.sh"
+  local platform platform_key artifact checksum checksum_entry artifact_path actual_checksum
+
+  require_file "${manifest}"
+  require_file "${metadata}"
+  require_file "${checksums}"
+  require_file "${plan}"
+  require_file "${commands}"
+  require_json_parser || return 0
+
+  require_manifest_value "${manifest}" ".schema_version" "1" "release candidate manifest records schema version"
+  require_manifest_value "${manifest}" ".kind" "ctx_release_candidate" "release candidate manifest records kind"
+  require_manifest_value "${manifest}" ".publishing" "false" "release candidate manifest records non-publishing status"
+  require_manifest_value "${manifest}" ".package" "ctx" "release candidate manifest records package"
+  require_manifest_value "${manifest}" ".version" "0.1.0" "release candidate manifest records 0.1.0"
+  require_manifest_value "${manifest}" ".channel" "release-candidate" "release candidate manifest records channel"
+  require_manifest_current_head "${manifest}" "release candidate manifest records current head"
+  require_manifest_value "${manifest}" ".r2.bucket" "$(env_value "${metadata}" CTX_RELEASE_R2_BUCKET)" "release candidate manifest records R2 bucket"
+  require_manifest_value "${manifest}" ".r2.prefix" "$(env_value "${metadata}" CTX_RELEASE_R2_PREFIX)" "release candidate manifest records R2 prefix"
+
+  require_env_key "${metadata}" "CTX_RELEASE_SCHEMA_VERSION" "1"
+  require_env_key "${metadata}" "CTX_RELEASE_VERSION" "0.1.0"
+  require_env_key "${metadata}" "CTX_RELEASE_CHANNEL" "release-candidate"
+  require_env_https "${metadata}" "CTX_RELEASE_BASE_URL"
+  require_env_present "${metadata}" "CTX_RELEASE_R2_BUCKET" "release candidate metadata records R2 bucket"
+  require_env_present "${metadata}" "CTX_RELEASE_R2_PREFIX" "release candidate metadata records R2 prefix"
+
+  while IFS='|' read -r platform platform_key; do
+    artifact="$(env_value "${metadata}" "CTX_RELEASE_ARTIFACT_${platform_key}")"
+    checksum="$(env_value "${metadata}" "CTX_RELEASE_SHA256_${platform_key}")"
+    require_env_sha256 "${metadata}" "CTX_RELEASE_SHA256_${platform_key}"
+    if [[ -z "${artifact}" || "${artifact}" = /* || "${artifact}" == *..* || "${artifact}" == */* || "${artifact}" == *\\* ]]; then
+      fail_certificate "release candidate metadata artifact for ${platform} must be a safe file name"
+      continue
+    fi
+
+    checksum_entry="$(awk -v name="${artifact}" '
+      {
+        checksum = $1
+        artifact_name = $2
+        sub(/\r$/, "", checksum)
+        sub(/\r$/, "", artifact_name)
+        if (artifact_name == name) {
+          print checksum
+          found = 1
+          exit
+        }
+      }
+      END { if (!found) exit 1 }
+    ' "${completion_evidence_root}/${checksums}" 2>/dev/null || true)"
+    if [[ "${checksum_entry}" != "${checksum}" ]]; then
+      fail_certificate "release candidate checksums.sha256 must match metadata checksum for ${artifact}"
+    fi
+
+    artifact_path="artifacts/buildkite/release-dry-run/${platform}/${artifact}"
+    require_file "${artifact_path}"
+    if [[ -f "${completion_evidence_root}/${artifact_path}" ]]; then
+      actual_checksum="$(sha256_file "${completion_evidence_root}/${artifact_path}")"
+      if [[ "${actual_checksum}" != "${checksum}" ]]; then
+        fail_certificate "release candidate metadata checksum must match artifact file for ${artifact}"
+      fi
+    fi
+    require_env_present "${metadata}" "CTX_RELEASE_R2_OBJECT_${platform_key}" "release candidate metadata records R2 object for ${platform}"
+  done <<'EOF'
+linux-x64|linux_x64
+macos-arm64|macos_arm64
+macos-x64|macos_x64
+windows-x64|windows_x64
+EOF
+
+  require_contains "${plan}" "Cleanup staged objects" "release candidate R2 plan records cleanup"
+  require_contains "${commands}" "wrangler r2 object put" "release candidate R2 command file records staging commands"
+  require_contains "${commands}" 'scripts/install.sh' "release candidate R2 command file stages Bash installer"
+  require_contains "${commands}" 'scripts/install.ps1' "release candidate R2 command file stages PowerShell installer"
+  require_contains "${manifest}" '"installers"' "release candidate manifest records installers"
+  require_contains "${metadata}" "CTX_RELEASE_BLOCKER_FREEBSD_X64=" "release candidate metadata records FreeBSD blocker"
+}
+
+validate_provider_live_e2e_lanes() {
+  local manifest="artifacts/buildkite/provider-live-e2e-lanes/provider-live-e2e-lanes.json"
+  local notes="artifacts/buildkite/provider-live-e2e-lanes/provider-live-e2e-lanes.md"
+
+  require_file "${manifest}"
+  require_file "${notes}"
+  require_json_parser || return 0
+
+  require_manifest_value "${manifest}" ".schema_version" "1" "provider live E2E lanes record schema version"
+  require_manifest_value "${manifest}" ".kind" "provider_live_e2e_lane_definitions" "provider live E2E lanes record kind"
+  require_manifest_value "${manifest}" ".publishing" "false" "provider live E2E lanes record non-publishing status"
+  require_manifest_value "${manifest}" ".default_enabled" "false" "provider live E2E lanes are disabled by default"
+  require_manifest_current_head "${manifest}" "provider live E2E lanes record current head"
+  require_contains "${notes}" "CTX_LIVE_PROVIDER_E2E=1" "provider live E2E notes record global opt-in"
+  require_contains "${notes}" "Codex" "provider live E2E notes include Codex"
+  require_contains "${notes}" "Claude Code" "provider live E2E notes include Claude Code"
+  require_contains "${notes}" "Gemini CLI" "provider live E2E notes include Gemini CLI"
+}
+
 validate_evidence() {
   validate_release_dry_run \
     "linux-x64" \
@@ -319,7 +444,9 @@ validate_evidence() {
   require_manifest_value "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" ".target_triple" "x86_64-unknown-freebsd" "FreeBSD blocker records target triple"
   require_manifest_value "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" ".publishing" "false" "FreeBSD blocker records non-publishing status"
   require_manifest_current_head "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" "FreeBSD blocker records current head"
+  validate_release_candidate_metadata
   require_summary_status "artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json" "provider-fixtures"
+  validate_provider_live_e2e_lanes
   require_summary_status "artifacts/buildkite/finished-product/rich-search-context/rich-search-context.json" "rich-search-context"
   require_file "artifacts/buildkite/finished-product/rich-search-context/rich-context.json"
   require_summary_status "artifacts/buildkite/finished-product/dashboard-report-artifact-review/dashboard-report-artifact-review.json" "dashboard-report-artifact-review"
@@ -378,7 +505,10 @@ write_certificate() {
 - Windows x64 release dry-run manifest: \`artifacts/buildkite/release-dry-run/windows-x64/manifest.json\`
 - Windows x64 release dry-run install metadata: \`artifacts/buildkite/release-dry-run/windows-x64/ctx-release-metadata.env\`
 - FreeBSD x64 blocker artifact: \`artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json\`
+- Release candidate metadata: \`artifacts/buildkite/release-candidate/ctx-release-metadata.env\`
+- Release candidate R2 upload plan: \`artifacts/buildkite/release-candidate/r2-upload-plan.md\`
 - Provider fixture import artifact: \`artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json\`
+- Provider live E2E lane definitions: \`artifacts/buildkite/provider-live-e2e-lanes/provider-live-e2e-lanes.json\`
 - Rich search/context artifact: \`artifacts/buildkite/finished-product/rich-search-context/rich-context.json\`
 - Dashboard/report artifact review: \`artifacts/buildkite/finished-product/dashboard-report-artifact-review/report.json\`
 - PR publish dry-run artifact: \`artifacts/buildkite/finished-product/pr-publish-dry-run/pr-comment-dry-run.md\`
@@ -387,10 +517,13 @@ write_certificate() {
 - Installer dry-run smoke artifact: \`artifacts/buildkite/finished-product/installer-dry-run-smoke/install-dry-run.txt\`
 - Release install documentation: \`docs/release-install.md\`
 - Release supply-chain documentation: \`docs/release-supply-chain.md\`
+- Release R2 layout documentation: \`docs/release-r2-layout.md\`
+- FreeBSD release worker notes: \`docs/freebsd-release-worker.md\`
 
 ## External Release Blockers
 
 - FreeBSD native release lane requires a documented native \`freebsd-x64\` Buildkite queue or a separately proven cross-build lane.
+- Provider live E2E lanes are defined but remain opt-in; providers cannot be marked \`supported-live\` without real lane artifacts.
 - Full jj e2e validation requires a runner image with \`jj\` installed; the CI lane records availability and blocker status without installing external tools.
 - Production release publication requires final release metadata with non-placeholder SHA-256 checksums for every published artifact.
 - Signing, notarization, SBOM publication, and provenance publication require configured external credentials and policy approval.
@@ -418,7 +551,11 @@ EOF
     "release_dry_run_windows_x64": "artifacts/buildkite/release-dry-run/windows-x64/manifest.json",
     "release_dry_run_windows_x64_metadata": "artifacts/buildkite/release-dry-run/windows-x64/ctx-release-metadata.env",
     "freebsd_x64_blocker": "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json",
+    "release_candidate_metadata": "artifacts/buildkite/release-candidate/ctx-release-metadata.env",
+    "release_candidate_manifest": "artifacts/buildkite/release-candidate/release-candidate-manifest.json",
+    "release_candidate_r2_upload_plan": "artifacts/buildkite/release-candidate/r2-upload-plan.md",
     "provider_fixture_import": "artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json",
+    "provider_live_e2e_lane_definitions": "artifacts/buildkite/provider-live-e2e-lanes/provider-live-e2e-lanes.json",
     "rich_search_context": "artifacts/buildkite/finished-product/rich-search-context/rich-context.json",
     "dashboard_report_artifact_review": "artifacts/buildkite/finished-product/dashboard-report-artifact-review/report.json",
     "pr_publish_dry_run": "artifacts/buildkite/finished-product/pr-publish-dry-run/pr-comment-dry-run.md",
@@ -426,11 +563,14 @@ EOF
     "jj_e2e_blocker_status": "artifacts/buildkite/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.txt",
     "installer_dry_run_smoke": "artifacts/buildkite/finished-product/installer-dry-run-smoke/install-dry-run.txt",
     "release_install_docs": "docs/release-install.md",
-    "release_supply_chain_docs": "docs/release-supply-chain.md"
+    "release_supply_chain_docs": "docs/release-supply-chain.md",
+    "release_r2_layout_docs": "docs/release-r2-layout.md",
+    "freebsd_release_worker_notes": "docs/freebsd-release-worker.md"
   },
   "evidence_verified": true,
   "external_release_blockers": [
     "FreeBSD native release lane requires a documented native freebsd-x64 Buildkite queue or a separately proven cross-build lane.",
+    "Provider live E2E lanes are defined but remain opt-in; providers cannot be marked supported-live without real lane artifacts.",
     "Full jj e2e validation requires a runner image with jj installed; the CI lane records availability and blocker status without installing external tools.",
     "Production release publication requires final release metadata with non-placeholder SHA-256 checksums for every published artifact.",
     "Signing, notarization, SBOM publication, and provenance publication require configured external credentials and policy approval."

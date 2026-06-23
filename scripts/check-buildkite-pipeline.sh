@@ -101,6 +101,8 @@ validate_yaml_if_possible() {
 validate_contract() {
   local pipeline=".buildkite/pipeline.yml"
   local release_script="scripts/release-dry-run.sh"
+  local release_candidate_script="scripts/release-candidate-metadata.sh"
+  local provider_live_script="scripts/release-provider-live-e2e-lanes.sh"
   local certificate_script="scripts/release-completion-certificate.sh"
   local install_script="scripts/install.sh"
   local install_ps1="scripts/install.ps1"
@@ -109,6 +111,8 @@ validate_contract() {
 
   test -f "${pipeline}" || fail_contract "pipeline file exists"
   test -f "${release_script}" || fail_contract "release dry-run script exists"
+  test -f "${release_candidate_script}" || fail_contract "release candidate metadata script exists"
+  test -f "${provider_live_script}" || fail_contract "provider live E2E lane script exists"
   test -f "${certificate_script}" || fail_contract "completion certificate script exists"
   test -f "${install_script}" || fail_contract "Bash installer exists"
   test -f "${install_ps1}" || fail_contract "PowerShell installer exists"
@@ -129,6 +133,8 @@ validate_contract() {
   require_text "Linux examples step" "${pipeline}" 'key: "examples"'
   require_text "Linux Bazel step" "${pipeline}" 'key: "bazel"'
   require_text "provider fixture import step" "${pipeline}" 'key: "provider-fixtures"'
+  require_text "provider live E2E definitions step" "${pipeline}" 'key: "provider-live-e2e-lanes"'
+  require_text "provider live E2E gated step" "${pipeline}" 'key: "provider-live-e2e-gated"'
   require_text "rich search/context step" "${pipeline}" 'key: "rich-search-context"'
   require_text "dashboard/report artifact review step" "${pipeline}" 'key: "dashboard-report-artifact-review"'
   require_text "PR publish dry-run step" "${pipeline}" 'key: "pr-publish-dry-run"'
@@ -144,9 +150,11 @@ validate_contract() {
   require_text "macOS x64 release dry-run step" "${pipeline}" 'key: "release-dry-run-macos-x64"'
   require_text "Windows x64 release dry-run step" "${pipeline}" 'key: "release-dry-run-windows-x64"'
   require_text "FreeBSD documented blocker step" "${pipeline}" 'key: "freebsd-x64-blocker"'
+  require_text "release candidate metadata step" "${pipeline}" 'key: "release-candidate-metadata"'
   require_text "completion certificate step" "${pipeline}" 'key: "release-completion-certificate"'
   require_text "Linux platform smoke waits for finished-product lanes" "${pipeline}" 'depends_on: "installer-dry-run-smoke"'
   require_text "FreeBSD blocker waits for Linux release dry-run" "${pipeline}" 'depends_on: "release-dry-run-linux-x64"'
+  require_text "rich search waits for provider live E2E definitions" "${pipeline}" 'depends_on: "provider-live-e2e-lanes"'
 
   require_text "Linux verification queue" "${pipeline}" 'queue: "release-linux-managed"'
   require_text "Linux verification runner class" "${pipeline}" 'ctx-runner-class: "release-linux-x64-stage"'
@@ -165,6 +173,9 @@ validate_contract() {
   require_text "examples command wired" "${pipeline}" './scripts/check.sh examples'
   require_text "Bazel is required in CI" "${pipeline}" 'CTX_REQUIRE_BAZEL=1 ./scripts/check.sh bazel'
   require_text "provider fixtures command wired" "${pipeline}" './scripts/check.sh provider-fixtures'
+  require_text "provider live E2E definitions command wired" "${pipeline}" './scripts/release-provider-live-e2e-lanes.sh definitions'
+  require_text "provider live E2E gated command wired" "${pipeline}" './scripts/release-provider-live-e2e-lanes.sh run-selected'
+  require_text "provider live E2E global opt-in" "${pipeline}" 'build.env("CTX_LIVE_PROVIDER_E2E") == "1"'
   require_text "rich search/context command wired" "${pipeline}" './scripts/check.sh rich-search-context'
   require_text "dashboard/report command wired" "${pipeline}" './scripts/check.sh dashboard-report-artifact-review'
   require_text "PR publish dry-run command wired" "${pipeline}" './scripts/check.sh pr-publish-dry-run'
@@ -174,6 +185,7 @@ validate_contract() {
   require_text "platform smoke command wired" "${pipeline}" './scripts/check.sh platform-smoke'
   require_text "Windows platform smoke command wired" "${pipeline}" 'scripts\\ci-windows.ps1 platform-smoke'
   require_text "Windows release dry-run command wired" "${pipeline}" 'scripts\\ci-windows.ps1 release-dry-run'
+  require_text "release candidate metadata command wired" "${pipeline}" './scripts/release-candidate-metadata.sh'
   require_text "completion certificate command wired" "${pipeline}" './scripts/release-completion-certificate.sh'
   require_text "completion certificate uses tolerant artifact download helper" "${pipeline}" 'download_artifacts()'
   require_text "completion certificate normalizes Windows artifact paths" "${pipeline}" 'normalize_downloaded_artifact_paths()'
@@ -185,7 +197,9 @@ validate_contract() {
   require_text "completion certificate downloads macOS x64 release dry-run artifacts" "${pipeline}" 'download_artifacts "artifacts/buildkite/release-dry-run/macos-x64"'
   require_text "completion certificate downloads release dry-run artifacts" "${pipeline}" 'download_artifacts "artifacts/buildkite/release-dry-run/windows-x64"'
   require_text "completion certificate downloads FreeBSD blocker artifact" "${pipeline}" 'download_artifacts "artifacts/buildkite/release-blockers/freebsd-x64"'
+  require_text "completion certificate downloads release candidate artifacts" "${pipeline}" 'download_artifacts "artifacts/buildkite/release-candidate"'
   require_text "completion certificate downloads provider fixture artifact" "${pipeline}" 'download_artifacts "artifacts/buildkite/finished-product/provider-fixtures"'
+  require_text "completion certificate downloads provider live E2E lane artifact" "${pipeline}" 'download_artifacts "artifacts/buildkite/provider-live-e2e-lanes"'
   require_text "completion certificate downloads rich search/context artifact" "${pipeline}" 'download_artifacts "artifacts/buildkite/finished-product/rich-search-context"'
   require_text "completion certificate downloads dashboard/report artifact" "${pipeline}" 'download_artifacts "artifacts/buildkite/finished-product/dashboard-report-artifact-review"'
   require_text "completion certificate downloads PR publish dry-run artifact" "${pipeline}" 'download_artifacts "artifacts/buildkite/finished-product/pr-publish-dry-run"'
@@ -198,6 +212,8 @@ validate_contract() {
   require_text "completion certificate waits for macOS arm64 release dry-run" "${pipeline}" '- "release-dry-run-macos-arm64"'
   require_text "completion certificate waits for macOS x64 release dry-run" "${pipeline}" '- "release-dry-run-macos-x64"'
   require_text "completion certificate waits for Windows release dry-run" "${pipeline}" '- "release-dry-run-windows-x64"'
+  require_text "completion certificate waits for release candidate metadata" "${pipeline}" '- "release-candidate-metadata"'
+  require_text "completion certificate waits for provider live E2E definitions" "${pipeline}" '- "provider-live-e2e-lanes"'
   require_text "completion certificate waits for installer dry-run smoke" "${pipeline}" '- "installer-dry-run-smoke"'
   require_text "Linux host triple guard" "${pipeline}" 'CTX_EXPECT_HOST_TRIPLE: "x86_64-unknown-linux-gnu"'
   require_text "macOS arm64 host triple guard" "${pipeline}" 'CTX_EXPECT_HOST_TRIPLE: "aarch64-apple-darwin"'
@@ -215,6 +231,17 @@ validate_contract() {
   require_text "release script manifest records artifact size" "${release_script}" '"bytes": ${bytes}'
   require_text "release script emits install metadata" "${release_script}" 'ctx-release-metadata.env'
   require_text "release script emits pinned installer checksum" "${release_script}" 'CTX_RELEASE_SHA256_${platform_key}=${checksum}'
+  require_text "release candidate metadata is non-publishing" "${release_candidate_script}" '"publishing": false'
+  require_text "release candidate metadata requires 0.1.0" "${release_candidate_script}" 'release candidate metadata expects ctx 0.1.0'
+  require_text "release candidate metadata emits combined installer metadata" "${release_candidate_script}" 'ctx-release-metadata.env'
+  require_text "release candidate metadata emits R2 upload plan" "${release_candidate_script}" 'r2-upload-plan.md'
+  require_text "release candidate metadata emits cleanup commands" "${release_candidate_script}" 'Cleanup staged objects'
+  require_text "release candidate metadata uses Wrangler R2 put" "${release_candidate_script}" 'wrangler r2 object put'
+  require_text "release candidate metadata stages Bash installer" "${release_candidate_script}" 'scripts/install.sh'
+  require_text "release candidate metadata stages PowerShell installer" "${release_candidate_script}" 'scripts/install.ps1'
+  require_text "provider live E2E definitions are non-publishing" "${provider_live_script}" '"publishing": false'
+  require_text "provider live E2E definitions use opt-in env" "${provider_live_script}" 'CTX_LIVE_PROVIDER_E2E=1'
+  require_text "provider live E2E blockers require explicit acceptance" "${provider_live_script}" 'CTX_LIVE_PROVIDER_E2E_ACCEPT_BLOCKERS'
   require_text "Bash installer requires metadata" "${install_script}" '--metadata is required'
   require_text "Bash installer refuses curl pipe ambiguity" "${install_script}" 'curl -fsSLO'
   require_text "Bash installer refuses insecure metadata URL" "${install_script}" 'refusing insecure metadata URL'
@@ -225,6 +252,10 @@ validate_contract() {
   require_text "PowerShell installer verifies SHA-256 before install" "${install_ps1}" 'checksum mismatch'
   require_text "PowerShell installer rejects placeholder checksums" "${install_ps1}" 'checksum for windows-x64 is a placeholder'
   require_text "install metadata template exists" "release/install/ctx-release-metadata.env.template" 'CTX_RELEASE_SCHEMA_VERSION=1'
+  require_text "install metadata template records 0.1.0" "release/install/ctx-release-metadata.env.template" 'CTX_RELEASE_VERSION=0.1.0'
+  require_text "install metadata template records R2 prefix" "release/install/ctx-release-metadata.env.template" 'CTX_RELEASE_R2_PREFIX=work-recorder/ctx/release-candidate/v0.1.0/<git-commit>'
+  require_text "install metadata template records Bash installer object" "release/install/ctx-release-metadata.env.template" 'CTX_RELEASE_INSTALLER_SH_R2_OBJECT='
+  require_text "install metadata template records PowerShell installer object" "release/install/ctx-release-metadata.env.template" 'CTX_RELEASE_INSTALLER_PS1_R2_OBJECT='
   require_text "install docs avoid pipe launch" "docs/release-install.md" 'Do not document or publish a `curl ... | sh` command.'
   require_text "supply chain docs cover SBOM" "docs/release-supply-chain.md" 'SBOM publication is a release blocker'
   require_text "supply chain docs cover provenance" "docs/release-supply-chain.md" 'Build provenance is a release blocker'
@@ -232,6 +263,8 @@ validate_contract() {
   require_text "completion certificate is non-publishing" "${certificate_script}" '"publishing": false'
   require_text "completion certificate records external blockers" "${certificate_script}" 'external_release_blockers'
   require_text "completion certificate records provider fixture artifact" "${certificate_script}" 'provider_fixture_import'
+  require_text "completion certificate records release candidate metadata" "${certificate_script}" 'release_candidate_metadata'
+  require_text "completion certificate records provider live E2E definitions" "${certificate_script}" 'provider_live_e2e_lane_definitions'
   require_text "completion certificate records rich search/context artifact" "${certificate_script}" 'rich_search_context'
   require_text "completion certificate records dashboard/report artifact" "${certificate_script}" 'dashboard_report_artifact_review'
   require_text "completion certificate records PR publish dry-run artifact" "${certificate_script}" 'pr_publish_dry_run'
@@ -240,6 +273,10 @@ validate_contract() {
   require_text "completion certificate records installer dry-run artifact" "${certificate_script}" 'installer_dry_run_smoke'
   require_text "completion certificate template exists" "release/completion-certificate-template.md" 'Work Recorder Completion Certificate'
   require_text "completion certificate template includes finished-product evidence" "release/completion-certificate-template.md" 'Provider fixture import artifact'
+  require_text "completion certificate template includes R2 evidence" "release/completion-certificate-template.md" 'Release candidate R2 upload plan'
+  require_text "release R2 layout docs exist" "docs/release-r2-layout.md" 'Release R2 Layout'
+  require_text "FreeBSD worker notes exist" "docs/freebsd-release-worker.md" 'FreeBSD Release Worker Notes'
+  require_text "release R2 machine layout exists" "release/r2-artifact-layout.json" '"kind": "r2_artifact_layout"'
   require_text "check script supports provider fixtures" "scripts/check.sh" 'provider-fixtures)'
   require_text "check script supports rich search/context" "scripts/check.sh" 'rich-search-context)'
   require_text "check script supports dashboard/report review" "scripts/check.sh" 'dashboard-report-artifact-review)'
@@ -255,6 +292,10 @@ validate_contract() {
   require_text "supply chain docs cover finished-product matrix" "docs/release-supply-chain.md" 'Finished-Product Evidence Matrix'
   require_text "supply chain docs cover PR publish dry-run" "docs/release-supply-chain.md" 'PR publish dry-run'
   require_text "install docs cover installer dry-run smoke" "docs/release-install.md" 'installer dry-run smoke lane'
+  require_text "install docs cover R2 audit keys" "docs/release-install.md" 'CTX_RELEASE_R2_OBJECT_<platform>'
+  require_text "install docs cover installer object keys" "docs/release-install.md" 'CTX_RELEASE_INSTALLER_SH_R2_OBJECT'
+  require_text "supply chain docs cover provider live E2E" "docs/release-supply-chain.md" 'Provider Live E2E'
+  require_text "supply chain docs cover R2 staging layout" "docs/release-supply-chain.md" 'R2 Staging Layout'
   require_text "host triple parser is pipe-safe" "scripts/ci-common.sh" 'rustc_info="$(rustc -vV)"'
   require_text "rustup bootstrap avoids pipefail SIGPIPE" "scripts/ci-common.sh" '-o "${rustup_installer}"'
   require_text "Windows script bootstraps Rust" "${windows_script}" 'Ensure-Rust-Toolchain'
@@ -309,6 +350,8 @@ validate_contract() {
   require_text "completion certificate requires dry-run release metadata" "${certificate_script}" 'CTX_RELEASE_CHANNEL" "dry-run"'
   require_text "completion certificate requires finished-product status summaries" "${certificate_script}" 'require_summary_status'
   require_text "completion certificate verifies evidence before writing" "${certificate_script}" 'validate_evidence'
+  require_text "completion certificate validates release candidate metadata" "${certificate_script}" 'validate_release_candidate_metadata'
+  require_text "completion certificate validates provider live E2E lane definitions" "${certificate_script}" 'validate_provider_live_e2e_lanes'
 
   if (( contract_failures > 0 )); then
     note "Buildkite pipeline contract failed with ${contract_failures} issue(s)."
