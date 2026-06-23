@@ -431,6 +431,45 @@ validate_provider_live_e2e_lanes() {
   require_contains "${notes}" "Gemini CLI" "provider live E2E notes include Gemini CLI"
 }
 
+validate_dashboard_visual_evidence() {
+  local manifest="artifacts/buildkite/finished-product/dashboard-report-artifact-review/visual-evidence.json"
+  local status blocker screenshot_path
+
+  require_file "${manifest}"
+  require_file "artifacts/buildkite/finished-product/dashboard-report-artifact-review/screenshot-status.txt"
+  require_json_parser || return 0
+
+  require_manifest_value "${manifest}" ".schema_version" "1" "dashboard visual evidence records schema version"
+  require_manifest_value "${manifest}" ".kind" "dashboard_visual_evidence" "dashboard visual evidence records kind"
+  status="$(manifest_value "${manifest}" ".visual_status")"
+  case "${status}" in
+    captured)
+      require_manifest_value "${manifest}" ".screenshot_count" "6" "dashboard visual evidence records screenshot count"
+      for key in desktop_overview desktop_providers desktop_evidence mobile_overview mobile_providers mobile_evidence; do
+        screenshot_path="$(manifest_value "${manifest}" ".${key}")"
+        if [[ -z "${screenshot_path}" || "${screenshot_path}" = /* || "${screenshot_path}" == *..* ]]; then
+          fail_certificate "dashboard visual evidence ${key} must be a safe relative screenshot path"
+        else
+          require_file "artifacts/buildkite/finished-product/dashboard-report-artifact-review/${screenshot_path}"
+        fi
+      done
+      ;;
+    accepted_blocker)
+      blocker="$(manifest_value "${manifest}" ".accepted_visual_blocker")"
+      if [[ -z "${blocker}" ]]; then
+        fail_certificate "dashboard visual evidence accepted_blocker must include accepted_visual_blocker"
+      fi
+      require_contains \
+        "artifacts/buildkite/finished-product/dashboard-report-artifact-review/screenshot-status.txt" \
+        "accepted visual blocker:" \
+        "dashboard visual evidence records explicit accepted blocker"
+      ;;
+    *)
+      fail_certificate "dashboard visual evidence must be captured or accepted_blocker, got ${status:-<missing>}"
+      ;;
+  esac
+}
+
 validate_evidence() {
   validate_release_dry_run \
     "linux-x64" \
@@ -475,6 +514,7 @@ validate_evidence() {
   require_file "artifacts/buildkite/finished-product/rich-search-context/rich-context.json"
   require_summary_status "artifacts/buildkite/finished-product/dashboard-report-artifact-review/dashboard-report-artifact-review.json" "dashboard-report-artifact-review"
   require_contains "artifacts/buildkite/finished-product/dashboard-report-artifact-review/report.json" '"record_count"' "dashboard/report artifact records report data"
+  validate_dashboard_visual_evidence
   require_summary_status "artifacts/buildkite/finished-product/pr-publish-dry-run/pr-publish-dry-run.json" "pr-publish-dry-run"
   require_contains "artifacts/buildkite/finished-product/pr-publish-dry-run/pr-comment-dry-run.md" "ctx-work-record:finished-product:start" "PR publish artifact records dry-run marker"
   require_summary_status "artifacts/buildkite/finished-product/security-archive-fixtures/security-archive-fixtures.json" "security-archive-fixtures"
@@ -540,6 +580,7 @@ write_certificate() {
 - Provider live E2E lane definitions: \`artifacts/buildkite/provider-live-e2e-lanes/provider-live-e2e-lanes.json\`
 - Rich search/context artifact: \`artifacts/buildkite/finished-product/rich-search-context/rich-context.json\`
 - Dashboard/report artifact review: \`artifacts/buildkite/finished-product/dashboard-report-artifact-review/report.json\`
+- Dashboard visual evidence manifest: \`artifacts/buildkite/finished-product/dashboard-report-artifact-review/visual-evidence.json\`
 - PR publish dry-run artifact: \`artifacts/buildkite/finished-product/pr-publish-dry-run/pr-comment-dry-run.md\`
 - Security/malicious archive fixture artifact: \`artifacts/buildkite/finished-product/security-archive-fixtures/security-archive-fixtures.md\`
 - jj e2e blocker status artifact: \`artifacts/buildkite/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.txt\`
@@ -595,6 +636,7 @@ EOF
     "provider_live_e2e_lane_definitions": "artifacts/buildkite/provider-live-e2e-lanes/provider-live-e2e-lanes.json",
     "rich_search_context": "artifacts/buildkite/finished-product/rich-search-context/rich-context.json",
     "dashboard_report_artifact_review": "artifacts/buildkite/finished-product/dashboard-report-artifact-review/report.json",
+    "dashboard_visual_evidence": "artifacts/buildkite/finished-product/dashboard-report-artifact-review/visual-evidence.json",
     "pr_publish_dry_run": "artifacts/buildkite/finished-product/pr-publish-dry-run/pr-comment-dry-run.md",
     "security_archive_fixtures": "artifacts/buildkite/finished-product/security-archive-fixtures/security-archive-fixtures.md",
     "jj_e2e_blocker_status": "artifacts/buildkite/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.txt",

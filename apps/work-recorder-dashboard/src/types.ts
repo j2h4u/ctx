@@ -52,6 +52,9 @@ export type DashboardSession = {
   id: string;
   work_record_id?: string | null;
   provider?: string | null;
+  support_status?: string | null;
+  capture_path?: string | null;
+  privacy_note?: string | null;
   external_session_id?: string | null;
   external_agent_id?: string | null;
   agent_type?: string | null;

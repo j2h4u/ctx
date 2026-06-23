@@ -5,20 +5,21 @@ export const sampleDashboardData: DashboardData = {
   product: "ctx Work Recorder",
   share_safe: true,
   summary: {
-    record_count: 3,
-    evidence_count: 4,
+    record_count: 4,
+    evidence_count: 8,
     linked_pr_count: 2,
     tags: [
       { tag: "dashboard", count: 2 },
-      { tag: "provider-import", count: 1 },
+      { tag: "provider-import", count: 2 },
+      { tag: "fixture-only", count: 2 },
       { tag: "release", count: 1 }
     ]
   },
   privacy: {
     default_redacted: true,
-    raw_transcripts_withheld: 1,
-    redacted_previews: 7,
-    withheld_links: 0,
+    raw_transcripts_withheld: 3,
+    redacted_previews: 15,
+    withheld_links: 1,
     local_paths_redacted: true
   },
   views: [
@@ -36,7 +37,7 @@ export const sampleDashboardData: DashboardData = {
     {
       id: "rec-dashboard",
       title: "Finish dashboard React export",
-      body: "Built a share-safe dashboard over normalized Work Recorder DTOs with transcript, command, artifact, PR, and status views.",
+      body: "Built a share-safe dashboard over normalized work record DTOs with transcript, command, artifact, PR, and status views.",
       tags: ["dashboard", "react"],
       kind: "task",
       workspace: "workspace: ctx",
@@ -46,13 +47,23 @@ export const sampleDashboardData: DashboardData = {
     },
     {
       id: "rec-provider",
-      title: "Import provider fixture sessions",
-      body: "Provider fixture import normalized Codex, Claude, and Pi events with safe previews.",
-      tags: ["provider-import"],
+      title: "Review provider import coverage",
+      body: "Codex history import is shown as supported-import while Claude Code and Pi remain fixture-only with safe previews.",
+      tags: ["provider-import", "fixture-only"],
       kind: "task",
       workspace: "workspace: ctx",
       created_at: "2026-06-23T11:15:00Z",
       updated_at: "2026-06-23T11:45:00Z"
+    },
+    {
+      id: "rec-provider-detection",
+      title: "Classify unsupported provider detection",
+      body: "OpenCode is displayed as detected-unsupported until a stable local transcript or hook path is proven.",
+      tags: ["provider-import", "classification"],
+      kind: "provider-classification",
+      workspace: "workspace: ctx",
+      created_at: "2026-06-23T10:45:00Z",
+      updated_at: "2026-06-23T11:05:00Z"
     },
     {
       id: "rec-release",
@@ -86,13 +97,31 @@ export const sampleDashboardData: DashboardData = {
       output_preview: "desktop, mobile, light, dark, populated, failure screenshots captured"
     },
     {
+      id: "cmd-provider-import",
+      record_id: "rec-provider",
+      command: "ctx capture import-local-providers --json",
+      exit_code: 0,
+      duration_ms: 1840,
+      started_at: "2026-06-23T11:33:00Z",
+      output_preview: "codex: supported-import, claude-code: fixture-only, pi: fixture-only, opencode: detected-unsupported"
+    },
+    {
+      id: "cmd-report",
+      record_id: "rec-provider",
+      command: "ctx report --record rec-provider --dry-run",
+      exit_code: 0,
+      duration_ms: 1120,
+      started_at: "2026-06-23T11:39:00Z",
+      output_preview: "share-safe report rendered with raw transcripts withheld and local paths redacted"
+    },
+    {
       id: "cmd-release",
       record_id: "rec-release",
       command: "buildkite-agent pipeline upload",
       exit_code: 1,
       duration_ms: 800,
       started_at: "2026-06-23T10:32:00Z",
-      output_preview: "missing BUILDKITE_AGENT_TOKEN"
+      output_preview: "[REDACTED_ENV] missing for local CI preview"
     }
   ],
   sessions: [
@@ -100,25 +129,59 @@ export const sampleDashboardData: DashboardData = {
       id: "sess-1",
       work_record_id: "rec-dashboard",
       provider: "codex",
+      support_status: "supported-import",
+      capture_path: "import-local-providers",
+      privacy_note: "prompt preview redacted; raw history withheld",
       role_hint: "implementation worker",
       agent_type: "implementer",
-      status: "completed",
-      fidelity: "high",
+      status: "imported",
+      fidelity: "summary_only",
       is_primary: false,
       started_at: "2026-06-23T12:00:00Z",
       ended_at: "2026-06-23T12:38:00Z"
     },
     {
+      id: "sess-claude",
+      work_record_id: "rec-provider",
+      provider: "claude-code",
+      support_status: "fixture-only",
+      capture_path: "normalized provider fixture JSONL",
+      privacy_note: "fixture transcript redacted before dashboard export",
+      role_hint: "fixture replay",
+      agent_type: "assistant",
+      status: "fixture-only",
+      fidelity: "imported_fixture",
+      started_at: "2026-06-23T11:18:00Z",
+      ended_at: "2026-06-23T11:29:00Z"
+    },
+    {
       id: "sess-pi",
       work_record_id: "rec-provider",
       provider: "pi",
+      support_status: "fixture-only",
+      capture_path: "normalized provider fixture JSONL",
+      privacy_note: "conversation fixture uses safe preview fields only",
       role_hint: "fixture import",
       agent_type: "assistant",
-      status: "completed",
+      status: "fixture-only",
       fidelity: "imported",
       is_primary: false,
       started_at: "2026-06-23T11:15:00Z",
       ended_at: "2026-06-23T11:45:00Z"
+    },
+    {
+      id: "sess-opencode",
+      work_record_id: "rec-provider-detection",
+      provider: "opencode",
+      support_status: "detected-unsupported",
+      capture_path: "install/config detection only",
+      privacy_note: "no transcript importer enabled",
+      role_hint: "local provider detection",
+      agent_type: "provider-scan",
+      status: "blocked",
+      fidelity: "metadata_only",
+      started_at: "2026-06-23T10:45:00Z",
+      ended_at: "2026-06-23T11:05:00Z"
     }
   ],
   runs: [
@@ -131,6 +194,26 @@ export const sampleDashboardData: DashboardData = {
       command_preview: "npm run build",
       exit_code: 0,
       started_at: "2026-06-23T12:28:00Z"
+    },
+    {
+      id: "run-provider-import",
+      work_record_id: "rec-provider",
+      session_id: "sess-claude",
+      run_type: "import",
+      status: "succeeded",
+      command_preview: "ctx capture import-provider --provider claude-code --input tests/fixtures/provider/claude-code.jsonl --json",
+      exit_code: 0,
+      started_at: "2026-06-23T11:20:00Z"
+    },
+    {
+      id: "run-provider-scan",
+      work_record_id: "rec-provider-detection",
+      session_id: "sess-opencode",
+      run_type: "detection",
+      status: "blocked",
+      command_preview: "ctx capture import-local-providers --json",
+      exit_code: 0,
+      started_at: "2026-06-23T10:50:00Z"
     }
   ],
   events: [
@@ -179,6 +262,62 @@ export const sampleDashboardData: DashboardData = {
       preview: "built in 2.1s",
       redaction_state: "safe_preview",
       occurred_at: "2026-06-23T12:28:03Z"
+    },
+    {
+      id: "evt-claude-0",
+      seq: 0,
+      work_record_id: "rec-provider",
+      session_id: "sess-claude",
+      event_type: "message",
+      role: "user",
+      preview: "Summarize provider fixture support without exposing raw project paths.",
+      redaction_state: "redacted",
+      occurred_at: "2026-06-23T11:19:00Z"
+    },
+    {
+      id: "evt-claude-1",
+      seq: 1,
+      work_record_id: "rec-provider",
+      session_id: "sess-claude",
+      event_type: "message",
+      role: "assistant",
+      preview: "Fixture import produced prompts, assistant summaries, and tool-call previews; native Claude Code proof remains pending.",
+      redaction_state: "safe_preview",
+      occurred_at: "2026-06-23T11:21:00Z"
+    },
+    {
+      id: "evt-claude-2",
+      seq: 2,
+      work_record_id: "rec-provider",
+      session_id: "sess-claude",
+      run_id: "run-provider-import",
+      event_type: "tool_call",
+      role: "assistant",
+      preview: "read fixture transcript, normalize events, mark raw payload withheld",
+      redaction_state: "safe_preview",
+      occurred_at: "2026-06-23T11:22:00Z"
+    },
+    {
+      id: "evt-pi-0",
+      seq: 0,
+      work_record_id: "rec-provider",
+      session_id: "sess-pi",
+      event_type: "message",
+      role: "user",
+      preview: "Import the Pi fixture and keep the support claim fixture-only.",
+      redaction_state: "redacted",
+      occurred_at: "2026-06-23T11:31:00Z"
+    },
+    {
+      id: "evt-pi-1",
+      seq: 1,
+      work_record_id: "rec-provider",
+      session_id: "sess-pi",
+      event_type: "tool_output",
+      role: "tool",
+      preview: "2 messages normalized; no native history path claimed",
+      redaction_state: "safe_preview",
+      occurred_at: "2026-06-23T11:32:00Z"
     }
   ],
   vcs_workspaces: [
@@ -190,7 +329,7 @@ export const sampleDashboardData: DashboardData = {
       host: "github",
       owner: "ctxrs",
       name: "ctx",
-      monorepo_subpath: "apps/dashboard"
+      monorepo_subpath: "apps/work-recorder-dashboard"
     }
   ],
   vcs_changes: [
@@ -228,6 +367,22 @@ export const sampleDashboardData: DashboardData = {
       media_type: "application/jsonl",
       redaction_state: "raw",
       preview: "raw artifact content withheld"
+    },
+    {
+      id: "artifact-provider-report",
+      kind: "provider-report",
+      byte_size: 6812,
+      media_type: "application/json",
+      redaction_state: "safe_preview",
+      preview: "support_status fields exported for codex, claude-code, pi, and opencode"
+    },
+    {
+      id: "artifact-pr-comment",
+      kind: "pr-comment",
+      byte_size: 3920,
+      media_type: "text/markdown",
+      redaction_state: "redacted",
+      preview: "PR evidence preview: provider fixture claims remain clearly labeled"
     }
   ],
   evidence_metadata: [
@@ -237,6 +392,21 @@ export const sampleDashboardData: DashboardData = {
       kind: "test",
       status: "passed",
       freshness: "fresh"
+    },
+    {
+      id: "evidence-provider-import",
+      work_record_id: "rec-provider",
+      kind: "provider-import",
+      status: "passed",
+      freshness: "fresh"
+    },
+    {
+      id: "evidence-provider-claim",
+      work_record_id: "rec-provider-detection",
+      kind: "provider-claim",
+      status: "blocked",
+      freshness: "fresh",
+      stale_reason: "OpenCode detection has no supported import or wrapper proof yet"
     },
     {
       id: "evidence-meta-2",
@@ -251,9 +421,17 @@ export const sampleDashboardData: DashboardData = {
     {
       id: "file-1",
       work_record_id: "rec-dashboard",
-      path: "apps/dashboard/src/App.tsx",
+      path: "apps/work-recorder-dashboard/src/main.tsx",
       change_kind: "modified",
       line_count_delta: 420,
+      confidence: "explicit"
+    },
+    {
+      id: "file-provider-1",
+      work_record_id: "rec-provider",
+      path: "apps/work-recorder-dashboard/src/data.ts",
+      change_kind: "modified",
+      line_count_delta: 180,
       confidence: "explicit"
     }
   ],
@@ -264,6 +442,22 @@ export const sampleDashboardData: DashboardData = {
       kind: "agent",
       model_or_source: "codex",
       text: "Dashboard export is React/Vite and uses share-safe normalized DTOs."
+    },
+    {
+      id: "summary-provider-1",
+      work_record_id: "rec-provider",
+      session_id: "sess-claude",
+      kind: "provider_fixture",
+      model_or_source: "claude-code",
+      text: "Claude Code fixture data proves dashboard rendering only; native history and hooks are not claimed."
+    },
+    {
+      id: "summary-provider-2",
+      work_record_id: "rec-provider-detection",
+      session_id: "sess-opencode",
+      kind: "provider_blocker",
+      model_or_source: "opencode",
+      text: "Detected local provider surface, but no stable import or passive capture path is shipped."
     }
   ],
   status: {

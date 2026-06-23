@@ -271,6 +271,15 @@ capture_output() {
   "$@" > "${output}"
 }
 
+dashboard_playwright_available() {
+  command -v node >/dev/null 2>&1 || return 1
+  node - "${repo_root}/apps/work-recorder-dashboard/package.json" <<'NODE' >/dev/null 2>&1
+const { createRequire } = require('module');
+const requireFromDashboard = createRequire(process.argv[2]);
+requireFromDashboard('playwright');
+NODE
+}
+
 run_provider_fixtures() {
   local fixture count line
 
@@ -333,7 +342,8 @@ run_rich_search_context() {
 }
 
 run_dashboard_report_artifact_review() {
-  local bin data_root record_json record_id report_json dashboard_index dogfood_dir fake_browser fake_firefox
+  local bin data_root record_json record_id report_json dashboard_index dogfood_dir sanitizer_dir fake_browser fake_firefox
+  local dogfood_args=()
 
   bin="$(ctx_debug_bin)"
   data_root="$(mktemp -d "${TMPDIR}/ctx-dashboard-report.XXXXXX")"
@@ -354,7 +364,39 @@ run_dashboard_report_artifact_review() {
   test -s "${dashboard_index}"
   file_contains "${report_json}" '"record_count"'
   file_contains "${dashboard_index}" "dashboard report artifact review"
-  dogfood_dir="${CTX_ARTIFACT_DIR}/dogfood-sanitizer"
+
+  dogfood_dir="${CTX_ARTIFACT_DIR}/dogfood"
+  rm -rf "${dogfood_dir}" "${CTX_ARTIFACT_DIR}/dogfood-data"
+  dogfood_args=(
+    --seed-live
+    --output "${dogfood_dir}"
+    --data-root "${CTX_ARTIFACT_DIR}/dogfood-data"
+  )
+  if ! dashboard_playwright_available; then
+    dogfood_args+=(
+      --accept-visual-blocker
+      "Playwright dependencies were unavailable in this local check environment; the Buildkite dashboard lane installs npm dependencies and must produce screenshots."
+    )
+  fi
+  ctx_run_timed "dashboard-dogfood-visual-review" env \
+    CTX_BIN="${bin}" \
+    TMPDIR="${TMPDIR}" \
+    scripts/dashboard-review-dogfood.sh \
+      "${dogfood_args[@]}"
+  cp "${dogfood_dir}/visual-evidence.json" "${CTX_ARTIFACT_DIR}/visual-evidence.json"
+  cp "${dogfood_dir}/screenshot-status.txt" "${CTX_ARTIFACT_DIR}/screenshot-status.txt"
+  file_contains "${dogfood_dir}/manifest.json" '"visual_evidence": "visual-evidence.json"'
+  if file_contains "${CTX_ARTIFACT_DIR}/visual-evidence.json" '"visual_status": "captured"'; then
+    test -s "${dogfood_dir}/screenshots/desktop-providers.png"
+    test -s "${dogfood_dir}/screenshots/mobile-providers.png"
+    test -s "${dogfood_dir}/screenshots/desktop-evidence.png"
+    test -s "${dogfood_dir}/screenshots/mobile-evidence.png"
+  else
+    file_contains "${CTX_ARTIFACT_DIR}/visual-evidence.json" '"visual_status": "accepted_blocker"'
+    file_contains "${CTX_ARTIFACT_DIR}/visual-evidence.json" '"accepted_visual_blocker":'
+  fi
+
+  sanitizer_dir="${CTX_ARTIFACT_DIR}/dogfood-sanitizer"
   fake_browser="${TMPDIR}/ctx-fake-browser"
   fake_firefox="${TMPDIR}/ctx-fake-firefox"
   cat >"${fake_browser}" <<EOF
@@ -367,7 +409,7 @@ EOF
 exit 0
 EOF
   chmod +x "${fake_browser}" "${fake_firefox}"
-  rm -rf "${dogfood_dir}" "${CTX_ARTIFACT_DIR}/dogfood-data"
+  rm -rf "${sanitizer_dir}" "${CTX_ARTIFACT_DIR}/dogfood-sanitizer-data"
   ctx_run_timed "dashboard-dogfood-sanitizer" env \
     CTX_BIN="${bin}" \
     CTX_DASHBOARD_REVIEW_BROWSER="${fake_browser}" \
@@ -375,29 +417,30 @@ EOF
     TMPDIR="${TMPDIR}" \
     scripts/dashboard-review-dogfood.sh \
       --seed-live \
-      --output "${dogfood_dir}" \
-      --data-root "${CTX_ARTIFACT_DIR}/dogfood-data"
-  file_contains "${dogfood_dir}/manifest.json" '"raw_archive_exported": false'
-  file_contains "${dogfood_dir}/manifest.json" '"artifact_dir": "."'
-  file_contains "${dogfood_dir}/manifest.json" '"data_root": "[LOCAL_DATA_ROOT]"'
-  file_contains "${dogfood_dir}/manifest.json" '"dashboard": "dashboard/index.html"'
-  if grep -R -F -q -- "${repo_root}" "${dogfood_dir}"; then
+      --output "${sanitizer_dir}" \
+      --data-root "${CTX_ARTIFACT_DIR}/dogfood-sanitizer-data" \
+      --accept-visual-blocker "Sanitizer fixture intentionally uses fake browsers to exercise redacted blocker output."
+  file_contains "${sanitizer_dir}/manifest.json" '"raw_archive_exported": false'
+  file_contains "${sanitizer_dir}/manifest.json" '"artifact_dir": "."'
+  file_contains "${sanitizer_dir}/manifest.json" '"data_root": "[LOCAL_DATA_ROOT]"'
+  file_contains "${sanitizer_dir}/manifest.json" '"dashboard": "dashboard/index.html"'
+  if grep -R -F -q -- "${repo_root}" "${sanitizer_dir}"; then
     printf 'dogfood sanitizer leaked repo root into default artifacts\n' >&2
     return 1
   fi
-  if [[ -n "${HOME:-}" ]] && grep -R -F -q -- "${HOME}" "${dogfood_dir}"; then
+  if [[ -n "${HOME:-}" ]] && grep -R -F -q -- "${HOME}" "${sanitizer_dir}"; then
     printf 'dogfood sanitizer leaked home path into default artifacts\n' >&2
     return 1
   fi
-  if grep -R -F -q -- "${CTX_ARTIFACT_DIR}/dogfood-data" "${dogfood_dir}"; then
+  if grep -R -F -q -- "${CTX_ARTIFACT_DIR}/dogfood-sanitizer-data" "${sanitizer_dir}"; then
     printf 'dogfood sanitizer leaked raw data-root path into default artifacts\n' >&2
     return 1
   fi
-  if grep -R -E -q 'ghp_1234567890abcdef|hunter2|fake_secret_value|chrome-profile|firefox-tmp' "${dogfood_dir}"; then
+  if grep -R -E -q 'ghp_1234567890abcdef|hunter2|fake_secret_value|chrome-profile|firefox-tmp' "${sanitizer_dir}"; then
     printf 'dogfood sanitizer leaked secret marker or browser scratch path\n' >&2
     return 1
   fi
-  write_mode_summary "dashboard-report-artifact-review" "passed" "report JSON and dashboard HTML artifacts were generated for review"
+  write_mode_summary "dashboard-report-artifact-review" "passed" "report JSON, dashboard HTML, and visual evidence manifest were generated for review"
 }
 
 run_pr_publish_dry_run() {
@@ -753,6 +796,9 @@ mutate_completion_certificate_negative_fixture() {
     missing-product-decision-summary)
       rm -f "${root}/artifacts/buildkite/finished-product/product-decisions/product-decisions.json"
       ;;
+    missing-dashboard-visual-evidence)
+      rm -f "${root}/artifacts/buildkite/finished-product/dashboard-report-artifact-review/visual-evidence.json"
+      ;;
     stale-release-commit)
       sed -i.bak 's/"git_commit": "[^"]*"/"git_commit": "0000000000000000000000000000000000000000"/' "${manifest}"
       rm -f "${manifest}.bak"
@@ -811,6 +857,7 @@ bad-artifact-count|manifest must record exactly one release artifact
 failing-finished-product-summary|provider-fixtures summary records passing status
 stale-release-commit|git_commit must match current HEAD
 missing-product-decision-summary|required evidence is missing or empty: artifacts/buildkite/finished-product/product-decisions/product-decisions.json
+missing-dashboard-visual-evidence|required evidence is missing or empty: artifacts/buildkite/finished-product/dashboard-report-artifact-review/visual-evidence.json
 EOF
 
   run_completion_certificate_self_test_fixture_rejection_case "${source_root}"

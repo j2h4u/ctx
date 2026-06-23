@@ -210,7 +210,9 @@ steps:
   - label: ":bar_chart: dashboard/report artifact review"
     key: "dashboard-report-artifact-review"
     depends_on: "rich-search-context"
-    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/finished-product/dashboard-report-artifact-review ./scripts/check.sh dashboard-report-artifact-review"
+    command: |
+      npm --prefix apps/work-recorder-dashboard ci
+      CTX_ARTIFACT_DIR=artifacts/buildkite/finished-product/dashboard-report-artifact-review ./scripts/check.sh dashboard-report-artifact-review
     agents:
       queue: "release-linux-managed"
       ctx-runner-class: "release-linux-x64-stage"

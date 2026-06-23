@@ -15,7 +15,11 @@ Options:
                          Default: target/ctx-artifacts/dashboard-review
   --data-root DIR        CTX_DATA_ROOT for the dogfood run.
                          Default: target/tmp/dashboard-review-data
-  --skip-screenshots     Do not attempt browser screenshots.
+  --skip-screenshots     Do not attempt browser screenshots. Requires
+                         --accept-visual-blocker to succeed.
+  --accept-visual-blocker TEXT
+                         Accept an explicit visual review blocker instead of
+                         requiring screenshot artifacts.
   -h, --help             Show this help.
 USAGE
 }
@@ -26,6 +30,7 @@ artifact_dir="${repo_root}/target/ctx-artifacts/dashboard-review"
 data_root="${repo_root}/target/tmp/dashboard-review-data"
 seed_mode="import"
 skip_screenshots=0
+accepted_visual_blocker=""
 
 while (($#)); do
   case "$1" in
@@ -60,6 +65,14 @@ while (($#)); do
     --skip-screenshots)
       skip_screenshots=1
       shift
+      ;;
+    --accept-visual-blocker)
+      if [[ $# -lt 2 ]]; then
+        printf 'blocker: --accept-visual-blocker requires a reason\n' >&2
+        exit 2
+      fi
+      accepted_visual_blocker="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -238,129 +251,166 @@ capture_screenshots() {
   local screenshot_dir="$2"
   local screenshot_status="$3"
   local module_name=""
+  local require_root="${repo_root}/apps/work-recorder-dashboard/package.json"
   local browser_path="${CTX_DASHBOARD_REVIEW_BROWSER:-}"
-  local firefox_path="${CTX_DASHBOARD_REVIEW_FIREFOX:-}"
-  local scratch_parent="${TMPDIR:-${repo_root}/target/tmp}"
-  local browser_scratch
+  local expected
 
   mkdir -p "${screenshot_dir}"
-  rm -rf \
-    "${screenshot_dir}"/chrome-profile-* \
-    "${screenshot_dir}"/chrome-cache-* \
-    "${screenshot_dir}/firefox-tmp"
-  mkdir -p "${scratch_parent}"
-  browser_scratch="$(mktemp -d "${scratch_parent%/}/ctx-dashboard-screenshot.XXXXXX")"
-  trap 'rm -rf "${browser_scratch:-}"' RETURN
+  rm -f "${screenshot_dir}"/*.png
 
   if ! command -v node >/dev/null 2>&1; then
-    printf 'skip: node is not available; dashboard screenshots were not captured\n' | tee "${screenshot_status}"
-    return 0
+    printf 'blocker: node is not available; dashboard screenshots were not captured\n' | tee "${screenshot_status}"
+    return 1
   fi
 
-  if [[ -z "${browser_path}" ]]; then
-    for candidate in chromium chromium-browser google-chrome google-chrome-stable chrome; do
-      if command -v "${candidate}" >/dev/null 2>&1; then
-        browser_path="$(command -v "${candidate}")"
-        break
-      fi
-    done
-  fi
-  if [[ -z "${firefox_path}" ]] && command -v firefox >/dev/null 2>&1; then
-    firefox_path="$(command -v firefox)"
-  fi
-
-  if node -e "require('playwright')" >/dev/null 2>&1; then
+  if node - "${require_root}" playwright <<'NODE' >/dev/null 2>&1; then
+const { createRequire } = require('module');
+createRequire(process.argv[2])('playwright');
+NODE
     module_name="playwright"
-  elif node -e "require('playwright-core')" >/dev/null 2>&1; then
+  elif node - "${require_root}" playwright-core <<'NODE' >/dev/null 2>&1; then
+const { createRequire } = require('module');
+createRequire(process.argv[2])('playwright-core');
+NODE
     module_name="playwright-core"
-  elif [[ -n "${browser_path}" ]]; then
-    local dashboard_url
-    dashboard_url="$(node -e 'const { pathToFileURL } = require("url"); console.log(pathToFileURL(process.argv[1]).href)' "${dashboard_html}")"
-    if "${browser_path}" \
-      --headless=new \
-      --disable-gpu \
-      --disable-software-rasterizer \
-      --disable-dev-shm-usage \
-      --no-sandbox \
-      --user-data-dir="${browser_scratch}/chrome-profile-desktop" \
-      --disk-cache-dir="${browser_scratch}/chrome-cache-desktop" \
-      --window-size=1440,1100 \
-      --screenshot="${screenshot_dir}/desktop.png" \
-      "${dashboard_url}" >"${screenshot_status}" 2>&1 && \
-      "${browser_path}" \
-      --headless=new \
-      --disable-gpu \
-      --disable-software-rasterizer \
-      --disable-dev-shm-usage \
-      --no-sandbox \
-      --user-data-dir="${browser_scratch}/chrome-profile-mobile" \
-      --disk-cache-dir="${browser_scratch}/chrome-cache-mobile" \
-      --window-size=390,1200 \
-      --screenshot="${screenshot_dir}/mobile.png" \
-      "${dashboard_url}" >>"${screenshot_status}" 2>&1; then
-      if [[ -s "${screenshot_dir}/desktop.png" && -s "${screenshot_dir}/mobile.png" ]]; then
-        printf 'captured dashboard screenshots with %s\n' "${browser_path}" >>"${screenshot_status}"
-        return 0
-      fi
-      printf 'Chrome screenshot commands completed without creating expected PNG files\n' >>"${screenshot_status}"
-    fi
-    if [[ -n "${firefox_path}" ]]; then
-      printf 'Chrome screenshot failed; trying Firefox fallback: %s\n' "${firefox_path}" >>"${screenshot_status}"
-      mkdir -p "${browser_scratch}/firefox-tmp"
-      TMPDIR="${browser_scratch}/firefox-tmp" "${firefox_path}" --headless --window-size 1440,1100 --screenshot "${screenshot_dir}/desktop.png" "${dashboard_url}" >>"${screenshot_status}" 2>&1
-      TMPDIR="${browser_scratch}/firefox-tmp" "${firefox_path}" --headless --window-size 390,1200 --screenshot "${screenshot_dir}/mobile.png" "${dashboard_url}" >>"${screenshot_status}" 2>&1
-      if [[ -s "${screenshot_dir}/desktop.png" && -s "${screenshot_dir}/mobile.png" ]]; then
-        printf 'captured dashboard screenshots with %s\n' "${firefox_path}" >>"${screenshot_status}"
-        return 0
-      fi
-      printf 'Firefox screenshot commands completed without creating expected PNG files\n' >>"${screenshot_status}"
-      printf 'blocker: dashboard screenshots were not captured because installed browser wrappers did not produce PNG output\n' >>"${screenshot_status}"
-      return 0
-    fi
-    printf 'blocker: dashboard screenshots were not captured because Chrome failed and Firefox was unavailable\n' >>"${screenshot_status}"
-    return 0
   else
-    printf 'skip: Playwright and Chrome-compatible browser are unavailable; dashboard screenshots were not captured\n' | tee "${screenshot_status}"
-    return 0
+    printf 'blocker: Playwright is unavailable under apps/work-recorder-dashboard; dashboard screenshots were not captured\n' | tee "${screenshot_status}"
+    return 1
   fi
 
   PLAYWRIGHT_MODULE="${module_name}" \
+  PLAYWRIGHT_REQUIRE_ROOT="${require_root}" \
   DASHBOARD_HTML="${dashboard_html}" \
   SCREENSHOT_DIR="${screenshot_dir}" \
   BROWSER_PATH="${browser_path}" \
   node <<'NODE' >"${screenshot_status}" 2>&1
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
-const { pathToFileURL } = require('url');
+const { createRequire } = require('module');
 const moduleName = process.env.PLAYWRIGHT_MODULE;
-const { chromium } = require(moduleName);
+const requireFromDashboard = createRequire(process.env.PLAYWRIGHT_REQUIRE_ROOT);
+const { chromium } = requireFromDashboard(moduleName);
 const launchOptions = {};
 if (process.env.BROWSER_PATH) {
   launchOptions.executablePath = process.env.BROWSER_PATH;
 }
-(async () => {
-  const browser = await chromium.launch(launchOptions);
-  const views = [
-    { name: 'desktop', width: 1440, height: 1100 },
-    { name: 'mobile', width: 390, height: 1200 },
-  ];
-  for (const view of views) {
-    const page = await browser.newPage({ viewport: { width: view.width, height: view.height } });
-    await page.goto(pathToFileURL(process.env.DASHBOARD_HTML).href, { waitUntil: 'load' });
-    await page.screenshot({
-      path: path.join(process.env.SCREENSHOT_DIR, `${view.name}.png`),
-      fullPage: true,
+const views = [
+  { viewport: 'desktop', width: 1440, height: 1100 },
+  { viewport: 'mobile', width: 390, height: 1200 },
+];
+const states = [
+  { name: 'overview', tab: null, requiredText: 'Work Records' },
+  { name: 'providers', tab: 'Providers', requiredText: 'Provider Coverage' },
+  { name: 'evidence', tab: 'PR/Evidence', requiredText: 'Evidence Previews' },
+];
+const dashboardRoot = path.resolve(path.dirname(process.env.DASHBOARD_HTML));
+const mimeTypes = new Map([
+  ['.html', 'text/html; charset=utf-8'],
+  ['.js', 'text/javascript; charset=utf-8'],
+  ['.css', 'text/css; charset=utf-8'],
+  ['.json', 'application/json; charset=utf-8'],
+  ['.png', 'image/png'],
+]);
+
+function startStaticServer() {
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url, 'http://127.0.0.1');
+    const relativePath = decodeURIComponent(requestUrl.pathname === '/' ? '/index.html' : requestUrl.pathname);
+    const candidate = path.resolve(dashboardRoot, `.${relativePath}`);
+    if (!candidate.startsWith(dashboardRoot + path.sep) && candidate !== path.join(dashboardRoot, 'index.html')) {
+      response.writeHead(403);
+      response.end('forbidden');
+      return;
+    }
+    fs.readFile(candidate, (error, content) => {
+      if (error) {
+        response.writeHead(404);
+        response.end('not found');
+        return;
+      }
+      response.writeHead(200, { 'content-type': mimeTypes.get(path.extname(candidate)) || 'application/octet-stream' });
+      response.end(content);
     });
-    await page.close();
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      resolve({ server, url: `http://127.0.0.1:${address.port}/index.html` });
+    });
+  });
+}
+(async () => {
+  const { server, url } = await startStaticServer();
+  const browser = await chromium.launch(launchOptions);
+  try {
+    for (const view of views) {
+      const page = await browser.newPage({ viewport: { width: view.width, height: view.height } });
+      await page.goto(url, { waitUntil: 'networkidle' });
+      for (const state of states) {
+        if (state.tab) {
+          await page.getByRole('tab', { name: state.tab }).click();
+        }
+        await page.getByText(state.requiredText).first().waitFor({ state: 'visible', timeout: 5000 });
+        if (state.name === 'providers') {
+          await page.getByText(/codex|claude|pi|opencode/i).first().waitFor({ state: 'visible', timeout: 5000 });
+        }
+        if (state.name === 'evidence') {
+          await page.getByText(/Exit 1|failed|failure|expected failure/i).first().waitFor({ state: 'visible', timeout: 5000 });
+        }
+        await page.screenshot({
+          path: path.join(process.env.SCREENSHOT_DIR, `${view.viewport}-${state.name}.png`),
+          fullPage: true,
+        });
+      }
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+    server.close();
   }
-  await browser.close();
-  console.log(`captured ${views.length} dashboard screenshots`);
+  console.log(`captured ${views.length * states.length} dashboard screenshots`);
 })().catch((error) => {
-  console.log(`skip: Playwright/Chromium launch failed; dashboard screenshots were not captured: ${error.message}`);
-  process.exit(0);
+  console.log(`blocker: Playwright/Chromium launch failed; dashboard screenshots were not captured: ${error.message}`);
+  process.exit(1);
 });
 NODE
   cat "${screenshot_status}"
+  for expected in \
+    desktop-overview.png \
+    desktop-providers.png \
+    desktop-evidence.png \
+    mobile-overview.png \
+    mobile-providers.png \
+    mobile-evidence.png; do
+    if [[ ! -s "${screenshot_dir}/${expected}" ]]; then
+      printf 'blocker: expected dashboard screenshot missing or empty: %s\n' "${expected}" | tee -a "${screenshot_status}"
+      return 1
+    fi
+  done
+}
+
+write_visual_evidence_manifest() {
+  local path="$1"
+  local visual_status="$2"
+  local blocker="$3"
+
+  {
+    printf '{\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "kind": "dashboard_visual_evidence",\n'
+    printf '  "visual_status": "%s",\n' "$(json_escape "${visual_status}")"
+    printf '  "accepted_visual_blocker": "%s",\n' "$(json_escape "${blocker}")"
+    printf '  "screenshot_count": %s,\n' "$(find "${artifact_dir}/screenshots" -maxdepth 1 -type f -name '*.png' 2>/dev/null | wc -l | tr -d '[:space:]')"
+    printf '  "desktop_overview": "screenshots/desktop-overview.png",\n'
+    printf '  "desktop_providers": "screenshots/desktop-providers.png",\n'
+    printf '  "desktop_evidence": "screenshots/desktop-evidence.png",\n'
+    printf '  "mobile_overview": "screenshots/mobile-overview.png",\n'
+    printf '  "mobile_providers": "screenshots/mobile-providers.png",\n'
+    printf '  "mobile_evidence": "screenshots/mobile-evidence.png",\n'
+    printf '  "screenshot_status": "screenshot-status.txt"\n'
+    printf '}\n'
+  } >"${path}"
 }
 
 main() {
@@ -391,12 +441,22 @@ main() {
   run_ctx validate >"${artifact_dir}/validate.txt"
 
   local screenshot_status="${artifact_dir}/screenshot-status.txt"
+  local visual_status="captured"
   if [[ "${skip_screenshots}" -eq 1 ]]; then
-    printf 'skip: screenshot capture disabled by --skip-screenshots\n' | tee "${screenshot_status}"
-  else
-    capture_screenshots "${artifact_dir}/dashboard/index.html" "${artifact_dir}/screenshots" "${screenshot_status}"
+    printf 'blocker: screenshot capture disabled by --skip-screenshots\n' | tee "${screenshot_status}"
+    visual_status="accepted_blocker"
+  elif ! capture_screenshots "${artifact_dir}/dashboard/index.html" "${artifact_dir}/screenshots" "${screenshot_status}"; then
+    visual_status="accepted_blocker"
+  fi
+  if [[ "${visual_status}" == "accepted_blocker" ]]; then
+    if [[ -z "${accepted_visual_blocker}" ]]; then
+      printf 'blocker: dashboard visual screenshots are required; rerun with Playwright available or pass --accept-visual-blocker with a concrete reason\n' >&2
+      exit 1
+    fi
+    printf 'accepted visual blocker: %s\n' "${accepted_visual_blocker}" >>"${screenshot_status}"
   fi
   sanitize_share_artifact "${screenshot_status}"
+  write_visual_evidence_manifest "${artifact_dir}/visual-evidence.json" "${visual_status}" "${accepted_visual_blocker}"
 
   {
     printf '{\n'
@@ -413,6 +473,9 @@ main() {
     printf '  "search": "search.json",\n'
     printf '  "raw_archive_exported": false,\n'
     printf '  "raw_archive_note": "omitted from default dogfood artifacts because ctx export is portable/private and may contain raw command or artifact content",\n'
+    printf '  "visual_evidence": "visual-evidence.json",\n'
+    printf '  "visual_status": "%s",\n' "$(json_escape "${visual_status}")"
+    printf '  "accepted_visual_blocker": "%s",\n' "$(json_escape "${accepted_visual_blocker}")"
     printf '  "screenshot_status": "%s"\n' "$(json_escape "$(tr '\n' ' ' <"${screenshot_status}")")"
     printf '}\n'
   } >"${artifact_dir}/manifest.json"

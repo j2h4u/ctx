@@ -60,7 +60,7 @@ function App() {
     if (!activeTrigger || !tabList) return;
 
     const scrollActiveTab = () => {
-      activeTrigger.scrollIntoView({ block: "nearest", inline: "center", behavior: "instant" });
+      activeTrigger.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
     };
 
     scrollActiveTab();
@@ -74,7 +74,7 @@ function App() {
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
               <Monitor className="size-4" aria-hidden />
-              <span>Local Work Recorder</span>
+              <span>Local ctx dashboard</span>
               <span className="rounded-sm border border-border px-1.5 py-0.5 text-xs">{data.status.javascript_app}</span>
             </div>
             <h1 className="mt-1 text-2xl font-semibold tracking-normal sm:text-3xl">Work Records</h1>
@@ -175,7 +175,7 @@ function Overview({ data }: { data: DashboardData }) {
         <SectionHeader icon={<FileText className="size-4" />} title="Recent Records" />
         <div className="record-list">
           {data.records.length === 0 ? (
-            <EmptyState text="No Work Records found in the local store." />
+            <EmptyState text="No work records found in the local store." />
           ) : (
             data.records.map((record) => <RecordRow key={record.id} record={record} />)
           )}
@@ -337,8 +337,13 @@ function ProviderSummaryPanel({ data }: { data: DashboardData }) {
                 <span className="badge">{provider.events} event{provider.events === 1 ? "" : "s"}</span>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
+                {provider.supportStatuses.map((status) => <span className={clsx("badge", supportToneClass(status))} key={status}>{status}</span>)}
                 {provider.fidelities.map((fidelity) => <span className="badge" key={fidelity}>{fidelity}</span>)}
                 {provider.statuses.map((status) => <span className="badge" key={status}>{status}</span>)}
+              </div>
+              <div className="mt-3 grid gap-1 text-xs text-muted-foreground">
+                <span>{provider.runs} run{provider.runs === 1 ? "" : "s"}</span>
+                {provider.capturePaths.slice(0, 2).map((path) => <span key={path}>{path}</span>)}
               </div>
             </article>
           ))}
@@ -379,6 +384,7 @@ function SessionPickerPanel({
                 <div className="flex min-w-0 flex-1 flex-col gap-1 text-left">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="badge">{valueText(session.provider, "provider")}</span>
+                    {session.support_status ? <span className={clsx("badge", supportToneClass(session.support_status))}>{valueText(session.support_status)}</span> : null}
                     <span className="badge">{valueText(session.status, "status")}</span>
                     <span className="badge">{valueText(session.fidelity, "fidelity")}</span>
                   </div>
@@ -437,10 +443,13 @@ function SessionDetailPanel({
         <div className="session-detail">
           <div className="detail-grid">
             <KeyValue label="Provider" value={valueText(session.provider, "provider")} />
+            <KeyValue label="Support status" value={valueText(session.support_status, "unclassified")} />
+            <KeyValue label="Capture path" value={valueText(session.capture_path, "not provided")} />
             <KeyValue label="Status" value={valueText(session.status, "status")} />
             <KeyValue label="Fidelity" value={valueText(session.fidelity, "unknown")} />
             <KeyValue label="Role" value={valueText(session.role_hint ?? session.agent_type, "not provided")} />
             <KeyValue label="External session" value={valueText(session.external_session_id, "withheld or absent")} />
+            <KeyValue label="Privacy" value={valueText(session.privacy_note, "share-safe export")} />
             <KeyValue label="Started" value={valueText(session.started_at, "unknown")} />
           </div>
 
@@ -531,11 +540,35 @@ function EventList({ events, emptyText }: { events: DashboardEvent[]; emptyText:
             <span className="text-muted-foreground">#{valueText(event.seq, "0")}</span>
             <span className="badge">{valueText(event.redaction_state, "redacted")}</span>
           </div>
-          <p>{valueText(event.preview, "raw event payload withheld")}</p>
+          <p>{eventPreviewText(event)}</p>
         </article>
       ))}
     </div>
   );
+}
+
+function eventPreviewText(event: DashboardEvent): string {
+  const preview = valueText(event.preview, "raw event payload withheld");
+  const trimmed = preview.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return preview;
+
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const body = parsed.body;
+    if (typeof body === "string" && body.trim().length > 0) return body;
+    if (body && typeof body === "object") {
+      const bodyText = (body as Record<string, unknown>).text;
+      if (typeof bodyText === "string" && bodyText.trim().length > 0) return bodyText;
+    }
+
+    const provider = typeof parsed.provider === "string" ? parsed.provider : null;
+    const session = typeof parsed.provider_session_id === "string" ? parsed.provider_session_id : null;
+    const cursor = typeof parsed.cursor === "string" ? parsed.cursor : null;
+    const structuredPreview = [provider, session, cursor].filter(Boolean).join(" · ");
+    return structuredPreview || "structured provider event preview withheld";
+  } catch {
+    return preview;
+  }
 }
 
 function RunList({ runs }: { runs: DashboardRun[] }) {
@@ -643,11 +676,24 @@ function EvidenceView({ data }: { data: DashboardData }) {
 function SearchView({ data, query, setQuery }: { data: DashboardData; query: string; setQuery: (value: string) => void }) {
   const results = useMemo(() => {
     const term = query.trim().toLowerCase();
-    const haystack = [
+      const haystack = [
       ...data.records.map((record) => ({ type: "record", title: record.title, body: record.body, id: record.id })),
+      ...data.sessions.map((session) => ({
+        type: "provider",
+        title: valueText(session.provider, "provider"),
+        body: [
+          session.support_status,
+          session.capture_path,
+          session.privacy_note,
+          session.fidelity,
+          session.status
+        ].filter(Boolean).join(" "),
+        id: sessionId(session)
+      })),
       ...data.commands.map((command) => ({ type: "command", title: command.command, body: command.output_preview ?? "", id: command.id })),
       ...data.events.map((event) => ({ type: "event", title: String(event.event_type), body: String(event.preview ?? ""), id: String(event.id) })),
-      ...data.artifacts.map((artifact) => ({ type: "artifact", title: String(artifact.kind), body: String(artifact.preview ?? ""), id: String(artifact.id) }))
+      ...data.artifacts.map((artifact) => ({ type: "artifact", title: String(artifact.kind), body: String(artifact.preview ?? ""), id: String(artifact.id) })),
+      ...data.summaries.map((summary) => ({ type: "summary", title: String(summary.kind), body: String(summary.text ?? ""), id: String(summary.id) }))
     ];
     if (!term) return haystack.slice(0, 12);
     return haystack.filter((item) => `${item.title} ${item.body}`.toLowerCase().includes(term)).slice(0, 20);
@@ -867,6 +913,8 @@ function providerSummaries(data: DashboardData) {
     runs: number;
     fidelities: string[];
     statuses: string[];
+    supportStatuses: string[];
+    capturePaths: string[];
   }>();
 
   for (const session of data.sessions) {
@@ -877,7 +925,9 @@ function providerSummaries(data: DashboardData) {
       events: 0,
       runs: 0,
       fidelities: [],
-      statuses: []
+      statuses: [],
+      supportStatuses: [],
+      capturePaths: []
     };
     const id = sessionId(session);
     current.sessions += 1;
@@ -885,6 +935,8 @@ function providerSummaries(data: DashboardData) {
     current.runs += relatedBySession(data.runs, id).length;
     addUnique(current.fidelities, valueText(session.fidelity, "unknown"));
     addUnique(current.statuses, valueText(session.status, "unknown"));
+    addUnique(current.supportStatuses, valueText(session.support_status, "unclassified"));
+    if (session.capture_path) addUnique(current.capturePaths, valueText(session.capture_path));
     summaries.set(provider, current);
   }
 
@@ -914,9 +966,21 @@ function providerSparseText(data: DashboardData) {
     return "No work has been recorded in this export yet.";
   }
   if (data.records.length > 0 && data.sessions.length === 0) {
-    return "Work Records exist, but this capture path did not provide provider session metadata. Fixture-only or summary-only imports can still appear as records, commands, and summaries.";
+    return "Work records exist, but this capture path did not provide provider session metadata. Fixture-only or summary-only imports can still appear as records, commands, and summaries.";
   }
   return "Provider metadata is present but this section has no matching redacted events for the selected session.";
+}
+
+function supportToneClass(status: unknown) {
+  const normalized = String(status ?? "").toLowerCase();
+  if (normalized === "supported-import" || normalized === "supported-live" || normalized === "supported-wrapper") {
+    return "badge-ok";
+  }
+  if (normalized === "fixture-only" || normalized === "detected-unsupported") {
+    return "badge-warn";
+  }
+  if (normalized === "blocked") return "badge-danger";
+  return undefined;
 }
 
 function evidenceTone(status: unknown): "ok" | "warn" | "danger" {

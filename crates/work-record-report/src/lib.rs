@@ -223,18 +223,18 @@ pub fn render_dashboard_html_report(report: &DashboardReport<'_>) -> String {
 pub fn dashboard_static_assets() -> Vec<(&'static str, &'static [u8])> {
     vec![
         (
-            "assets/dashboard-DnBIV6pA.js",
+            "assets/dashboard-Hm0CBhTe.js",
             include_bytes!(
-                "../../../apps/work-recorder-dashboard/dist/assets/dashboard-DnBIV6pA.js"
+                "../../../apps/work-recorder-dashboard/dist/assets/dashboard-Hm0CBhTe.js"
             ),
         ),
         (
-            "assets/styles-CVYnGeXJ.js",
-            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/styles-CVYnGeXJ.js"),
+            "assets/styles-D-8XnUVV.js",
+            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/styles-D-8XnUVV.js"),
         ),
         (
-            "assets/styles-Dr8iICqu.css",
-            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/styles-Dr8iICqu.css"),
+            "assets/styles-saCrjsu1.css",
+            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/styles-saCrjsu1.css"),
         ),
     ]
 }

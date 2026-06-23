@@ -145,6 +145,11 @@ pre {
   padding: 12px;
 }
 
+.row-card p,
+.transcript-event p {
+  overflow-wrap: anywhere;
+}
+
 .provider-grid,
 .session-list,
 .event-list {
@@ -586,5 +591,18 @@ pre {
   .command-card-list {
     display: grid;
     gap: 10px;
+  }
+
+  .key-value {
+    display: grid;
+    gap: 4px;
+  }
+
+  .key-value strong {
+    text-align: left;
+  }
+
+  .transcript-event {
+    min-width: 0;
   }
 }
