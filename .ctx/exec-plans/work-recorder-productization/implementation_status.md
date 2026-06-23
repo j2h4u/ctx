@@ -1,6 +1,6 @@
 # Work Recorder Productization Implementation Status
 
-Updated: 2026-06-22T19:29:23-05:00
+Updated: 2026-06-22T19:32:06-05:00
 
 Task: `feb64c1c-e58c-40f8-b1e9-1094dca0646e`
 
@@ -321,6 +321,9 @@ Integrated implementation work:
 - `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 BAZEL_JOBS=2 ./scripts/check.sh all && git diff --check`:
   PASS after search merge. Covered fmt, check, clippy, and tests; Bazel lane
   recorded `skipped` because neither `bazel` nor `bazelisk` is installed.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 ./scripts/release-dry-run.sh`:
+  PASS on integrated local product head after foundation, capture, VCS, and
+  search merges.
 
 ## Reviewer Status
 
