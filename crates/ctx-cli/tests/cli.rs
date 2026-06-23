@@ -672,7 +672,7 @@ fn root_status_reports_unreadable_path_shim_without_failing() {
 }
 
 #[test]
-fn root_setup_status_schema_and_validate_work() {
+fn setup_status_golden_output_is_idempotent_and_validate_work() {
     let temp = tempdir();
     ctx(&temp)
         .args(["setup", "--no-open", "--no-import", "--no-shell-update"])
@@ -689,7 +689,7 @@ fn root_setup_status_schema_and_validate_work() {
         ))
         .stdout(predicate::str::contains("✓ dashboard: skipped (--no-open)"))
         .stdout(predicate::str::contains("Next commands:"));
-    let default_shim_dir = temp.path().join("work-record").join("shims");
+    let default_shim_dir = temp.path().join("shims");
     assert!(default_shim_dir.join("git").exists());
     assert!(default_shim_dir.join("jj").exists());
     assert!(default_shim_dir.join("gh").exists());
@@ -776,7 +776,7 @@ fn setup_headless_skips_dashboard_without_no_open() {
 }
 
 #[test]
-fn dashboard_starts_reuses_and_respects_open_modes() {
+fn dashboard_interactive_golden_output_starts_reuses_and_respects_open_modes() {
     let temp = tempdir();
     ctx(&temp)
         .env("CTX_DASHBOARD_IDLE_SECONDS", "1")
@@ -913,7 +913,7 @@ fn setup_can_activate_passive_capture_in_shell_rc_and_deactivate_it() {
 
     let contents = fs::read_to_string(&shell_rc).unwrap();
     assert!(contents.contains("# >>> ctx work recorder passive capture >>>"));
-    assert!(contents.contains("work-record/shims"));
+    assert!(contents.contains("shims"));
     assert!(contents.contains("export EXISTING=1"));
     assert!(temp.path().join(".testrc.ctxbak").exists());
 
@@ -923,7 +923,6 @@ fn setup_can_activate_passive_capture_in_shell_rc_and_deactivate_it() {
             "deactivate-shell",
             "--dir",
             temp.path()
-                .join("work-record")
                 .join("shims")
                 .to_str()
                 .unwrap(),
@@ -962,7 +961,7 @@ fn setup_can_activate_passive_capture_in_shell_rc_and_deactivate_it() {
         .stdout(predicate::str::contains("kept_data:"));
     let contents = fs::read_to_string(&shell_rc).unwrap();
     assert!(!contents.contains("ctx work recorder passive capture"));
-    assert!(temp.path().join("work-record").exists());
+    assert!(temp.path().join("work.sqlite").exists());
 }
 
 #[test]
@@ -2743,18 +2742,13 @@ fn import_rejects_conflicts_and_overwrites_when_explicit() {
 }
 
 #[test]
-fn root_uninstall_removes_product_data() {
+fn uninstall_golden_output_removes_shims_and_handles_product_data() {
     let temp = tempdir();
     ctx(&temp)
         .args(["setup", "--no-open", "--no-import", "--no-shell-update"])
         .assert()
         .success();
-    assert!(temp
-        .path()
-        .join("work-record")
-        .join("shims")
-        .join("git")
-        .exists());
+    assert!(temp.path().join("shims").join("git").exists());
     record(&temp, "Delete me", "body", &[]);
     ctx(&temp)
         .args(["uninstall", "--yes"])
@@ -2762,8 +2756,8 @@ fn root_uninstall_removes_product_data() {
         .success()
         .stdout(predicate::str::contains("removed_shims:"))
         .stdout(predicate::str::contains("kept_data:"));
-    assert!(!temp.path().join("work-record").join("shims").exists());
-    assert!(temp.path().join("work-record").join("work.sqlite").exists());
+    assert!(!temp.path().join("shims").exists());
+    assert!(temp.path().join("work.sqlite").exists());
     ctx(&temp)
         .args(["status"])
         .assert()

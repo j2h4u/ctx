@@ -21,7 +21,7 @@ use work_record_capture::{
     ShimCommandOptions,
 };
 use work_record_core::{
-    blob_dir, database_path, default_data_root, device_path, inbox_dir, new_id,
+    blob_dir, database_path, default_data_root, device_path, new_id,
     redact_share_safe_markers, work_record_dir, Artifact, CaptureProvider, Confidence,
     EntityTimestamps, Evidence, EvidenceFreshness, EvidenceKind, EvidenceMetadata, EvidenceStatus,
     Fidelity, FileTouched, PullRequest, Run, Session, Summary, SummaryKind, SyncMetadata,
@@ -2106,7 +2106,7 @@ fn print_privacy_doctor(store: &Store, data_root: &Path) -> Result<()> {
     println!("storage: local_only");
     println!("hosted_sync: disabled");
     println!("database: {}", db_path.display());
-    println!("inbox_dir: {}", inbox.display());
+    println!("spool_dir: {}", inbox.display());
     println!(
         "validation: {}",
         if findings.is_empty() {
@@ -2126,7 +2126,7 @@ fn print_privacy_doctor(store: &Store, data_root: &Path) -> Result<()> {
         "permissions_database: {}",
         privacy_permission_status(&db_path)?
     );
-    println!("permissions_inbox: {}", privacy_permission_status(&inbox)?);
+    println!("permissions_spool: {}", privacy_permission_status(&inbox)?);
     if counts.failed > 0 {
         println!("action: inspect failed spool files before sharing logs or retrying");
     }
@@ -3446,6 +3446,9 @@ fn uninstall_shims_with_output(dir: &Path, print: bool) -> Result<()> {
         if print {
             println!("removed {}", path.display());
         }
+    }
+    if dir.is_dir() && fs::read_dir(dir)?.next().is_none() {
+        fs::remove_dir(dir)?;
     }
     Ok(())
 }

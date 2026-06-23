@@ -1,6 +1,6 @@
 # Work Recorder Provider Release Implementation Status
 
-Last updated: 2026-06-23T21:59:22Z.
+Last updated: 2026-06-23T22:03:30Z.
 
 ## Current Integration Branch
 
@@ -279,6 +279,39 @@ ADE desktop release, `ade.ctx.rs` migration, production hosted launch, and
     dashboard interactive/headless/`--no-open` coverage markers. The stale
     public `work-record`, `~/.ctx/work-record`, `blobs`, and `inbox` wording
     blockers are cleared.
+- Integrated setup/dashboard/service CLI UX:
+  `5917606 Update setup dashboard service CLI UX`.
+- Manager follow-up fixes:
+  - Updated setup/uninstall/shell-rc tests to use flat `shims/` and
+    `work.sqlite` paths after root layout migration.
+  - Renamed privacy doctor output from `inbox_dir`/`permissions_inbox` to
+    `spool_dir`/`permissions_spool`.
+  - Removed an unused old-layout import.
+  - Tightened shim uninstall to remove the empty ctx-owned shim directory after
+    removing shim files.
+  - Renamed focused tests so the `product-decisions` CI gate can detect setup,
+    status, dashboard, uninstall, idempotency, and interactive-open coverage.
+- Setup/dashboard/service focused validations run serially under
+  `/usr/local/bin/cargo-lowio` with `TMPDIR=$PWD/target/tmp`:
+  - `cargo-lowio test -p ctx --test cli
+    setup_status_golden_output_is_idempotent_and_validate_work --
+    --test-threads 1` passed.
+  - `cargo-lowio test -p ctx --test cli
+    setup_headless_skips_dashboard_without_no_open -- --test-threads 1`
+    passed.
+  - `cargo-lowio test -p ctx --test cli
+    dashboard_interactive_golden_output_starts_reuses_and_respects_open_modes --
+    --test-threads 1` passed.
+  - `cargo-lowio test -p ctx --test cli
+    optional_service_is_explicit_and_reversible -- --test-threads 1` passed.
+  - `cargo-lowio test -p ctx --test cli
+    uninstall_golden_output_removes_shims_and_handles_product_data --
+    --test-threads 1` passed.
+  - `cargo-lowio test -p ctx --test cli
+    setup_can_activate_passive_capture_in_shell_rc_and_deactivate_it --
+    --test-threads 1` passed.
+  - `bash scripts/check.sh product-decisions` passed after docs/site and CLI UX
+    integration.
 
 Concurrent worker Cargo/rustc processes were stopped by the manager after they
 violated the host-level resource-safety rule. Remaining validation should be
