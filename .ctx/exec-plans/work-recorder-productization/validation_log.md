@@ -108,6 +108,18 @@ Updated: 2026-06-22T19:53:06-05:00
   - Bazel lane recorded `skipped` because neither `bazel` nor `bazelisk` is
     installed.
 
+- Command:
+  `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 ./scripts/release-dry-run.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / `703eaba`
+- Outcome: PASS
+- Artifacts:
+  - `target/ctx-artifacts/release-dry-run/manifest.json`;
+  - `target/ctx-artifacts/release-dry-run/checksums.sha256`;
+  - `target/ctx-artifacts/release-dry-run/timings.json`.
+
 ## 2026-06-22 Local Shims And Docs/Examples Checks
 
 - Command:
