@@ -2200,7 +2200,7 @@ impl Store {
         restrict_private_dir(&absolute_dir)?;
         let absolute_path = absolute_dir.join(&hash);
         let id = new_id();
-        store_blob_content_if_missing(
+        let _created = store_blob_content_if_missing(
             id,
             &absolute_path,
             content.as_bytes(),
@@ -2413,23 +2413,31 @@ impl Store {
         let archive_artifacts = archive_artifacts_by_evidence(archive);
         let blob_dir = self.blob_dir.clone();
         let tx = self.conn.transaction()?;
+        reject_import_invariant_conflicts(&tx, archive)?;
         if !overwrite {
             reject_import_conflicts(&tx, archive)?;
         }
+        let mut blob_guard = BlobWriteGuard::default();
         for record in &archive.records {
             upsert_record_tx(&tx, record, None)?;
         }
         for evidence in &archive.evidence {
             if let Some(artifacts) = archive_artifacts.get(&evidence.id) {
                 upsert_evidence_with_archive_artifacts_tx(
-                    &tx, &blob_dir, evidence, artifacts, None,
+                    &tx,
+                    &blob_dir,
+                    evidence,
+                    artifacts,
+                    None,
+                    &mut blob_guard,
                 )?;
             } else {
-                upsert_evidence_tx(&tx, &blob_dir, evidence, None)?;
+                upsert_evidence_tx(&tx, &blob_dir, evidence, None, &mut blob_guard)?;
             }
         }
-        import_rich_archive_entities_tx(&tx, &blob_dir, archive)?;
+        import_rich_archive_entities_tx(&tx, &blob_dir, archive, &mut blob_guard)?;
         tx.commit()?;
+        blob_guard.commit();
         self.rebuild_search_projection()?;
         Ok(())
     }
@@ -2449,9 +2457,12 @@ impl Store {
         let archive_artifacts = archive_artifacts_by_evidence(archive);
         let blob_dir = self.blob_dir.clone();
         let tx = self.conn.transaction()?;
+        reject_import_invariant_conflicts(&tx, archive)?;
         if !overwrite {
+            reject_capture_source_import_conflict(&tx, source_id)?;
             reject_import_conflicts(&tx, archive)?;
         }
+        let mut blob_guard = BlobWriteGuard::default();
         upsert_capture_source_tx(&tx, source_id, source, occurred_at, fidelity)?;
         for record in &archive.records {
             upsert_record_tx(&tx, record, Some(source_id))?;
@@ -2464,13 +2475,15 @@ impl Store {
                     evidence,
                     artifacts,
                     Some(source_id),
+                    &mut blob_guard,
                 )?;
             } else {
-                upsert_evidence_tx(&tx, &blob_dir, evidence, Some(source_id))?;
+                upsert_evidence_tx(&tx, &blob_dir, evidence, Some(source_id), &mut blob_guard)?;
             }
         }
-        import_rich_archive_entities_tx(&tx, &blob_dir, archive)?;
+        import_rich_archive_entities_tx(&tx, &blob_dir, archive, &mut blob_guard)?;
         tx.commit()?;
+        blob_guard.commit();
         self.rebuild_search_projection()?;
         Ok(())
     }
@@ -3010,9 +3023,12 @@ fn store_blob_content_if_missing(
     content: &[u8],
     expected_hash: &str,
     expected_size: u64,
-) -> Result<()> {
+) -> Result<bool> {
     match fs::symlink_metadata(path) {
-        Ok(_) => ensure_existing_blob_content(id, path, expected_hash, expected_size),
+        Ok(_) => {
+            ensure_existing_blob_content(id, path, expected_hash, expected_size)?;
+            Ok(false)
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             use std::io::Write as _;
 
@@ -3023,9 +3039,40 @@ fn store_blob_content_if_missing(
             file.write_all(content)?;
             file.sync_all()?;
             drop(file);
-            restrict_private_file(path)
+            restrict_private_file(path)?;
+            Ok(true)
         }
         Err(err) => Err(StoreError::Io(err)),
+    }
+}
+
+#[derive(Debug, Default)]
+struct BlobWriteGuard {
+    created_paths: Vec<PathBuf>,
+    committed: bool,
+}
+
+impl BlobWriteGuard {
+    fn track_created(&mut self, path: &Path, created: bool) {
+        if created {
+            self.created_paths.push(path.to_path_buf());
+        }
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+        self.created_paths.clear();
+    }
+}
+
+impl Drop for BlobWriteGuard {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        for path in self.created_paths.iter().rev() {
+            let _ = fs::remove_file(path);
+        }
     }
 }
 
@@ -3125,6 +3172,32 @@ fn reject_import_conflicts(tx: &Transaction<'_>, archive: &WorkRecordArchive) ->
         }
     }
     reject_rich_import_conflicts(tx, archive)?;
+    Ok(())
+}
+
+fn reject_capture_source_import_conflict(tx: &Transaction<'_>, source_id: Uuid) -> Result<()> {
+    if row_exists(tx, "capture_sources", source_id)? {
+        return Err(StoreError::ImportConflict {
+            kind: "capture_source",
+            id: source_id,
+        });
+    }
+    Ok(())
+}
+
+fn reject_import_invariant_conflicts(
+    tx: &Transaction<'_>,
+    archive: &WorkRecordArchive,
+) -> Result<()> {
+    if archive.schema_version < 2 && archive.version < 2 {
+        return Ok(());
+    }
+
+    for event in &archive.events {
+        if let Some(dedupe_key) = &event.dedupe_key {
+            reject_provider_event_hash_conflict_tx(tx, dedupe_key)?;
+        }
+    }
     Ok(())
 }
 
@@ -3761,6 +3834,7 @@ fn import_rich_archive_entities_tx(
     tx: &Transaction<'_>,
     blob_dir: &Path,
     archive: &WorkRecordArchive,
+    blob_guard: &mut BlobWriteGuard,
 ) -> Result<()> {
     if archive.schema_version < 2 && archive.version < 2 {
         return Ok(());
@@ -3775,7 +3849,7 @@ fn import_rich_archive_entities_tx(
         upsert_vcs_workspace_tx(tx, workspace)?;
     }
     for artifact in &archive.artifacts {
-        store_archive_artifact_tx(tx, blob_dir, artifact)?;
+        store_archive_artifact_tx(tx, blob_dir, artifact, blob_guard)?;
     }
     for artifact in &archive.artifact_records {
         upsert_artifact_tx(tx, artifact)?;
@@ -4446,6 +4520,7 @@ fn upsert_evidence_tx(
     blob_dir: &Path,
     evidence: &Evidence,
     source_id: Option<Uuid>,
+    blob_guard: &mut BlobWriteGuard,
 ) -> Result<()> {
     let work_record_id = evidence
         .record_id
@@ -4453,8 +4528,10 @@ fn upsert_evidence_tx(
     let started_at_ms = timestamp_ms(evidence.started_at);
     let ended_at_ms = started_at_ms.saturating_add(evidence.duration_ms);
     let status = evidence_status(evidence.exit_code);
-    let stdout_artifact_id = store_output_artifact_tx(tx, blob_dir, "stdout", &evidence.stdout)?;
-    let stderr_artifact_id = store_output_artifact_tx(tx, blob_dir, "stderr", &evidence.stderr)?;
+    let stdout_artifact_id =
+        store_output_artifact_tx(tx, blob_dir, "stdout", &evidence.stdout, blob_guard)?;
+    let stderr_artifact_id =
+        store_output_artifact_tx(tx, blob_dir, "stderr", &evidence.stderr, blob_guard)?;
     let artifact_id = stdout_artifact_id
         .as_deref()
         .or(stderr_artifact_id.as_deref())
@@ -4518,6 +4595,7 @@ fn upsert_evidence_with_archive_artifacts_tx(
     evidence: &Evidence,
     artifacts: &[&WorkRecordArchiveArtifact],
     source_id: Option<Uuid>,
+    blob_guard: &mut BlobWriteGuard,
 ) -> Result<()> {
     let mut stdout = None;
     let mut stderr = None;
@@ -4525,7 +4603,7 @@ fn upsert_evidence_with_archive_artifacts_tx(
     let mut stderr_artifact_id = None;
 
     for artifact in artifacts {
-        let artifact_id = store_archive_artifact_tx(tx, blob_dir, artifact)?;
+        let artifact_id = store_archive_artifact_tx(tx, blob_dir, artifact, blob_guard)?;
         match artifact.stream.as_str() {
             "stdout" => {
                 stdout = Some(artifact.content.clone());
@@ -4608,6 +4686,7 @@ fn store_archive_artifact_tx(
     tx: &Transaction<'_>,
     blob_dir: &Path,
     artifact: &WorkRecordArchiveArtifact,
+    blob_guard: &mut BlobWriteGuard,
 ) -> Result<String> {
     let hash = sha256_hex(artifact.content.as_bytes());
     if hash != artifact.blob_hash {
@@ -4626,13 +4705,14 @@ fn store_archive_artifact_tx(
     fs::create_dir_all(&absolute_dir)?;
     restrict_private_dir(&absolute_dir)?;
     let absolute_path = absolute_dir.join(&hash);
-    store_blob_content_if_missing(
+    let created = store_blob_content_if_missing(
         artifact.id,
         &absolute_path,
         artifact.content.as_bytes(),
         &artifact.blob_hash,
         artifact.byte_size,
     )?;
+    blob_guard.track_created(&absolute_path, created);
 
     let now = timestamp_ms(Utc::now());
     tx.execute(
@@ -4670,6 +4750,7 @@ fn store_output_artifact_tx(
     blob_dir: &Path,
     kind: &str,
     content: &str,
+    blob_guard: &mut BlobWriteGuard,
 ) -> Result<Option<String>> {
     if content.is_empty() {
         return Ok(None);
@@ -4683,13 +4764,14 @@ fn store_output_artifact_tx(
     restrict_private_dir(&absolute_dir)?;
     let absolute_path = absolute_dir.join(&hash);
     let id = new_id();
-    store_blob_content_if_missing(
+    let created = store_blob_content_if_missing(
         id,
         &absolute_path,
         content.as_bytes(),
         &hash,
         content.len() as u64,
     )?;
+    blob_guard.track_created(&absolute_path, created);
 
     let now = timestamp_ms(Utc::now());
     let id = id.to_string();
@@ -5356,6 +5438,67 @@ mod tests {
             media_type: artifact.media_type.clone(),
             preview_text: artifact.preview_text.clone(),
             redaction_state: artifact.redaction_state,
+            timestamps: timestamps(),
+            source_id: None,
+            sync: sync_metadata(),
+        }
+    }
+
+    fn codex_source_descriptor(external_session_id: &str) -> CaptureSourceDescriptor {
+        CaptureSourceDescriptor {
+            kind: work_record_core::CaptureSourceKind::ProviderImport,
+            provider: CaptureProvider::Codex,
+            machine_id: "machine-1".into(),
+            process_id: Some(42),
+            cwd: Some("/repo".into()),
+            raw_source_path: Some("/sessions/codex.jsonl".into()),
+            external_session_id: Some(external_session_id.into()),
+        }
+    }
+
+    fn imported_source(id: Uuid, external_session_id: &str) -> CaptureSource {
+        CaptureSource {
+            id,
+            descriptor: codex_source_descriptor(external_session_id),
+            started_at: fixed_time(),
+            ended_at: None,
+            sync: sync_metadata(),
+        }
+    }
+
+    fn git_workspace(id: Uuid) -> VcsWorkspace {
+        VcsWorkspace {
+            id,
+            kind: VcsKind::Git,
+            root_path: "/repo".into(),
+            repo_fingerprint: "git:repo".into(),
+            primary_remote_url_normalized: Some("https://github.com/ctxrs/ctx".into()),
+            host: VcsHost::Github,
+            owner: Some("ctxrs".into()),
+            name: Some("ctx".into()),
+            monorepo_subpath: None,
+            timestamps: timestamps(),
+            source_id: None,
+            sync: sync_metadata(),
+        }
+    }
+
+    fn github_pr(id: Uuid, workspace_id: Option<Uuid>) -> PullRequest {
+        PullRequest {
+            id,
+            vcs_workspace_id: workspace_id,
+            provider: PullRequestProvider::Github,
+            url: "https://github.com/ctxrs/ctx/pull/123".into(),
+            number: Some(123),
+            owner: Some("ctxrs".into()),
+            repo: Some("ctx".into()),
+            title: Some("Rich storage".into()),
+            state: Some("open".into()),
+            head_ref: Some("ctx/wr-finish-store-search".into()),
+            base_ref: Some("main".into()),
+            head_sha: Some("abcdef".into()),
+            confidence: Confidence::Explicit,
+            link_source: PullRequestLinkSource::Explicit,
             timestamps: timestamps(),
             source_id: None,
             sync: sync_metadata(),
@@ -6481,6 +6624,75 @@ mod tests {
     }
 
     #[test]
+    fn capture_source_import_without_overwrite_does_not_mutate_existing_source_id() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let source_id = Uuid::parse_str("018f45d0-0000-7000-8000-00000000c001").unwrap();
+        let existing_source = imported_source(source_id, "original-session");
+        store.upsert_capture_source(&existing_source).unwrap();
+
+        let archive = archive_with_stdout_artifact("source import output");
+        let replacement_descriptor = codex_source_descriptor("replacement-session");
+
+        assert!(matches!(
+            store.import_archive_from_capture_source(
+                &archive,
+                source_id,
+                &replacement_descriptor,
+                fixed_time(),
+                Fidelity::Imported,
+                false,
+            ),
+            Err(StoreError::ImportConflict {
+                kind: "capture_source",
+                id,
+            }) if id == source_id
+        ));
+
+        let source = store.get_capture_source(source_id).unwrap();
+        assert_eq!(
+            source.descriptor.external_session_id.as_deref(),
+            Some("original-session")
+        );
+    }
+
+    #[test]
+    fn import_rejects_provider_event_hash_conflicts_even_with_overwrite() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let existing_record = WorkRecord::new("Existing", "body", Vec::new(), "task", None);
+        store.insert_record(&existing_record).unwrap();
+        let existing_event =
+            provider_event_for_record(existing_record.id, 1, 9, "existing-hash", "existing");
+        store.upsert_event(&existing_event).unwrap();
+
+        let mut archive = archive_with_stdout_artifact("overwrite rejected output");
+        archive.schema_version = 2;
+        archive.version = 2;
+        archive.events.push(provider_event_for_record(
+            archive.records[0].id,
+            2,
+            9,
+            "incoming-hash",
+            "incoming",
+        ));
+        let imported_record_id = archive.records[0].id;
+
+        assert!(matches!(
+            store.import_archive(&archive, true),
+            Err(StoreError::ProviderEventConflict {
+                existing_hash,
+                new_hash,
+                ..
+            }) if existing_hash == "existing-hash" && new_hash == "incoming-hash"
+        ));
+        assert!(matches!(
+            store.get_record(imported_record_id),
+            Err(StoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
     fn failed_import_rolls_back_all_rows() {
         let temp = tempdir();
         let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
@@ -6629,6 +6841,46 @@ mod tests {
     }
 
     #[test]
+    fn failed_import_removes_blob_content_created_before_sql_failure() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let mut archive = archive_with_stdout_artifact("created before sql failure");
+        archive.schema_version = 2;
+        archive.version = 2;
+        archive.sessions.push(Session {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-00000000c002").unwrap(),
+            work_record_id: Some(archive.records[0].id),
+            parent_session_id: None,
+            root_session_id: None,
+            capture_source_id: None,
+            provider: CaptureProvider::Codex,
+            external_session_id: Some("blob-rollback".into()),
+            external_agent_id: None,
+            agent_type: AgentType::Primary,
+            role_hint: None,
+            is_primary: true,
+            status: SessionStatus::Imported,
+            transcript_blob_id: Some(
+                Uuid::parse_str("018f45d0-0000-7000-8000-00000000ffff").unwrap(),
+            ),
+            started_at: fixed_time(),
+            ended_at: None,
+            timestamps: timestamps(),
+            sync: sync_metadata(),
+        });
+        let blob_path = temp.path().join(&archive.artifacts[0].blob_path);
+
+        assert!(matches!(
+            store.import_archive(&archive, false),
+            Err(StoreError::Sql(_))
+        ));
+        assert!(
+            !blob_path.exists(),
+            "rejected import blob content should not remain durable"
+        );
+    }
+
+    #[test]
     fn import_rejects_rich_dedupe_conflicts_without_overwrite() {
         let temp = tempdir();
         let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
@@ -6660,6 +6912,82 @@ mod tests {
                 .event_id_by_dedupe_key("provider:codex:shared-session:7:payload-hash")
                 .unwrap(),
             existing_event.id
+        );
+    }
+
+    #[test]
+    fn v2_import_rejects_vcs_workspace_identity_conflicts_without_overwrite() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let existing =
+            git_workspace(Uuid::parse_str("018f45d0-0000-7000-8000-00000000c003").unwrap());
+        store.upsert_vcs_workspace(&existing).unwrap();
+
+        let mut incoming =
+            git_workspace(Uuid::parse_str("018f45d0-0000-7000-8000-00000000c004").unwrap());
+        incoming.owner = Some("different-owner".into());
+        let archive = WorkRecordArchive {
+            schema_version: 2,
+            version: 2,
+            vcs_workspaces: vec![incoming.clone()],
+            ..WorkRecordArchive::default()
+        };
+
+        assert!(matches!(
+            store.import_archive(&archive, false),
+            Err(StoreError::ImportConflict {
+                kind: "vcs_workspace",
+                id,
+            }) if id == incoming.id
+        ));
+        assert_eq!(
+            store
+                .list_vcs_workspaces()
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+                .owner
+                .as_deref(),
+            Some("ctxrs")
+        );
+    }
+
+    #[test]
+    fn v2_import_rejects_pull_request_identity_conflicts_without_overwrite() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let workspace =
+            git_workspace(Uuid::parse_str("018f45d0-0000-7000-8000-00000000c005").unwrap());
+        let workspace_id = store.upsert_vcs_workspace(&workspace).unwrap();
+        let existing = github_pr(
+            Uuid::parse_str("018f45d0-0000-7000-8000-00000000c006").unwrap(),
+            Some(workspace_id),
+        );
+        store.upsert_pull_request(&existing).unwrap();
+
+        let mut incoming = github_pr(
+            Uuid::parse_str("018f45d0-0000-7000-8000-00000000c007").unwrap(),
+            Some(workspace_id),
+        );
+        incoming.title = Some("Different PR title".into());
+        let archive = WorkRecordArchive {
+            schema_version: 2,
+            version: 2,
+            pull_requests: vec![incoming.clone()],
+            ..WorkRecordArchive::default()
+        };
+
+        assert!(matches!(
+            store.import_archive(&archive, false),
+            Err(StoreError::ImportConflict {
+                kind: "pull_request",
+                id,
+            }) if id == incoming.id
+        ));
+        assert_eq!(
+            store.list_pull_requests().unwrap()[0].title.as_deref(),
+            Some("Rich storage")
         );
     }
 
