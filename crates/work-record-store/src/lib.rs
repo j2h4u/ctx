@@ -12,8 +12,12 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 use work_record_core::{
-    new_id, redact_preview, ArtifactKind, CaptureSourceDescriptor, Evidence, Fidelity,
-    RedactionState, WorkContext, WorkRecord, WorkRecordArchive, WorkRecordArchiveArtifact,
+    new_id, redact_preview, AgentType, Artifact, ArtifactKind, CaptureProvider, CaptureSource,
+    CaptureSourceDescriptor, EntityTimestamps, Event, EventRole, EventType, Evidence, Fidelity,
+    FileTouched, PullRequest, RedactionState, Run, RunStatus, RunType, Session, SessionEdge,
+    SessionStatus, Summary, SyncCursor, SyncMetadata, SyncState, VcsChange, VcsWorkspace,
+    Visibility, WorkContext, WorkRecord, WorkRecordArchive, WorkRecordArchiveArtifact,
+    WorkRecordLink,
 };
 
 #[derive(Debug, Error)]
@@ -817,6 +821,786 @@ impl Store {
             schema.push(row?);
         }
         Ok(schema.join(";\n"))
+    }
+
+    pub fn upsert_capture_source(&self, source: &CaptureSource) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO capture_sources
+            (
+                id, kind, provider, machine_id, process_id, cwd, raw_source_path,
+                external_session_id, started_at_ms, ended_at_ms, fidelity,
+                visibility, sync_state, sync_version, metadata_json
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            ON CONFLICT(id) DO UPDATE SET
+                kind = excluded.kind,
+                provider = excluded.provider,
+                machine_id = excluded.machine_id,
+                process_id = excluded.process_id,
+                cwd = excluded.cwd,
+                raw_source_path = excluded.raw_source_path,
+                external_session_id = excluded.external_session_id,
+                started_at_ms = excluded.started_at_ms,
+                ended_at_ms = excluded.ended_at_ms,
+                fidelity = excluded.fidelity,
+                visibility = excluded.visibility,
+                sync_state = excluded.sync_state,
+                sync_version = excluded.sync_version,
+                metadata_json = excluded.metadata_json
+            "#,
+            params![
+                source.id.to_string(),
+                source.descriptor.kind.as_str(),
+                source.descriptor.provider.as_str(),
+                source.descriptor.machine_id.as_str(),
+                source.descriptor.process_id.map(i64::from),
+                source.descriptor.cwd.as_deref(),
+                source.descriptor.raw_source_path.as_deref(),
+                source.descriptor.external_session_id.as_deref(),
+                timestamp_ms(source.started_at),
+                optional_timestamp_ms(source.ended_at),
+                source.sync.fidelity.as_str(),
+                source.sync.visibility.as_str(),
+                source.sync.sync_state.as_str(),
+                source.sync.sync_version as i64,
+                serde_json::to_string(&source.sync.metadata)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_capture_source(&self, id: Uuid) -> Result<CaptureSource> {
+        self.conn
+            .query_row(
+                "SELECT id, kind, provider, machine_id, process_id, cwd, raw_source_path, external_session_id, started_at_ms, ended_at_ms, fidelity, visibility, sync_state, sync_version, metadata_json FROM capture_sources WHERE id = ?1",
+                params![id.to_string()],
+                capture_source_from_row,
+            )
+            .optional()?
+            .ok_or(StoreError::NotFound(id))
+    }
+
+    pub fn capture_source_by_external_session(
+        &self,
+        provider: CaptureProvider,
+        external_session_id: &str,
+    ) -> Result<Option<CaptureSource>> {
+        self.conn
+            .query_row(
+                "SELECT id, kind, provider, machine_id, process_id, cwd, raw_source_path, external_session_id, started_at_ms, ended_at_ms, fidelity, visibility, sync_state, sync_version, metadata_json FROM capture_sources WHERE provider = ?1 AND external_session_id = ?2 ORDER BY started_at_ms DESC LIMIT 1",
+                params![provider.as_str(), external_session_id],
+                capture_source_from_row,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn upsert_session(&self, session: &Session) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO sessions
+            (
+                id, work_record_id, parent_session_id, root_session_id, capture_source_id,
+                provider, external_session_id, external_agent_id, agent_type, role_hint,
+                is_primary, status, fidelity, transcript_blob_id, started_at_ms, ended_at_ms,
+                created_at_ms, updated_at_ms, visibility, sync_state, sync_version,
+                deleted_at_ms, metadata_json
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+            ON CONFLICT(id) DO UPDATE SET
+                work_record_id = excluded.work_record_id,
+                parent_session_id = excluded.parent_session_id,
+                root_session_id = excluded.root_session_id,
+                capture_source_id = excluded.capture_source_id,
+                provider = excluded.provider,
+                external_session_id = excluded.external_session_id,
+                external_agent_id = excluded.external_agent_id,
+                agent_type = excluded.agent_type,
+                role_hint = excluded.role_hint,
+                is_primary = excluded.is_primary,
+                status = excluded.status,
+                fidelity = excluded.fidelity,
+                transcript_blob_id = excluded.transcript_blob_id,
+                started_at_ms = excluded.started_at_ms,
+                ended_at_ms = excluded.ended_at_ms,
+                updated_at_ms = excluded.updated_at_ms,
+                visibility = excluded.visibility,
+                sync_state = excluded.sync_state,
+                sync_version = excluded.sync_version,
+                deleted_at_ms = excluded.deleted_at_ms,
+                metadata_json = excluded.metadata_json
+            "#,
+            params![
+                session.id.to_string(),
+                optional_uuid_string(session.work_record_id),
+                optional_uuid_string(session.parent_session_id),
+                optional_uuid_string(session.root_session_id),
+                optional_uuid_string(session.capture_source_id),
+                session.provider.as_str(),
+                session.external_session_id.as_deref(),
+                session.external_agent_id.as_deref(),
+                session.agent_type.as_str(),
+                session.role_hint.as_deref(),
+                session.is_primary as i64,
+                session.status.as_str(),
+                session.sync.fidelity.as_str(),
+                optional_uuid_string(session.transcript_blob_id),
+                timestamp_ms(session.started_at),
+                optional_timestamp_ms(session.ended_at),
+                timestamp_ms(session.timestamps.created_at),
+                timestamp_ms(session.timestamps.updated_at),
+                session.sync.visibility.as_str(),
+                session.sync.sync_state.as_str(),
+                session.sync.sync_version as i64,
+                optional_timestamp_ms(session.sync.deleted_at),
+                serde_json::to_string(&session.sync.metadata)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_session(&self, id: Uuid) -> Result<Session> {
+        self.conn
+            .query_row(
+                session_select_sql("WHERE id = ?1").as_str(),
+                params![id.to_string()],
+                session_from_row,
+            )
+            .optional()?
+            .ok_or(StoreError::NotFound(id))
+    }
+
+    pub fn sessions_for_record(&self, record_id: Uuid) -> Result<Vec<Session>> {
+        let mut stmt = self.conn.prepare(
+            session_select_sql("WHERE work_record_id = ?1 ORDER BY started_at_ms, id").as_str(),
+        )?;
+        let rows = stmt.query_map(params![record_id.to_string()], session_from_row)?;
+        collect_rows(rows)
+    }
+
+    pub fn upsert_session_edge(&self, edge: &SessionEdge) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO session_edges
+            (id, from_session_id, to_session_id, edge_type, confidence, source_id, created_at_ms, updated_at_ms, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            ON CONFLICT(id) DO UPDATE SET
+                from_session_id = excluded.from_session_id,
+                to_session_id = excluded.to_session_id,
+                edge_type = excluded.edge_type,
+                confidence = excluded.confidence,
+                source_id = excluded.source_id,
+                updated_at_ms = excluded.updated_at_ms,
+                visibility = excluded.visibility,
+                fidelity = excluded.fidelity,
+                sync_state = excluded.sync_state,
+                sync_version = excluded.sync_version,
+                deleted_at_ms = excluded.deleted_at_ms,
+                metadata_json = excluded.metadata_json
+            "#,
+            params![
+                edge.id.to_string(),
+                edge.from_session_id.to_string(),
+                edge.to_session_id.to_string(),
+                edge.edge_type.as_str(),
+                edge.confidence.as_str(),
+                optional_uuid_string(edge.source_id),
+                timestamp_ms(edge.timestamps.created_at),
+                timestamp_ms(edge.timestamps.updated_at),
+                edge.sync.visibility.as_str(),
+                edge.sync.fidelity.as_str(),
+                edge.sync.sync_state.as_str(),
+                edge.sync.sync_version as i64,
+                optional_timestamp_ms(edge.sync.deleted_at),
+                serde_json::to_string(&edge.sync.metadata)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_run(&self, run: &Run) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO runs
+            (id, work_record_id, session_id, run_type, status, started_at_ms, ended_at_ms, exit_code, cwd, command_preview, input_blob_id, output_blob_id, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+            ON CONFLICT(id) DO UPDATE SET
+                work_record_id = excluded.work_record_id,
+                session_id = excluded.session_id,
+                run_type = excluded.run_type,
+                status = excluded.status,
+                started_at_ms = excluded.started_at_ms,
+                ended_at_ms = excluded.ended_at_ms,
+                exit_code = excluded.exit_code,
+                cwd = excluded.cwd,
+                command_preview = excluded.command_preview,
+                input_blob_id = excluded.input_blob_id,
+                output_blob_id = excluded.output_blob_id,
+                updated_at_ms = excluded.updated_at_ms,
+                source_id = excluded.source_id,
+                visibility = excluded.visibility,
+                fidelity = excluded.fidelity,
+                sync_state = excluded.sync_state,
+                sync_version = excluded.sync_version,
+                deleted_at_ms = excluded.deleted_at_ms,
+                metadata_json = excluded.metadata_json
+            "#,
+            params![
+                run.id.to_string(),
+                optional_uuid_string(run.work_record_id),
+                optional_uuid_string(run.session_id),
+                run.run_type.as_str(),
+                run.status.as_str(),
+                timestamp_ms(run.started_at),
+                optional_timestamp_ms(run.ended_at),
+                run.exit_code,
+                run.cwd.as_deref(),
+                run.command_preview.as_deref(),
+                optional_uuid_string(run.input_blob_id),
+                optional_uuid_string(run.output_blob_id),
+                timestamp_ms(run.timestamps.created_at),
+                timestamp_ms(run.timestamps.updated_at),
+                optional_uuid_string(run.source_id),
+                run.sync.visibility.as_str(),
+                run.sync.fidelity.as_str(),
+                run.sync.sync_state.as_str(),
+                run.sync.sync_version as i64,
+                optional_timestamp_ms(run.sync.deleted_at),
+                serde_json::to_string(&run.sync.metadata)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_run(&self, id: Uuid) -> Result<Run> {
+        self.conn
+            .query_row(
+                run_select_sql("WHERE id = ?1").as_str(),
+                params![id.to_string()],
+                run_from_row,
+            )
+            .optional()?
+            .ok_or(StoreError::NotFound(id))
+    }
+
+    pub fn runs_for_session(&self, session_id: Uuid) -> Result<Vec<Run>> {
+        let mut stmt = self
+            .conn
+            .prepare(run_select_sql("WHERE session_id = ?1 ORDER BY started_at_ms, id").as_str())?;
+        let rows = stmt.query_map(params![session_id.to_string()], run_from_row)?;
+        collect_rows(rows)
+    }
+
+    pub fn provider_event_dedupe_key(
+        provider: CaptureProvider,
+        external_session_id: &str,
+        provider_index: u64,
+        payload_hash: &str,
+    ) -> String {
+        format!(
+            "provider:{}:{}:{}:{}",
+            provider.as_str(),
+            external_session_id,
+            provider_index,
+            payload_hash
+        )
+    }
+
+    pub fn upsert_event(&self, event: &Event) -> Result<Uuid> {
+        self.conn.execute(
+            r#"
+            INSERT INTO events
+            (id, seq, work_record_id, session_id, run_id, event_type, role, occurred_at_ms, capture_source_id, payload_json, payload_blob_id, dedupe_key, visibility, redaction_state, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+            ON CONFLICT DO UPDATE SET
+                work_record_id = excluded.work_record_id,
+                session_id = excluded.session_id,
+                run_id = excluded.run_id,
+                event_type = excluded.event_type,
+                role = excluded.role,
+                occurred_at_ms = excluded.occurred_at_ms,
+                capture_source_id = excluded.capture_source_id,
+                payload_json = excluded.payload_json,
+                payload_blob_id = excluded.payload_blob_id,
+                visibility = excluded.visibility,
+                redaction_state = excluded.redaction_state,
+                fidelity = excluded.fidelity,
+                sync_state = excluded.sync_state,
+                sync_version = excluded.sync_version,
+                deleted_at_ms = excluded.deleted_at_ms,
+                metadata_json = excluded.metadata_json
+            "#,
+            params![
+                event.id.to_string(),
+                event.seq as i64,
+                optional_uuid_string(event.work_record_id),
+                optional_uuid_string(event.session_id),
+                optional_uuid_string(event.run_id),
+                event.event_type.as_str(),
+                event.role.map(|role| role.as_str()),
+                timestamp_ms(event.occurred_at),
+                optional_uuid_string(event.capture_source_id),
+                serde_json::to_string(&event.payload)?,
+                optional_uuid_string(event.payload_blob_id),
+                event.dedupe_key.as_deref(),
+                event.sync.visibility.as_str(),
+                event.redaction_state.as_str(),
+                event.sync.fidelity.as_str(),
+                event.sync.sync_state.as_str(),
+                event.sync.sync_version as i64,
+                optional_timestamp_ms(event.sync.deleted_at),
+                serde_json::to_string(&event.sync.metadata)?,
+            ],
+        )?;
+        if let Some(dedupe_key) = &event.dedupe_key {
+            return self.event_id_by_dedupe_key(dedupe_key);
+        }
+        Ok(event.id)
+    }
+
+    pub fn event_id_by_dedupe_key(&self, dedupe_key: &str) -> Result<Uuid> {
+        self.conn
+            .query_row(
+                "SELECT id FROM events WHERE dedupe_key = ?1",
+                params![dedupe_key],
+                |row| parse_uuid(row.get::<_, String>(0)?),
+            )
+            .map_err(StoreError::from)
+    }
+
+    pub fn events_for_session(&self, session_id: Uuid) -> Result<Vec<Event>> {
+        let mut stmt = self.conn.prepare(
+            event_select_sql("WHERE session_id = ?1 ORDER BY seq, occurred_at_ms").as_str(),
+        )?;
+        let rows = stmt.query_map(params![session_id.to_string()], event_from_row)?;
+        collect_rows(rows)
+    }
+
+    pub fn upsert_artifact(&self, artifact: &Artifact) -> Result<Uuid> {
+        self.conn.execute(
+            r#"
+            INSERT INTO artifacts
+            (id, kind, blob_hash, blob_path, byte_size, media_type, preview_text, redaction_state, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+            ON CONFLICT DO UPDATE SET
+                blob_path = excluded.blob_path,
+                byte_size = excluded.byte_size,
+                media_type = excluded.media_type,
+                preview_text = excluded.preview_text,
+                redaction_state = excluded.redaction_state,
+                updated_at_ms = excluded.updated_at_ms,
+                source_id = excluded.source_id,
+                visibility = excluded.visibility,
+                fidelity = excluded.fidelity,
+                sync_state = excluded.sync_state,
+                sync_version = excluded.sync_version,
+                deleted_at_ms = excluded.deleted_at_ms,
+                metadata_json = excluded.metadata_json
+            "#,
+            params![
+                artifact.id.to_string(),
+                artifact.kind.as_str(),
+                artifact.blob_hash.as_str(),
+                artifact.blob_path.as_str(),
+                artifact.byte_size as i64,
+                artifact.media_type.as_deref(),
+                artifact.preview_text.as_deref(),
+                artifact.redaction_state.as_str(),
+                timestamp_ms(artifact.timestamps.created_at),
+                timestamp_ms(artifact.timestamps.updated_at),
+                optional_uuid_string(artifact.source_id),
+                artifact.sync.visibility.as_str(),
+                artifact.sync.fidelity.as_str(),
+                artifact.sync.sync_state.as_str(),
+                artifact.sync.sync_version as i64,
+                optional_timestamp_ms(artifact.sync.deleted_at),
+                serde_json::to_string(&artifact.sync.metadata)?,
+            ],
+        )?;
+        self.conn
+            .query_row(
+                "SELECT id FROM artifacts WHERE blob_hash = ?1 AND kind = ?2",
+                params![artifact.blob_hash.as_str(), artifact.kind.as_str()],
+                |row| parse_uuid(row.get::<_, String>(0)?),
+            )
+            .map_err(StoreError::from)
+    }
+
+    pub fn upsert_vcs_workspace(&self, workspace: &VcsWorkspace) -> Result<Uuid> {
+        self.conn.execute(
+            r#"
+            INSERT INTO vcs_workspaces
+            (id, kind, root_path, repo_fingerprint, primary_remote_url_normalized, host, owner, name, monorepo_subpath, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+            ON CONFLICT(kind, repo_fingerprint) DO UPDATE SET
+                root_path = excluded.root_path,
+                primary_remote_url_normalized = excluded.primary_remote_url_normalized,
+                host = excluded.host,
+                owner = excluded.owner,
+                name = excluded.name,
+                monorepo_subpath = excluded.monorepo_subpath,
+                updated_at_ms = excluded.updated_at_ms,
+                source_id = excluded.source_id,
+                visibility = excluded.visibility,
+                fidelity = excluded.fidelity,
+                sync_state = excluded.sync_state,
+                sync_version = excluded.sync_version,
+                deleted_at_ms = excluded.deleted_at_ms,
+                metadata_json = excluded.metadata_json
+            "#,
+            params![
+                workspace.id.to_string(),
+                workspace.kind.as_str(),
+                workspace.root_path.as_str(),
+                workspace.repo_fingerprint.as_str(),
+                workspace.primary_remote_url_normalized.as_deref(),
+                workspace.host.as_str(),
+                workspace.owner.as_deref(),
+                workspace.name.as_deref(),
+                workspace.monorepo_subpath.as_deref(),
+                timestamp_ms(workspace.timestamps.created_at),
+                timestamp_ms(workspace.timestamps.updated_at),
+                optional_uuid_string(workspace.source_id),
+                workspace.sync.visibility.as_str(),
+                workspace.sync.fidelity.as_str(),
+                workspace.sync.sync_state.as_str(),
+                workspace.sync.sync_version as i64,
+                optional_timestamp_ms(workspace.sync.deleted_at),
+                serde_json::to_string(&workspace.sync.metadata)?,
+            ],
+        )?;
+        self.conn
+            .query_row(
+                "SELECT id FROM vcs_workspaces WHERE kind = ?1 AND repo_fingerprint = ?2",
+                params![workspace.kind.as_str(), workspace.repo_fingerprint.as_str()],
+                |row| parse_uuid(row.get::<_, String>(0)?),
+            )
+            .map_err(StoreError::from)
+    }
+
+    pub fn upsert_vcs_change(&self, change: &VcsChange) -> Result<Uuid> {
+        self.conn.execute(
+            r#"
+            INSERT INTO vcs_changes
+            (id, vcs_workspace_id, kind, change_id, parent_change_ids_json, branch_or_bookmark, tree_hash, author_time_ms, confidence, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+            ON CONFLICT(vcs_workspace_id, kind, change_id) DO UPDATE SET
+                parent_change_ids_json = excluded.parent_change_ids_json,
+                branch_or_bookmark = excluded.branch_or_bookmark,
+                tree_hash = excluded.tree_hash,
+                author_time_ms = excluded.author_time_ms,
+                confidence = excluded.confidence,
+                updated_at_ms = excluded.updated_at_ms,
+                source_id = excluded.source_id,
+                visibility = excluded.visibility,
+                fidelity = excluded.fidelity,
+                sync_state = excluded.sync_state,
+                sync_version = excluded.sync_version,
+                deleted_at_ms = excluded.deleted_at_ms,
+                metadata_json = excluded.metadata_json
+            "#,
+            params![
+                change.id.to_string(),
+                change.vcs_workspace_id.to_string(),
+                change.kind.as_str(),
+                change.change_id.as_str(),
+                serde_json::to_string(&change.parent_change_ids)?,
+                change.branch_or_bookmark.as_deref(),
+                change.tree_hash.as_deref(),
+                optional_timestamp_ms(change.author_time),
+                change.confidence.as_str(),
+                timestamp_ms(change.timestamps.created_at),
+                timestamp_ms(change.timestamps.updated_at),
+                optional_uuid_string(change.source_id),
+                change.sync.visibility.as_str(),
+                change.sync.fidelity.as_str(),
+                change.sync.sync_state.as_str(),
+                change.sync.sync_version as i64,
+                optional_timestamp_ms(change.sync.deleted_at),
+                serde_json::to_string(&change.sync.metadata)?,
+            ],
+        )?;
+        self.conn
+            .query_row(
+                "SELECT id FROM vcs_changes WHERE vcs_workspace_id = ?1 AND kind = ?2 AND change_id = ?3",
+                params![change.vcs_workspace_id.to_string(), change.kind.as_str(), change.change_id.as_str()],
+                |row| parse_uuid(row.get::<_, String>(0)?),
+            )
+            .map_err(StoreError::from)
+    }
+
+    pub fn upsert_pull_request(&self, pr: &PullRequest) -> Result<Uuid> {
+        self.conn.execute(
+            r#"
+            INSERT INTO pull_requests
+            (id, vcs_workspace_id, provider, url, number, owner, repo, title, state, head_ref, base_ref, head_sha, confidence, link_source, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+            ON CONFLICT DO UPDATE SET
+                vcs_workspace_id = excluded.vcs_workspace_id,
+                url = excluded.url,
+                title = excluded.title,
+                state = excluded.state,
+                head_ref = excluded.head_ref,
+                base_ref = excluded.base_ref,
+                head_sha = excluded.head_sha,
+                confidence = excluded.confidence,
+                link_source = excluded.link_source,
+                updated_at_ms = excluded.updated_at_ms,
+                source_id = excluded.source_id,
+                visibility = excluded.visibility,
+                fidelity = excluded.fidelity,
+                sync_state = excluded.sync_state,
+                sync_version = excluded.sync_version,
+                deleted_at_ms = excluded.deleted_at_ms,
+                metadata_json = excluded.metadata_json
+            "#,
+            params![
+                pr.id.to_string(),
+                optional_uuid_string(pr.vcs_workspace_id),
+                pr.provider.as_str(),
+                pr.url.as_str(),
+                pr.number.map(|n| n as i64),
+                pr.owner.as_deref(),
+                pr.repo.as_deref(),
+                pr.title.as_deref(),
+                pr.state.as_deref(),
+                pr.head_ref.as_deref(),
+                pr.base_ref.as_deref(),
+                pr.head_sha.as_deref(),
+                pr.confidence.as_str(),
+                pr.link_source.as_str(),
+                timestamp_ms(pr.timestamps.created_at),
+                timestamp_ms(pr.timestamps.updated_at),
+                optional_uuid_string(pr.source_id),
+                pr.sync.visibility.as_str(),
+                pr.sync.fidelity.as_str(),
+                pr.sync.sync_state.as_str(),
+                pr.sync.sync_version as i64,
+                optional_timestamp_ms(pr.sync.deleted_at),
+                serde_json::to_string(&pr.sync.metadata)?,
+            ],
+        )?;
+        if let (Some(owner), Some(repo), Some(number)) = (&pr.owner, &pr.repo, pr.number) {
+            return self
+                .conn
+                .query_row(
+                    "SELECT id FROM pull_requests WHERE provider = ?1 AND owner = ?2 AND repo = ?3 AND number = ?4",
+                    params![pr.provider.as_str(), owner, repo, number as i64],
+                    |row| parse_uuid(row.get::<_, String>(0)?),
+                )
+                .map_err(StoreError::from);
+        }
+        Ok(pr.id)
+    }
+
+    pub fn upsert_summary(&self, summary: &Summary) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO summaries
+            (id, work_record_id, session_id, kind, model_or_source, text, citations_json, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+            ON CONFLICT(id) DO UPDATE SET
+                work_record_id = excluded.work_record_id,
+                session_id = excluded.session_id,
+                kind = excluded.kind,
+                model_or_source = excluded.model_or_source,
+                text = excluded.text,
+                citations_json = excluded.citations_json,
+                updated_at_ms = excluded.updated_at_ms,
+                source_id = excluded.source_id,
+                visibility = excluded.visibility,
+                fidelity = excluded.fidelity,
+                sync_state = excluded.sync_state,
+                sync_version = excluded.sync_version,
+                deleted_at_ms = excluded.deleted_at_ms,
+                metadata_json = excluded.metadata_json
+            "#,
+            params![
+                summary.id.to_string(),
+                optional_uuid_string(summary.work_record_id),
+                optional_uuid_string(summary.session_id),
+                summary.kind.as_str(),
+                summary.model_or_source.as_deref(),
+                summary.text.as_str(),
+                serde_json::to_string(&summary.citations)?,
+                timestamp_ms(summary.timestamps.created_at),
+                timestamp_ms(summary.timestamps.updated_at),
+                optional_uuid_string(summary.source_id),
+                summary.sync.visibility.as_str(),
+                summary.sync.fidelity.as_str(),
+                summary.sync.sync_state.as_str(),
+                summary.sync.sync_version as i64,
+                optional_timestamp_ms(summary.sync.deleted_at),
+                serde_json::to_string(&summary.sync.metadata)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_file_touched(&self, file: &FileTouched) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO files_touched
+            (id, work_record_id, run_id, event_id, vcs_workspace_id, path, change_kind, old_path, line_count_delta, confidence, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+            ON CONFLICT(id) DO UPDATE SET
+                work_record_id = excluded.work_record_id,
+                run_id = excluded.run_id,
+                event_id = excluded.event_id,
+                vcs_workspace_id = excluded.vcs_workspace_id,
+                path = excluded.path,
+                change_kind = excluded.change_kind,
+                old_path = excluded.old_path,
+                line_count_delta = excluded.line_count_delta,
+                confidence = excluded.confidence,
+                updated_at_ms = excluded.updated_at_ms,
+                source_id = excluded.source_id,
+                visibility = excluded.visibility,
+                fidelity = excluded.fidelity,
+                sync_state = excluded.sync_state,
+                sync_version = excluded.sync_version,
+                deleted_at_ms = excluded.deleted_at_ms,
+                metadata_json = excluded.metadata_json
+            "#,
+            params![
+                file.id.to_string(),
+                optional_uuid_string(file.work_record_id),
+                optional_uuid_string(file.run_id),
+                optional_uuid_string(file.event_id),
+                optional_uuid_string(file.vcs_workspace_id),
+                file.path.as_str(),
+                file.change_kind.map(|kind| kind.as_str()),
+                file.old_path.as_deref(),
+                file.line_count_delta,
+                file.confidence.as_str(),
+                timestamp_ms(file.timestamps.created_at),
+                timestamp_ms(file.timestamps.updated_at),
+                optional_uuid_string(file.source_id),
+                file.sync.visibility.as_str(),
+                file.sync.fidelity.as_str(),
+                file.sync.sync_state.as_str(),
+                file.sync.sync_version as i64,
+                optional_timestamp_ms(file.sync.deleted_at),
+                serde_json::to_string(&file.sync.metadata)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_work_record_link(&self, link: &WorkRecordLink) -> Result<Uuid> {
+        self.conn.execute(
+            r#"
+            INSERT INTO work_record_links
+            (id, work_record_id, target_type, target_id, link_type, confidence, source_id, created_at_ms, updated_at_ms, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            ON CONFLICT(work_record_id, target_type, target_id, link_type) DO UPDATE SET
+                confidence = excluded.confidence,
+                source_id = excluded.source_id,
+                updated_at_ms = excluded.updated_at_ms,
+                visibility = excluded.visibility,
+                fidelity = excluded.fidelity,
+                sync_state = excluded.sync_state,
+                sync_version = excluded.sync_version,
+                deleted_at_ms = excluded.deleted_at_ms,
+                metadata_json = excluded.metadata_json
+            "#,
+            params![
+                link.id.to_string(),
+                link.work_record_id.to_string(),
+                link.target_type.as_str(),
+                link.target_id.to_string(),
+                link.link_type.as_str(),
+                link.confidence.as_str(),
+                optional_uuid_string(link.source_id),
+                timestamp_ms(link.timestamps.created_at),
+                timestamp_ms(link.timestamps.updated_at),
+                link.sync.visibility.as_str(),
+                link.sync.fidelity.as_str(),
+                link.sync.sync_state.as_str(),
+                link.sync.sync_version as i64,
+                optional_timestamp_ms(link.sync.deleted_at),
+                serde_json::to_string(&link.sync.metadata)?,
+            ],
+        )?;
+        self.conn
+            .query_row(
+                "SELECT id FROM work_record_links WHERE work_record_id = ?1 AND target_type = ?2 AND target_id = ?3 AND link_type = ?4",
+                params![
+                    link.work_record_id.to_string(),
+                    link.target_type.as_str(),
+                    link.target_id.to_string(),
+                    link.link_type.as_str()
+                ],
+                |row| parse_uuid(row.get::<_, String>(0)?),
+            )
+            .map_err(StoreError::from)
+    }
+
+    pub fn upsert_sync_cursor(&self, cursor: &SyncCursor) -> Result<Uuid> {
+        if let Some(existing) =
+            self.get_sync_cursor(cursor.team_id.as_deref(), &cursor.device_id, &cursor.stream)?
+        {
+            self.conn.execute(
+                r#"
+                UPDATE sync_cursors
+                SET cursor = ?1, last_synced_at_ms = ?2, updated_at_ms = ?3
+                WHERE id = ?4
+                "#,
+                params![
+                    cursor.cursor.as_str(),
+                    optional_timestamp_ms(cursor.last_synced_at),
+                    timestamp_ms(cursor.timestamps.updated_at),
+                    existing.id.to_string(),
+                ],
+            )?;
+            return Ok(existing.id);
+        }
+
+        self.conn.execute(
+            r#"
+            INSERT INTO sync_cursors
+            (id, team_id, device_id, stream, cursor, last_synced_at_ms, created_at_ms, updated_at_ms)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(team_id, device_id, stream) DO UPDATE SET
+                cursor = excluded.cursor,
+                last_synced_at_ms = excluded.last_synced_at_ms,
+                updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                cursor.id.to_string(),
+                cursor.team_id.as_deref(),
+                cursor.device_id.as_str(),
+                cursor.stream.as_str(),
+                cursor.cursor.as_str(),
+                optional_timestamp_ms(cursor.last_synced_at),
+                timestamp_ms(cursor.timestamps.created_at),
+                timestamp_ms(cursor.timestamps.updated_at),
+            ],
+        )?;
+        self.conn
+            .query_row(
+                "SELECT id FROM sync_cursors WHERE team_id IS ?1 AND device_id = ?2 AND stream = ?3",
+                params![cursor.team_id.as_deref(), cursor.device_id.as_str(), cursor.stream.as_str()],
+                |row| parse_uuid(row.get::<_, String>(0)?),
+            )
+            .map_err(StoreError::from)
+    }
+
+    pub fn get_sync_cursor(
+        &self,
+        team_id: Option<&str>,
+        device_id: &str,
+        stream: &str,
+    ) -> Result<Option<SyncCursor>> {
+        self.conn
+            .query_row(
+                "SELECT id, team_id, device_id, stream, cursor, last_synced_at_ms, created_at_ms, updated_at_ms FROM sync_cursors WHERE team_id IS ?1 AND device_id = ?2 AND stream = ?3",
+                params![team_id, device_id, stream],
+                sync_cursor_from_row,
+            )
+            .optional()
+            .map_err(StoreError::from)
     }
 
     pub fn insert_record(&self, record: &WorkRecord) -> Result<()> {
@@ -2265,6 +3049,180 @@ fn insert_evidence_artifact_link_tx(
     Ok(())
 }
 
+fn capture_source_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CaptureSource> {
+    Ok(CaptureSource {
+        id: parse_uuid(row.get::<_, String>(0)?)?,
+        descriptor: CaptureSourceDescriptor {
+            kind: parse_text_enum::<work_record_core::CaptureSourceKind>(row.get::<_, String>(1)?)?,
+            provider: parse_text_enum::<CaptureProvider>(row.get::<_, String>(2)?)?,
+            machine_id: row.get(3)?,
+            process_id: row.get::<_, Option<i64>>(4)?.map(|value| value as u32),
+            cwd: row.get(5)?,
+            raw_source_path: row.get(6)?,
+            external_session_id: row.get(7)?,
+        },
+        started_at: ms_to_time(row.get(8)?)?,
+        ended_at: optional_ms_to_time(row.get(9)?)?,
+        sync: SyncMetadata {
+            fidelity: parse_text_enum::<Fidelity>(row.get::<_, String>(10)?)?,
+            visibility: parse_text_enum::<Visibility>(row.get::<_, String>(11)?)?,
+            sync_state: parse_text_enum::<SyncState>(row.get::<_, String>(12)?)?,
+            sync_version: row.get::<_, i64>(13)? as u64,
+            deleted_at: None,
+            metadata: parse_json(row.get::<_, String>(14)?)?,
+        },
+    })
+}
+
+fn session_select_sql(tail: &str) -> String {
+    format!(
+        "SELECT id, work_record_id, parent_session_id, root_session_id, capture_source_id, provider, external_session_id, external_agent_id, agent_type, role_hint, is_primary, status, fidelity, transcript_blob_id, started_at_ms, ended_at_ms, created_at_ms, updated_at_ms, visibility, sync_state, sync_version, deleted_at_ms, metadata_json FROM sessions {tail}"
+    )
+}
+
+fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
+    Ok(Session {
+        id: parse_uuid(row.get::<_, String>(0)?)?,
+        work_record_id: parse_optional_uuid(row.get(1)?)?,
+        parent_session_id: parse_optional_uuid(row.get(2)?)?,
+        root_session_id: parse_optional_uuid(row.get(3)?)?,
+        capture_source_id: parse_optional_uuid(row.get(4)?)?,
+        provider: parse_text_enum::<CaptureProvider>(row.get::<_, String>(5)?)?,
+        external_session_id: row.get(6)?,
+        external_agent_id: row.get(7)?,
+        agent_type: parse_text_enum::<AgentType>(row.get::<_, String>(8)?)?,
+        role_hint: row.get(9)?,
+        is_primary: row.get::<_, i64>(10)? != 0,
+        status: parse_text_enum::<SessionStatus>(row.get::<_, String>(11)?)?,
+        transcript_blob_id: parse_optional_uuid(row.get(13)?)?,
+        started_at: ms_to_time(row.get(14)?)?,
+        ended_at: optional_ms_to_time(row.get(15)?)?,
+        timestamps: EntityTimestamps {
+            created_at: ms_to_time(row.get(16)?)?,
+            updated_at: ms_to_time(row.get(17)?)?,
+        },
+        sync: sync_metadata_from_row(row, 18, 12, 19, 20, 21, 22)?,
+    })
+}
+
+fn run_select_sql(tail: &str) -> String {
+    format!(
+        "SELECT id, work_record_id, session_id, run_type, status, started_at_ms, ended_at_ms, exit_code, cwd, command_preview, input_blob_id, output_blob_id, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json FROM runs {tail}"
+    )
+}
+
+fn run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Run> {
+    Ok(Run {
+        id: parse_uuid(row.get::<_, String>(0)?)?,
+        work_record_id: parse_optional_uuid(row.get(1)?)?,
+        session_id: parse_optional_uuid(row.get(2)?)?,
+        run_type: parse_text_enum::<RunType>(row.get::<_, String>(3)?)?,
+        status: parse_text_enum::<RunStatus>(row.get::<_, String>(4)?)?,
+        started_at: ms_to_time(row.get(5)?)?,
+        ended_at: optional_ms_to_time(row.get(6)?)?,
+        exit_code: row.get(7)?,
+        cwd: row.get(8)?,
+        command_preview: row.get(9)?,
+        input_blob_id: parse_optional_uuid(row.get(10)?)?,
+        output_blob_id: parse_optional_uuid(row.get(11)?)?,
+        timestamps: EntityTimestamps {
+            created_at: ms_to_time(row.get(12)?)?,
+            updated_at: ms_to_time(row.get(13)?)?,
+        },
+        source_id: parse_optional_uuid(row.get(14)?)?,
+        sync: sync_metadata_from_row(row, 15, 16, 17, 18, 19, 20)?,
+    })
+}
+
+fn event_select_sql(tail: &str) -> String {
+    format!(
+        "SELECT id, seq, work_record_id, session_id, run_id, event_type, role, occurred_at_ms, capture_source_id, payload_json, payload_blob_id, dedupe_key, visibility, redaction_state, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json FROM events {tail}"
+    )
+}
+
+fn event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
+    Ok(Event {
+        id: parse_uuid(row.get::<_, String>(0)?)?,
+        seq: row.get::<_, i64>(1)? as u64,
+        work_record_id: parse_optional_uuid(row.get(2)?)?,
+        session_id: parse_optional_uuid(row.get(3)?)?,
+        run_id: parse_optional_uuid(row.get(4)?)?,
+        event_type: parse_text_enum::<EventType>(row.get::<_, String>(5)?)?,
+        role: row
+            .get::<_, Option<String>>(6)?
+            .map(parse_text_enum::<EventRole>)
+            .transpose()?,
+        occurred_at: ms_to_time(row.get(7)?)?,
+        capture_source_id: parse_optional_uuid(row.get(8)?)?,
+        payload: parse_json(row.get::<_, String>(9)?)?,
+        payload_blob_id: parse_optional_uuid(row.get(10)?)?,
+        dedupe_key: row.get(11)?,
+        redaction_state: parse_text_enum::<RedactionState>(row.get::<_, String>(13)?)?,
+        sync: sync_metadata_from_row(row, 12, 14, 15, 16, 17, 18)?,
+    })
+}
+
+fn sync_cursor_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SyncCursor> {
+    Ok(SyncCursor {
+        id: parse_uuid(row.get::<_, String>(0)?)?,
+        team_id: row.get(1)?,
+        device_id: row.get(2)?,
+        stream: row.get(3)?,
+        cursor: row.get(4)?,
+        last_synced_at: optional_ms_to_time(row.get(5)?)?,
+        timestamps: EntityTimestamps {
+            created_at: ms_to_time(row.get(6)?)?,
+            updated_at: ms_to_time(row.get(7)?)?,
+        },
+    })
+}
+
+fn sync_metadata_from_row(
+    row: &rusqlite::Row<'_>,
+    visibility_index: usize,
+    fidelity_index: usize,
+    sync_state_index: usize,
+    sync_version_index: usize,
+    deleted_at_index: usize,
+    metadata_index: usize,
+) -> rusqlite::Result<SyncMetadata> {
+    Ok(SyncMetadata {
+        visibility: parse_text_enum::<Visibility>(row.get::<_, String>(visibility_index)?)?,
+        fidelity: parse_text_enum::<Fidelity>(row.get::<_, String>(fidelity_index)?)?,
+        sync_state: parse_text_enum::<SyncState>(row.get::<_, String>(sync_state_index)?)?,
+        sync_version: row.get::<_, i64>(sync_version_index)? as u64,
+        deleted_at: optional_ms_to_time(row.get(deleted_at_index)?)?,
+        metadata: parse_json(row.get::<_, String>(metadata_index)?)?,
+    })
+}
+
+fn optional_uuid_string(id: Option<Uuid>) -> Option<String> {
+    id.map(|id| id.to_string())
+}
+
+fn optional_timestamp_ms(value: Option<DateTime<Utc>>) -> Option<i64> {
+    value.map(timestamp_ms)
+}
+
+fn ms_to_time(value: i64) -> rusqlite::Result<DateTime<Utc>> {
+    DateTime::<Utc>::from_timestamp_millis(value).ok_or_else(|| {
+        rusqlite::Error::ToSqlConversionFailure(format!("invalid timestamp millis: {value}").into())
+    })
+}
+
+fn optional_ms_to_time(value: Option<i64>) -> rusqlite::Result<Option<DateTime<Utc>>> {
+    value.map(ms_to_time).transpose()
+}
+
+fn parse_optional_uuid(value: Option<String>) -> rusqlite::Result<Option<Uuid>> {
+    value.map(parse_uuid).transpose()
+}
+
+fn parse_json(value: String) -> rusqlite::Result<serde_json::Value> {
+    serde_json::from_str(&value)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
+}
+
 fn record_select_sql(tail: &str) -> String {
     format!(
         "SELECT id, title, body, tags_json, kind, workspace, pr_url, created_at, updated_at FROM work_records {tail}"
@@ -2343,6 +3301,10 @@ fn collect_rows<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use work_record_core::{
+        Confidence, FileChangeKind, PullRequestLinkSource, PullRequestProvider, SummaryKind,
+        VcsChangeKind, VcsHost, VcsKind, WorkRecordLinkTargetType, WorkRecordLinkType,
+    };
 
     fn tempdir() -> tempfile::TempDir {
         let root = std::env::current_dir().unwrap().join("target/test-data");
@@ -2373,6 +3335,30 @@ mod tests {
             names.iter().any(|name| name == required),
             "missing sqlite object {required}"
         );
+    }
+
+    fn fixed_time() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-06-23T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn timestamps() -> EntityTimestamps {
+        EntityTimestamps {
+            created_at: fixed_time(),
+            updated_at: fixed_time(),
+        }
+    }
+
+    fn sync_metadata() -> SyncMetadata {
+        SyncMetadata {
+            visibility: Visibility::LocalOnly,
+            fidelity: Fidelity::Imported,
+            sync_state: SyncState::LocalOnly,
+            sync_version: 0,
+            deleted_at: None,
+            metadata: serde_json::json!({"import_cursor": "cursor-1"}),
+        }
     }
 
     #[test]
@@ -2730,6 +3716,329 @@ mod tests {
         assert_eq!(work_record_id, record.id.to_string());
         assert_eq!(evidence_status, "failed");
         assert_eq!(freshness, "unbound");
+    }
+
+    #[test]
+    fn rich_storage_upserts_are_idempotent_and_queryable() {
+        let temp = tempdir();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let record = WorkRecord::new("Rich task", "provider import", Vec::new(), "task", None);
+        store.insert_record(&record).unwrap();
+
+        let source = CaptureSource {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000100").unwrap(),
+            descriptor: CaptureSourceDescriptor {
+                kind: work_record_core::CaptureSourceKind::ProviderImport,
+                provider: CaptureProvider::Codex,
+                machine_id: "machine-1".into(),
+                process_id: Some(42),
+                cwd: Some("/repo".into()),
+                raw_source_path: Some("/sessions/codex.jsonl".into()),
+                external_session_id: Some("codex-session-1".into()),
+            },
+            started_at: fixed_time(),
+            ended_at: None,
+            sync: sync_metadata(),
+        };
+        store.upsert_capture_source(&source).unwrap();
+        store.upsert_capture_source(&source).unwrap();
+        assert_eq!(
+            store
+                .capture_source_by_external_session(CaptureProvider::Codex, "codex-session-1")
+                .unwrap()
+                .unwrap()
+                .id,
+            source.id
+        );
+
+        let session = Session {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000101").unwrap(),
+            work_record_id: Some(record.id),
+            parent_session_id: None,
+            root_session_id: None,
+            capture_source_id: Some(source.id),
+            provider: CaptureProvider::Codex,
+            external_session_id: Some("codex-session-1".into()),
+            external_agent_id: Some("agent-a".into()),
+            agent_type: AgentType::Primary,
+            role_hint: Some("primary".into()),
+            is_primary: true,
+            status: SessionStatus::Imported,
+            transcript_blob_id: None,
+            started_at: fixed_time(),
+            ended_at: None,
+            timestamps: timestamps(),
+            sync: sync_metadata(),
+        };
+        store.upsert_session(&session).unwrap();
+        store.upsert_session(&session).unwrap();
+        assert_eq!(store.sessions_for_record(record.id).unwrap().len(), 1);
+
+        let run = Run {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000102").unwrap(),
+            work_record_id: Some(record.id),
+            session_id: Some(session.id),
+            run_type: RunType::Command,
+            status: RunStatus::Succeeded,
+            started_at: fixed_time(),
+            ended_at: Some(fixed_time()),
+            exit_code: Some(0),
+            cwd: Some("/repo".into()),
+            command_preview: Some("cargo test -p work-record-store".into()),
+            input_blob_id: None,
+            output_blob_id: None,
+            timestamps: timestamps(),
+            source_id: Some(source.id),
+            sync: sync_metadata(),
+        };
+        store.upsert_run(&run).unwrap();
+        store.upsert_run(&run).unwrap();
+        assert_eq!(store.runs_for_session(session.id).unwrap().len(), 1);
+
+        let workspace = VcsWorkspace {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000103").unwrap(),
+            kind: VcsKind::Git,
+            root_path: "/repo".into(),
+            repo_fingerprint: "git:repo".into(),
+            primary_remote_url_normalized: Some("https://github.com/ctxrs/ctx".into()),
+            host: VcsHost::Github,
+            owner: Some("ctxrs".into()),
+            name: Some("ctx".into()),
+            monorepo_subpath: None,
+            timestamps: timestamps(),
+            source_id: Some(source.id),
+            sync: sync_metadata(),
+        };
+        let workspace_id = store.upsert_vcs_workspace(&workspace).unwrap();
+        assert_eq!(workspace_id, workspace.id);
+        let second_workspace_id = store
+            .upsert_vcs_workspace(&VcsWorkspace {
+                id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000999").unwrap(),
+                ..workspace.clone()
+            })
+            .unwrap();
+        assert_eq!(second_workspace_id, workspace.id);
+
+        let change = VcsChange {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000104").unwrap(),
+            vcs_workspace_id: workspace_id,
+            kind: VcsChangeKind::GitCommit,
+            change_id: "abcdef".into(),
+            parent_change_ids: vec!["parent".into()],
+            branch_or_bookmark: Some("ctx/wr-finished-storage-rich".into()),
+            tree_hash: Some("tree".into()),
+            author_time: Some(fixed_time()),
+            confidence: Confidence::Explicit,
+            timestamps: timestamps(),
+            source_id: Some(source.id),
+            sync: sync_metadata(),
+        };
+        assert_eq!(store.upsert_vcs_change(&change).unwrap(), change.id);
+        assert_eq!(store.upsert_vcs_change(&change).unwrap(), change.id);
+
+        let pr = PullRequest {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000105").unwrap(),
+            vcs_workspace_id: Some(workspace_id),
+            provider: PullRequestProvider::Github,
+            url: "https://github.com/ctxrs/ctx/pull/123".into(),
+            number: Some(123),
+            owner: Some("ctxrs".into()),
+            repo: Some("ctx".into()),
+            title: Some("Rich storage".into()),
+            state: Some("open".into()),
+            head_ref: Some("ctx/wr-finished-storage-rich".into()),
+            base_ref: Some("main".into()),
+            head_sha: Some("abcdef".into()),
+            confidence: Confidence::Explicit,
+            link_source: PullRequestLinkSource::Explicit,
+            timestamps: timestamps(),
+            source_id: Some(source.id),
+            sync: sync_metadata(),
+        };
+        assert_eq!(store.upsert_pull_request(&pr).unwrap(), pr.id);
+        assert_eq!(store.upsert_pull_request(&pr).unwrap(), pr.id);
+
+        let file = FileTouched {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000106").unwrap(),
+            work_record_id: Some(record.id),
+            run_id: Some(run.id),
+            event_id: None,
+            vcs_workspace_id: Some(workspace_id),
+            path: "crates/work-record-store/src/lib.rs".into(),
+            change_kind: Some(FileChangeKind::Modified),
+            old_path: None,
+            line_count_delta: Some(120),
+            confidence: Confidence::Explicit,
+            timestamps: timestamps(),
+            source_id: Some(source.id),
+            sync: sync_metadata(),
+        };
+        store.upsert_file_touched(&file).unwrap();
+        store.upsert_file_touched(&file).unwrap();
+
+        let summary = Summary {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000107").unwrap(),
+            work_record_id: Some(record.id),
+            session_id: Some(session.id),
+            kind: SummaryKind::ImportedProviderSummary,
+            model_or_source: Some("codex".into()),
+            text: "Implemented rich storage APIs".into(),
+            citations: Vec::new(),
+            timestamps: timestamps(),
+            source_id: Some(source.id),
+            sync: sync_metadata(),
+        };
+        store.upsert_summary(&summary).unwrap();
+        store.upsert_summary(&summary).unwrap();
+
+        let link = WorkRecordLink {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000108").unwrap(),
+            work_record_id: record.id,
+            target_type: WorkRecordLinkTargetType::PullRequest,
+            target_id: pr.id,
+            link_type: WorkRecordLinkType::PublishedTo,
+            confidence: Confidence::Explicit,
+            source_id: Some(source.id),
+            timestamps: timestamps(),
+            sync: sync_metadata(),
+        };
+        assert_eq!(store.upsert_work_record_link(&link).unwrap(), link.id);
+        assert_eq!(store.upsert_work_record_link(&link).unwrap(), link.id);
+
+        for table in [
+            "capture_sources",
+            "sessions",
+            "runs",
+            "vcs_workspaces",
+            "vcs_changes",
+            "pull_requests",
+            "files_touched",
+            "summaries",
+            "work_record_links",
+        ] {
+            let count: i64 = store
+                .conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 1, "{table} should be idempotent");
+        }
+    }
+
+    #[test]
+    fn provider_event_upsert_dedupes_by_provider_session_index_and_hash() {
+        let temp = tempdir();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let record = WorkRecord::new("Events", "dedupe", Vec::new(), "task", None);
+        store.insert_record(&record).unwrap();
+        let dedupe_key =
+            Store::provider_event_dedupe_key(CaptureProvider::Codex, "codex-session-1", 7, "hash");
+        let event = Event {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000202").unwrap(),
+            seq: 7,
+            work_record_id: Some(record.id),
+            session_id: None,
+            run_id: None,
+            event_type: EventType::Message,
+            role: Some(EventRole::Assistant),
+            occurred_at: fixed_time(),
+            capture_source_id: None,
+            payload: serde_json::json!({
+                "text": "hello",
+                "provider_index": 7,
+                "payload_hash": "hash"
+            }),
+            payload_blob_id: None,
+            dedupe_key: Some(dedupe_key.clone()),
+            redaction_state: RedactionState::SafePreview,
+            sync: sync_metadata(),
+        };
+
+        let first_id = store.upsert_event(&event).unwrap();
+        let second_id = store
+            .upsert_event(&Event {
+                id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000299").unwrap(),
+                payload: serde_json::json!({"text": "updated"}),
+                ..event.clone()
+            })
+            .unwrap();
+        assert_eq!(first_id, second_id);
+        assert_eq!(store.event_id_by_dedupe_key(&dedupe_key).unwrap(), first_id);
+
+        let count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        let stored_payload: String = store
+            .conn
+            .query_row(
+                "SELECT payload_json FROM events WHERE id = ?1",
+                params![first_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stored_payload.contains("updated"));
+    }
+
+    #[test]
+    fn sync_cursor_roundtrips_source_position_metadata() {
+        let temp = tempdir();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let cursor = SyncCursor {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000300").unwrap(),
+            team_id: Some("local-import".into()),
+            device_id: "device-1".into(),
+            stream: "provider:codex".into(),
+            cursor: "line:42".into(),
+            last_synced_at: Some(fixed_time()),
+            timestamps: timestamps(),
+        };
+        let cursor_id = store.upsert_sync_cursor(&cursor).unwrap();
+        let updated_id = store
+            .upsert_sync_cursor(&SyncCursor {
+                cursor: "line:43".into(),
+                ..cursor.clone()
+            })
+            .unwrap();
+
+        assert_eq!(cursor_id, updated_id);
+        let stored = store
+            .get_sync_cursor(Some("local-import"), "device-1", "provider:codex")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.id, cursor.id);
+        assert_eq!(stored.cursor, "line:43");
+        assert_eq!(stored.last_synced_at, Some(fixed_time()));
+
+        let local_cursor = SyncCursor {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000301").unwrap(),
+            team_id: None,
+            device_id: "device-1".into(),
+            stream: "provider:claude".into(),
+            cursor: "offset:1".into(),
+            last_synced_at: None,
+            timestamps: timestamps(),
+        };
+        let local_id = store.upsert_sync_cursor(&local_cursor).unwrap();
+        let local_updated_id = store
+            .upsert_sync_cursor(&SyncCursor {
+                id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000302").unwrap(),
+                cursor: "offset:2".into(),
+                ..local_cursor
+            })
+            .unwrap();
+        assert_eq!(local_id, local_updated_id);
+        let local_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sync_cursors WHERE team_id IS NULL AND device_id = 'device-1' AND stream = 'provider:claude'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(local_count, 1);
     }
 
     #[test]
