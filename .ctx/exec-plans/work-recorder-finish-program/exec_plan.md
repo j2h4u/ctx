@@ -38,13 +38,13 @@ Important code paths and branches seen before this plan:
 
 ## Active Orchestration State
 
-Last updated: 2026-06-23T16:26:30Z by the primary session.
+Last updated: 2026-06-23T17:57:00Z by the primary session.
 
 Canonical public integration target:
 
 - Repo/worktree: `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
 - Branch: `work-record`
-- Current local head before the finish-program integration checkpoint: `7f71c09`
+- Current local head after the finish-program local completion pass: `4338871`
 - Remote: `origin` = `https://github.com/ctxrs/ctx.git`
 - Dirty state at reorientation: README, CLI, capture, report, store, docs, and check/release scripts had uncommitted hardening changes. These changes include provider fixture fail-closed behavior, share-safe CLI/report surfaces, archive/blob conflict hardening, release certificate validation, dogfood artifact sanitizer changes, and a shim scratch-space fix for `/tmp` quota pressure.
 - Local validation completed before this plan update: `./scripts/check.sh fmt check clippy`, full Work Recorder library tests, full CLI integration tests after the shim scratch-space fix. Broader docs/product lanes still need rerun after final integration.
@@ -53,8 +53,8 @@ Canonical private hosted target:
 
 - Repo/worktree: `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx-private/work-recorder-hosted-team`
 - Branch: `ctx/work-recorder-hosted-team`
-- Current local head from inventory: `006e25706`
-- Remote tracking: `origin/dev`, ahead 5 at inventory time.
+- Current local head after hosted blob policy hardening: `1b59e67f7`
+- Remote tracking: `origin/dev`, ahead 8 at last local status.
 
 Relevant existing public source branches/worktrees to inspect or integrate:
 
@@ -417,3 +417,13 @@ Do not report final completion until all are true:
   - Result: PASS. This includes fmt, docs, cargo check, clippy, cargo test, examples, Buildkite pipeline contract, provider fixture imports, rich search/context, React dashboard/report artifact review, PR publish dry-run, security archive fixtures, jj blocker/status lane, installer dry-run smoke, and completion-certificate self-test.
   - Additional dashboard validation on integrated head: `npm ci`, `npm run build`, Playwright 8-test screenshot suite, `cargo-lowio test -p work-record-report`, and CLI dashboard tests passed. Final screenshots are in `target/ctx-artifacts/dashboard-react/`.
   - Follow-up fix `a021915` updates dashboard redaction corpus testing to inspect parsed React dashboard DTO string fields while still scanning serialized DTO output for raw leaks.
+- 2026-06-23T17:57Z: Second finish-program pass reached local green on public head `4338871` and private head `1b59e67f7`.
+  - Public commits after `a021915`: `55bf4eb` dashboard docs truth fix, `3c653c4` launch wording polish, `631b56e` dashboard visual polish, `fa85f0e` passive capture/provider discovery setup, `7607a12` VCS evidence freshness/device-workspace identity/typed PR metadata foundation, `d78c925` post-integration validation fixes, and `4338871` report/dashboard freshness revalidation plus partial PR relink metadata preservation.
+  - Private hosted commit: `1b59e67f7` requires redaction and visibility metadata for direct hosted blob uploads, rejects headerless/raw/full-sync blob uploads, and documents hosted as staging/local-only rather than a production hosted/team launch.
+  - Dashboard validation: `npm run build` passed; Playwright screenshot suite passed 8/8 with local Chrome. Manual and adversarial review passed for `target/ctx-artifacts/dashboard-react/mobile-mobile-status-search.png`, `target/ctx-artifacts/dashboard-react/mobile-mobile-evidence-failure.png`, and `target/ctx-artifacts/dashboard-react/desktop-mobile-evidence-failure.png`; active mobile tab state, deduped PR links/counts, and failure styling were verified.
+  - Public focused validation after integration: docs passed; CLI integration tests passed 48/48; `work-record-store` passed 41/41; `work-record-capture`, `work-record-report`, and `work-record-vcs` passed; `git diff --check` passed.
+  - Public full local gate: `TMPDIR=$PWD/target/tmp CARGO=cargo-lowio CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 CTX_ARTIFACT_DIR=target/ctx-artifacts/check-all-final-local-2 ./scripts/check.sh all` passed. The gate covered fmt, docs, check, clippy, full tests, examples, Buildkite pipeline contract, provider fixture imports, rich search/context, dashboard/report artifact review, PR publish dry-run, security archive fixtures, jj blocker/status lane, installer dry-run smoke, and completion-certificate self-test.
+  - Private focused validation from the hosted worker passed: `pnpm -C work-recorder-worker typecheck`, `pnpm -C work-recorder-worker test` with 30 tests, `pnpm -C work-recorder-worker readiness:check:local`, and `git diff --check`.
+  - Second-pass reviews: CI/release/SDLC PASS; dashboard visual PASS; hosted staging PASS for local-only/staging scope; security/privacy PASS; provider/capture/VCS PASS; architecture initially BLOCKED on stale freshness export and PR metadata downgrades, then PASS after `4338871`.
+  - Accepted launch-scope boundaries still in force: hosted/team production launch remains out of scope and private staging-only; Claude/Pi native provider hooks remain unsupported and documented; Codex native history is explicit prompt-only `summary_only`; FreeBSD native release remains a documented blocker lane unless a runner is provisioned; public release publishing/signing/notarization/SBOM/provenance remain non-publishing dry-run evidence until a release decision.
+  - Remaining before final certification: push `ctxrs/ctx` branch `work-record` and `ctxrs/ctx-private` branch `ctx/work-recorder-hosted-team`; run/monitor Buildkite for the pushed public head; update this plan with Buildkite URLs/results; run the final completion-certifier subagent against the pushed heads, Buildkite evidence, screenshots, docs, and private hosted scope.
