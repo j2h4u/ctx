@@ -660,6 +660,18 @@ run_completion_certificate_candidate_metadata_if_possible() {
   fi
 }
 
+run_completion_certificate_r2_staging_smoke_if_possible() {
+  local root="$1"
+
+  if [[ -s "${root}/artifacts/buildkite/release-candidate/ctx-release-metadata.env" \
+    && -s "${root}/artifacts/buildkite/release-candidate/release-candidate-manifest.json" \
+    && -s "${root}/artifacts/buildkite/release-candidate/r2-upload-plan.md" ]]; then
+    CTX_ARTIFACT_DIR="${root}/artifacts/buildkite/r2-staging-smoke" \
+      bash scripts/release-r2-staging-smoke.sh \
+        "${root}/artifacts/buildkite/release-candidate"
+  fi
+}
+
 run_completion_certificate() {
   local root="${CTX_ARTIFACT_DIR}/completion-evidence-root"
 
@@ -668,6 +680,7 @@ run_completion_certificate() {
   run_completion_certificate_prerequisites "${root}"
   run_completion_certificate_release_prerequisites "${root}"
   run_completion_certificate_candidate_metadata_if_possible "${root}"
+  run_completion_certificate_r2_staging_smoke_if_possible "${root}"
 
   CTX_COMPLETION_EVIDENCE_ROOT="${root}" bash scripts/release-completion-certificate.sh
 }
@@ -689,6 +702,7 @@ run_completion_certificate_self_test() {
     bash scripts/release-candidate-metadata.sh \
       "${root}/artifacts/buildkite/release-dry-run" \
       "${root}/artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json"
+  run_completion_certificate_r2_staging_smoke_if_possible "${root}"
 
   CTX_COMPLETION_CERTIFICATE_ALLOW_SELF_TEST_FIXTURES=1 \
     CTX_COMPLETION_EVIDENCE_ROOT="${root}" \

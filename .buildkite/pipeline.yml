@@ -181,7 +181,7 @@ steps:
   - label: ":satellite: gated live provider E2E"
     key: "provider-live-e2e-gated"
     depends_on: "provider-live-e2e-lanes"
-    if: build.env("CTX_LIVE_PROVIDER_E2E") == "1"
+    if: build.env("CTX_LIVE_PROVIDER_E2E") == "1" && (build.env("CTX_LIVE_PROVIDER_CODEX") == "1" || build.env("CTX_LIVE_PROVIDER_CLAUDE_CODE") == "1" || build.env("CTX_LIVE_PROVIDER_PI") == "1" || build.env("CTX_LIVE_PROVIDER_OPEN_CODE") == "1" || build.env("CTX_LIVE_PROVIDER_ANTIGRAVITY_CLI") == "1" || build.env("CTX_LIVE_PROVIDER_GEMINI_CLI") == "1" || build.env("CTX_LIVE_PROVIDER_CURSOR") == "1")
     command: "CTX_ARTIFACT_DIR=artifacts/buildkite/provider-live-e2e ./scripts/release-provider-live-e2e-lanes.sh run-selected"
     agents:
       queue: "release-linux-managed"
@@ -561,6 +561,64 @@ steps:
       - "artifacts/buildkite/release-candidate/*"
       - "artifacts/buildkite/release-candidate/**/*"
 
+  - label: ":cloudflare: R2 staging smoke"
+    key: "r2-staging-smoke"
+    depends_on: "release-candidate-metadata"
+    command: |
+      normalize_downloaded_artifact_paths() {
+        local file rel normalized normalized_dir conflict_path
+
+        while IFS= read -r -d '' file; do
+          rel="$${file#./}"
+          normalized="$${rel//\\//}"
+          if [[ "$${normalized}" == "$${rel}" ]]; then
+            continue
+          fi
+
+          normalized_dir="$$(dirname "$${normalized}")"
+          mkdir -p "$${normalized_dir}"
+          if [[ -e "$${normalized}" ]]; then
+            if cmp -s "$${file}" "$${normalized}"; then
+              rm -f "$${file}"
+            else
+              conflict_path="$${normalized}.windows-path-conflict"
+              mv "$${file}" "$${conflict_path}"
+              printf 'conflicting downloaded artifact path: %s -> %s; kept %s\n' "$${rel}" "$${normalized}" "$${conflict_path}" >&2
+            fi
+          else
+            mv "$${file}" "$${normalized}"
+          fi
+        done < <(find . -type f -name '*\\*' -print0)
+      }
+
+      download_artifacts() {
+        local prefix="$$1"
+        local windows_prefix
+
+        windows_prefix="$${prefix//\//\\}"
+
+        buildkite-agent artifact download "$${prefix}/*" . || true
+        buildkite-agent artifact download "$${prefix}/**/*" . || true
+        if [[ "$${windows_prefix}" != "$${prefix}" ]]; then
+          buildkite-agent artifact download "$${windows_prefix}\\*" . || true
+          buildkite-agent artifact download "$${windows_prefix}\\**\\*" . || true
+        fi
+        normalize_downloaded_artifact_paths
+      }
+
+      download_artifacts "artifacts/buildkite/release-candidate"
+      CTX_ARTIFACT_DIR=artifacts/buildkite/r2-staging-smoke ./scripts/release-r2-staging-smoke.sh \
+        artifacts/buildkite/release-candidate
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 5
+    artifact_paths:
+      - "artifacts/buildkite/r2-staging-smoke/*"
+      - "artifacts/buildkite/r2-staging-smoke/**/*"
+
   - label: ":clipboard: completion certificate"
     key: "release-completion-certificate"
     depends_on:
@@ -570,6 +628,7 @@ steps:
       - "release-dry-run-windows-x64"
       - "freebsd-x64-blocker"
       - "release-candidate-metadata"
+      - "r2-staging-smoke"
       - "product-decisions"
       - "provider-fixtures"
       - "provider-live-e2e-lanes"
@@ -628,6 +687,7 @@ steps:
       download_artifacts "artifacts/buildkite/release-dry-run/windows-x64"
       download_artifacts "artifacts/buildkite/release-blockers/freebsd-x64"
       download_artifacts "artifacts/buildkite/release-candidate"
+      download_artifacts "artifacts/buildkite/r2-staging-smoke"
       download_artifacts "artifacts/buildkite/finished-product/product-decisions"
       download_artifacts "artifacts/buildkite/finished-product/provider-fixtures"
       download_artifacts "artifacts/buildkite/provider-live-e2e-lanes"

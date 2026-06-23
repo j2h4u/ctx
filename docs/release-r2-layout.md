@@ -4,6 +4,10 @@ Status: non-publishing release-candidate infrastructure for `ctx` `0.1.0`.
 Do not repoint `ctx.rs/install`, publish `ctx.rs`, or promote an R2 object path
 to a production URL without explicit approval.
 
+This layout is a staging plan until `r2-staging-smoke.json` records an approved
+upload and installer smoke. Normal CI writes `upload_performed: false` and keeps
+the completion certificate launch-blocked.
+
 Release dry-run lanes produce platform artifacts under Buildkite. The release
 candidate metadata lane downloads those artifacts, verifies each SHA-256 digest,
 and writes a staging upload plan.
@@ -53,6 +57,8 @@ bash artifacts/buildkite/release-candidate/r2-upload-commands.sh
 
 The generated upload script uses `wrangler r2 object put`. It does not upload
 install redirect files, does not touch DNS, and does not modify `ctx.rs/install`.
+Normal CI validates the script and cleanup plan with
+`scripts/release-r2-staging-smoke.sh`; it does not execute the upload script.
 
 ## Installer Smoke
 

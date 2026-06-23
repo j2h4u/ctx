@@ -2,6 +2,9 @@
 
 - Schema version: `1`
 - Program: `ctx-records-release-candidate`
+- Release candidate status: `${release_candidate_status}`
+- Launch ready: `${launch_ready}`
+- Evidence verification scope: `${evidence_verification_scope}`
 - Repository: `ctxrs/ctx`
 - Git commit: `${git_commit}`
 - Git branch: `${git_branch}`
@@ -23,6 +26,7 @@
 - FreeBSD x64 blocker artifact: `${freebsd_x64_blocker}`
 - Release candidate metadata: `${release_candidate_metadata}`
 - Release candidate R2 upload plan: `${release_candidate_r2_upload_plan}`
+- R2 staging smoke artifact: `${r2_staging_smoke}`
 - Product decision regression artifact: `${product_decision_regressions_artifact}`
 - Provider fixture import artifact: `${provider_fixtures_artifact}`
 - Provider live E2E lane definitions: `${provider_live_e2e_lane_definitions}`
@@ -39,7 +43,9 @@
 
 ## External Release Blockers
 
+- This certificate is not a release approval and does not certify a real public RC until every blocker below is replaced by explicit PASS evidence.
 - FreeBSD native release lane requires a documented native `freebsd-x64` Buildkite queue or a separately proven cross-build lane.
+- R2 object upload and public HTTPS installer smoke require approved credentials and an explicit manager-run command; normal CI validates the staging plan only.
 - Provider live E2E lanes are defined but remain opt-in; providers cannot be marked `supported-live` without real lane artifacts.
 - Full jj e2e validation requires a runner image with `jj` installed; the CI lane records availability and blocker status without installing external tools.
 - Production release publication requires final release metadata with non-placeholder SHA-256 checksums for every published artifact.

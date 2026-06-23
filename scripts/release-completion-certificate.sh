@@ -329,6 +329,8 @@ validate_release_candidate_metadata() {
 
   require_manifest_value "${manifest}" ".schema_version" "1" "release candidate manifest records schema version"
   require_manifest_value "${manifest}" ".kind" "ctx_release_candidate" "release candidate manifest records kind"
+  require_manifest_value "${manifest}" ".release_candidate_status" "staging_plan_only" "release candidate manifest records staging-plan-only status"
+  require_manifest_value "${manifest}" ".launch_ready" "false" "release candidate manifest records launch-blocked status"
   require_manifest_value "${manifest}" ".publishing" "false" "release candidate manifest records non-publishing status"
   require_manifest_value "${manifest}" ".package" "ctx" "release candidate manifest records package"
   require_manifest_value "${manifest}" ".version" "0.1.0" "release candidate manifest records 0.1.0"
@@ -336,6 +338,7 @@ validate_release_candidate_metadata() {
   require_manifest_current_head "${manifest}" "release candidate manifest records current head"
   require_manifest_value "${manifest}" ".r2.bucket" "$(env_value "${metadata}" CTX_RELEASE_R2_BUCKET)" "release candidate manifest records R2 bucket"
   require_manifest_value "${manifest}" ".r2.prefix" "$(env_value "${metadata}" CTX_RELEASE_R2_PREFIX)" "release candidate manifest records R2 prefix"
+  require_manifest_value "${manifest}" ".r2.upload_performed" "false" "release candidate manifest records R2 upload not performed"
 
   require_env_key "${metadata}" "CTX_RELEASE_SCHEMA_VERSION" "1"
   require_env_key "${metadata}" "CTX_RELEASE_VERSION" "0.1.0"
@@ -459,6 +462,12 @@ validate_evidence() {
   require_manifest_value "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" ".publishing" "false" "FreeBSD blocker records non-publishing status"
   require_manifest_current_head "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" "FreeBSD blocker records current head"
   validate_release_candidate_metadata
+  require_summary_status "artifacts/buildkite/r2-staging-smoke/r2-staging-smoke.json" "r2-staging-smoke"
+  require_manifest_value "artifacts/buildkite/r2-staging-smoke/r2-staging-smoke.json" ".kind" "ctx_r2_staging_smoke" "R2 staging smoke records kind"
+  require_manifest_value "artifacts/buildkite/r2-staging-smoke/r2-staging-smoke.json" ".upload_performed" "false" "R2 staging smoke records non-uploading CI posture"
+  require_manifest_value "artifacts/buildkite/r2-staging-smoke/r2-staging-smoke.json" ".no_ctx_rs_cutover" "true" "R2 staging smoke records no ctx.rs cutover"
+  require_manifest_value "artifacts/buildkite/r2-staging-smoke/r2-staging-smoke.json" ".validated_upload_object_count" "9" "R2 staging smoke validates upload object count"
+  require_contains "artifacts/buildkite/r2-staging-smoke/r2-staging-smoke.md" "R2 object upload and public HTTPS smoke require approved credentials" "R2 staging smoke records upload blocker"
   require_summary_status "artifacts/buildkite/finished-product/product-decisions/product-decisions.json" "product-decisions"
   require_summary_status "artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json" "provider-fixtures"
   validate_provider_live_e2e_lanes
@@ -501,6 +510,9 @@ write_certificate() {
 
 - Schema version: \`1\`
 - Program: \`ctx-records-release-candidate\`
+- Release candidate status: \`blocked-staging-plan-only\`
+- Launch ready: \`false\`
+- Evidence verification scope: \`non-publishing CI scaffolding and blocker evidence only\`
 - Repository: \`ctxrs/ctx\`
 - Git commit: \`${commit}\`
 - Git branch: \`${branch}\`
@@ -522,6 +534,7 @@ write_certificate() {
 - FreeBSD x64 blocker artifact: \`artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json\`
 - Release candidate metadata: \`artifacts/buildkite/release-candidate/ctx-release-metadata.env\`
 - Release candidate R2 upload plan: \`artifacts/buildkite/release-candidate/r2-upload-plan.md\`
+- R2 staging smoke artifact: \`artifacts/buildkite/r2-staging-smoke/r2-staging-smoke.json\`
 - Product decision regression artifact: \`artifacts/buildkite/finished-product/product-decisions/product-decisions.json\`
 - Provider fixture import artifact: \`artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json\`
 - Provider live E2E lane definitions: \`artifacts/buildkite/provider-live-e2e-lanes/provider-live-e2e-lanes.json\`
@@ -538,7 +551,9 @@ write_certificate() {
 
 ## External Release Blockers
 
+- This certificate is not a release approval and does not certify a real public RC until every blocker below is replaced by explicit PASS evidence.
 - FreeBSD native release lane requires a documented native \`freebsd-x64\` Buildkite queue or a separately proven cross-build lane.
+- R2 object upload and public HTTPS installer smoke require approved credentials and an explicit manager-run command; normal CI validates the staging plan only.
 - Provider live E2E lanes are defined but remain opt-in; providers cannot be marked \`supported-live\` without real lane artifacts.
 - Full jj e2e validation requires a runner image with \`jj\` installed; the CI lane records availability and blocker status without installing external tools.
 - Production release publication requires final release metadata with non-placeholder SHA-256 checksums for every published artifact.
@@ -550,6 +565,10 @@ EOF
   "schema_version": 1,
   "kind": "ctx_completion_certificate",
   "program": "ctx-records-release-candidate",
+  "release_candidate_status": "blocked-staging-plan-only",
+  "launch_ready": false,
+  "release_approval": false,
+  "evidence_verification_scope": "non-publishing CI scaffolding and blocker evidence only",
   "repository": "ctxrs/ctx",
   "publishing": false,
   "git_commit": "$(ctx_json_escape "${commit}")",
@@ -570,6 +589,7 @@ EOF
     "release_candidate_metadata": "artifacts/buildkite/release-candidate/ctx-release-metadata.env",
     "release_candidate_manifest": "artifacts/buildkite/release-candidate/release-candidate-manifest.json",
     "release_candidate_r2_upload_plan": "artifacts/buildkite/release-candidate/r2-upload-plan.md",
+    "r2_staging_smoke": "artifacts/buildkite/r2-staging-smoke/r2-staging-smoke.json",
     "product_decision_regressions": "artifacts/buildkite/finished-product/product-decisions/product-decisions.json",
     "provider_fixture_import": "artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json",
     "provider_live_e2e_lane_definitions": "artifacts/buildkite/provider-live-e2e-lanes/provider-live-e2e-lanes.json",
@@ -584,9 +604,12 @@ EOF
     "release_r2_layout_docs": "docs/release-r2-layout.md",
     "freebsd_release_worker_notes": "docs/freebsd-release-worker.md"
   },
-  "evidence_verified": true,
+  "evidence_verified": false,
+  "evidence_scaffold_verified": true,
   "external_release_blockers": [
+    "This certificate is not a release approval and does not certify a real public RC until every blocker below is replaced by explicit PASS evidence.",
     "FreeBSD native release lane requires a documented native freebsd-x64 Buildkite queue or a separately proven cross-build lane.",
+    "R2 object upload and public HTTPS installer smoke require approved credentials and an explicit manager-run command; normal CI validates the staging plan only.",
     "Provider live E2E lanes are defined but remain opt-in; providers cannot be marked supported-live without real lane artifacts.",
     "Full jj e2e validation requires a runner image with jj installed; the CI lane records availability and blocker status without installing external tools.",
     "Production release publication requires final release metadata with non-placeholder SHA-256 checksums for every published artifact.",

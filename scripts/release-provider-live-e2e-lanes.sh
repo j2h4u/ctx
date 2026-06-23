@@ -92,7 +92,9 @@ write_lane_definitions() {
       env_name="$(provider_env_name "${provider}")"
       display="$(provider_display_name "${provider}")"
       secret_scope="$(provider_secret_scope "${provider}")"
-      printf '%s' "${comma}"
+      if [[ -n "${comma}" ]]; then
+        printf ',\n'
+      fi
       printf '    {\n'
       printf '      "provider": "%s",\n' "$(ctx_json_escape "${provider}")"
       printf '      "display_name": "%s",\n' "$(ctx_json_escape "${display}")"
@@ -108,7 +110,7 @@ write_lane_definitions() {
       printf '      "default_status": "blocked_until_provider_runner_exists",\n'
       printf '      "support_matrix_gate": "docs/provider-support-matrix.json must not mark this provider supported-live without a real live-e2e artifact"\n'
       printf '    }'
-      comma=',\n'
+      comma=','
     done < <(provider_ids)
     printf '\n'
     printf '  ]\n'

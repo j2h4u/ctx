@@ -1,7 +1,9 @@
 # Release Install
 
 Status: this is the `0.1.0` candidate installer contract for a future public
-release.
+release. It is not launch-ready until R2 upload, public HTTPS installer smoke,
+SBOM/provenance/signing/notarization decisions, and provider live evidence or
+accepted blockers are recorded in the completion certificate.
 The URLs below are placeholders until release artifacts are actually published;
 do not present them as live installer URLs or as a working `ctx.rs/install`
 endpoint.

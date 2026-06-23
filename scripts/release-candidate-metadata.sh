@@ -200,6 +200,8 @@ write_candidate_metadata() {
     printf '{\n'
     printf '  "schema_version": 1,\n'
     printf '  "kind": "ctx_release_candidate",\n'
+    printf '  "release_candidate_status": "staging_plan_only",\n'
+    printf '  "launch_ready": false,\n'
     printf '  "publishing": false,\n'
     printf '  "package": "ctx",\n'
     printf '  "version": "%s",\n' "$(ctx_json_escape "${version}")"
@@ -213,6 +215,7 @@ write_candidate_metadata() {
     printf '    "bucket": "%s",\n' "$(ctx_json_escape "${bucket}")"
     printf '    "prefix": "%s",\n' "$(ctx_json_escape "${prefix}")"
     printf '    "public_base_url": "%s",\n' "$(ctx_json_escape "${public_base_url%/}")"
+    printf '    "upload_performed": false,\n'
     printf '    "metadata_object_key": "%s/ctx-release-metadata.env",\n' "$(ctx_json_escape "${prefix}")"
     printf '    "checksums_object_key": "%s/checksums.sha256",\n' "$(ctx_json_escape "${prefix}")"
     printf '    "manifest_object_key": "%s/release-candidate-manifest.json"\n' "$(ctx_json_escape "${prefix}")"
