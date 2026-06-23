@@ -1192,6 +1192,26 @@ None accepted yet.
   - trigger and monitor a fresh public Buildkite run proving Windows smoke and
     Windows release dry-run.
 
+## 2026-06-23 Buildkite Windows w64devkit Libgcc Follow-Up
+
+- Build 56:
+  <https://buildkite.com/luca-king/ctx-public-release-verification/builds/56>
+- Branch/head:
+  `work-record` / `dbf082288b5e34e06fadc3eb372ebeafcb9e9195`
+- Outcome:
+  - Windows smoke successfully extracted w64devkit with `7zr.exe` and found
+    `gcc.exe`;
+  - FAIL: Rust GNU linking still requested `-lgcc_eh`, which w64devkit does
+    not provide as a separate archive.
+- Repo-owned remediation:
+  - create `libgcc.a` and `libgcc_eh.a` compatibility archives with
+    w64devkit `ar`;
+  - add the compatibility directory to `LIBRARY_PATH` and `RUSTFLAGS`.
+- Remaining external evidence gap:
+  - commit and push the w64devkit libgcc compatibility remediation;
+  - trigger and monitor a fresh public Buildkite run proving Windows smoke and
+    Windows release dry-run.
+
 ## 2026-06-23 Buildkite Windows w64devkit 7zr Follow-Up
 
 - Build 55:
@@ -1210,5 +1230,34 @@ None accepted yet.
     discovery.
 - Remaining external evidence gap:
   - commit and push the 7zr extraction remediation;
+  - trigger and monitor a fresh public Buildkite run proving Windows smoke and
+    Windows release dry-run.
+
+## 2026-06-23 Buildkite Windows w64devkit libgcc_eh Follow-Up
+
+- Build 56:
+  <https://buildkite.com/luca-king/ctx-public-release-verification/builds/56>
+- Branch/head:
+  `work-record` / `dbf082288b5e34e06fadc3eb372ebeafcb9e9195`
+- Outcome:
+  - PASS before Windows failure: pipeline contract, format/docs checks, Cargo
+    check, clippy, Rust tests, examples, Bazel, macOS smoke x64, and macOS
+    smoke arm64;
+  - Windows smoke downloaded standalone `7zr.exe`, extracted
+    `w64devkit-x64-2.8.0.7z.exe`, discovered `bin\gcc.exe`, and reached Rust
+    build-script linking;
+  - FAIL: Rust GNU linked with w64devkit `gcc.exe` but requested `-lgcc_eh`;
+    the cached w64devkit bundle exposed `libgcc.a` but not a separate
+    `libgcc_eh.a` archive at the GCC library search path.
+- Repo-owned remediation:
+  - add an idempotent Windows CI compatibility helper that asks `gcc` for
+    `-print-libgcc-file-name`, then provisions `libgcc_eh.a` beside
+    `libgcc.a` inside the Buildkite/ctx tool cache when the bundle omits it;
+  - keep the Cargo linker, `CC`, `CXX`, and `AR` pointed at w64devkit so the
+    Windows GNU lane continues to use a real GCC/MinGW runtime;
+  - add a pipeline contract assertion for the `libgcc_eh.a` compatibility
+    guard.
+- Remaining external evidence gap:
+  - commit and push the compatibility remediation;
   - trigger and monitor a fresh public Buildkite run proving Windows smoke and
     Windows release dry-run.

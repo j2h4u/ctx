@@ -279,6 +279,39 @@ function Write-Tool-Wrapper {
   Set-Content -Path $Path -Value $Command -Encoding ascii
 }
 
+function Ensure-MinGW-LibgccEh-Compatibility {
+  param(
+    [string]$MingwRoot,
+    [string]$Gcc
+  )
+
+  $libgccOutput = & $Gcc -print-libgcc-file-name
+  if ($LASTEXITCODE -ne 0) {
+    throw "failed to locate libgcc with $Gcc -print-libgcc-file-name"
+  }
+
+  $libgccPath = [string]($libgccOutput | Select-Object -First 1)
+  if (-not [string]::IsNullOrWhiteSpace($libgccPath)) {
+    $libgccPath = $libgccPath.Trim()
+  }
+
+  if ([string]::IsNullOrWhiteSpace($libgccPath) -or -not (Test-Path $libgccPath)) {
+    $libgcc = Get-ChildItem -Path $MingwRoot -Recurse -File -Filter "libgcc.a" |
+      Select-Object -First 1
+    if (-not $libgcc) {
+      throw "w64devkit did not provide libgcc.a under $MingwRoot"
+    }
+    $libgccPath = $libgcc.FullName
+  }
+
+  $libgccDir = Split-Path -Parent $libgccPath
+  $libgccEh = Join-PathSafe $libgccDir "libgcc_eh.a"
+  if (-not (Test-Path $libgccEh)) {
+    Copy-Item -Force -Path $libgccPath -Destination $libgccEh
+    Write-Host "Provisioned missing Rust GNU compatibility archive: $libgccEh"
+  }
+}
+
 function Ensure-MinGW-GNU-Build-Environment {
   if ($env:CTX_EXPECT_HOST_TRIPLE -ne "x86_64-pc-windows-gnu") {
     return
@@ -293,6 +326,7 @@ function Ensure-MinGW-GNU-Build-Environment {
   $mingwGcc = Join-PathSafe $mingwBin "gcc.exe"
   $mingwGxx = Join-PathSafe $mingwBin "g++.exe"
   $mingwAr = Join-PathSafe $mingwBin "ar.exe"
+  $compatLib = Join-PathSafe $mingwCache "compat-libgcc"
   $archive = Join-PathSafe $mingwCache "$mingwName.7z.exe"
   $sevenZip = Join-PathSafe $mingwCache "7zr.exe"
   New-Item -ItemType Directory -Force -Path $mingwCache | Out-Null
@@ -335,10 +369,25 @@ function Ensure-MinGW-GNU-Build-Environment {
     }
   }
 
+  New-Item -ItemType Directory -Force -Path $compatLib | Out-Null
+  foreach ($lib in @("libgcc.a", "libgcc_eh.a")) {
+    $libPath = Join-PathSafe $compatLib $lib
+    if (-not (Test-Path $libPath)) {
+      & $mingwAr rcs $libPath
+      if ($LASTEXITCODE -ne 0) {
+        throw "failed to create w64devkit compatibility archive: $libPath"
+      }
+    }
+  }
+
+  Ensure-MinGW-LibgccEh-Compatibility -MingwRoot $mingwRoot -Gcc $mingwGcc
+
   $env:CC_x86_64_pc_windows_gnu = $mingwGcc
   $env:CXX_x86_64_pc_windows_gnu = $mingwGxx
   $env:AR_x86_64_pc_windows_gnu = $mingwAr
   $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = $mingwGcc
+  $env:LIBRARY_PATH = if ($env:LIBRARY_PATH) { "$compatLib;$env:LIBRARY_PATH" } else { $compatLib }
+  $env:RUSTFLAGS = if ($env:RUSTFLAGS) { "$env:RUSTFLAGS -L native=$compatLib" } else { "-L native=$compatLib" }
   $env:PATH = "$mingwBin;$env:PATH"
   Write-Host "Windows GNU build tools: w64devkit=$mingwRoot linker=$mingwGcc"
 }

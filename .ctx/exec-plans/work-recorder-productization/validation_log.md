@@ -1778,6 +1778,28 @@ Future entries must include:
   - rerun focused local syntax/contract/docs/diff checks;
   - trigger and monitor a fresh public Buildkite run for `origin/work-record`.
 
+## 2026-06-23 Build 56 Windows w64devkit libgcc_eh Follow-Up
+
+- Remote Buildkite evidence:
+  - build 56 ran `dbf082288b5e34e06fadc3eb372ebeafcb9e9195`;
+  - PASS before Windows failure: pipeline contract, format/docs checks, Cargo
+    check, clippy, Rust tests, examples, Bazel, macOS smoke x64, and macOS
+    smoke arm64;
+  - Windows smoke successfully downloaded `7zr.exe`, extracted
+    `w64devkit-x64-2.8.0.7z.exe`, discovered w64devkit `gcc.exe`, and reached
+    Rust GNU linking;
+  - FAIL: `gcc.exe` could link far enough to find the MinGW runtime, but Rust
+    GNU requested `-lgcc_eh` and the extracted w64devkit cache did not include
+    a separate `libgcc_eh.a` archive.
+- Remediation validation planned for the next head:
+  - ask w64devkit `gcc.exe` for `-print-libgcc-file-name`;
+  - if `libgcc_eh.a` is missing beside `libgcc.a`, provision it in the
+    Buildkite/ctx tool cache before Cargo runs;
+  - add a pipeline contract assertion for the `libgcc_eh.a` compatibility
+    guard;
+  - rerun focused local syntax/contract/docs/diff checks;
+  - trigger and monitor a fresh public Buildkite run for `origin/work-record`.
+
 - Command:
   `./scripts/check-buildkite-pipeline.sh`
 - Repo/worktree:
