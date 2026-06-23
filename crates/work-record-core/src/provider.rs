@@ -105,7 +105,7 @@ pub enum ProviderPathKind {
     Research,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderSourceTrust {
     ProviderNative,
@@ -113,18 +113,14 @@ pub enum ProviderSourceTrust {
     WrapperObserved,
     Fixture,
     Synthetic,
+    #[default]
     Unknown,
 }
 
-impl Default for ProviderSourceTrust {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderRawRetention {
+    #[default]
     None,
     PathReference,
     MetadataOnly,
@@ -132,25 +128,14 @@ pub enum ProviderRawRetention {
     Withheld,
 }
 
-impl Default for ProviderRawRetention {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderRedactionBoundary {
     BeforeStore,
     BeforeExport,
     BeforeHostedSync,
+    #[default]
     ManualReview,
-}
-
-impl Default for ProviderRedactionBoundary {
-    fn default() -> Self {
-        Self::ManualReview
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
