@@ -845,6 +845,9 @@ None accepted yet.
     `CARGO_HOME`/`RUSTUP_HOME`, fails clearly if `cargo` is still unavailable,
     and writes timing artifacts under `CTX_ARTIFACT_DIR` or `TEST_TMPDIR`
     instead of `TEST_UNDECLARED_OUTPUTS_DIR`.
+- Local validation:
+  - `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 BAZEL_JOBS=2 CTX_REQUIRE_BAZEL=1 ./scripts/check.sh bazel`:
+    PASS on the stable file state after the Cargo/PATH/no-zip remediation.
 - Remaining external evidence gap:
   - commit and push the remediation;
   - trigger and observe a fresh public Buildkite build proving the Bazel lane on
