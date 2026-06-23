@@ -920,6 +920,36 @@ None accepted yet.
   - make `release-dry-run-linux-x64` depend on the Linux smoke lane;
   - update the Buildkite pipeline contract to require the Linux smoke lane.
 
+## 2026-06-22 Buildkite Platform Smoke Remediation Follow-Up
+
+- Build 39:
+  <https://buildkite.com/luca-king/ctx-public-release-verification/builds/39>
+- Outcome:
+  - operator trigger error; the build was created for a mistyped full commit
+    SHA and failed checkout with `not our ref`;
+  - canonical evidence continues on the corrected Build 40.
+- Build 40:
+  <https://buildkite.com/luca-king/ctx-public-release-verification/builds/40>
+- Branch/head:
+  `work-record` / `0d4c232b2bd1697e7a8d3f0e8bec0daa5d34ed59`
+- Outcome:
+  - Linux shift-left gates through Bazel passed;
+  - the new Linux smoke lane failed immediately with exit 141 from a
+    `ctx record --json | sed | head` pipeline under `set -o pipefail`;
+  - Windows smoke reached the native PowerShell wrapper and Rust bootstrap, but
+    `Run-Cargo` was called without a named `-Args` parameter, so PowerShell ran
+    bare `cargo` and never produced `target/debug/ctx.exe`;
+  - macOS smoke lanes were blocked before commands ran by stale shared-agent
+    checkout cleanup failures under the default checkout path.
+- Remediation in progress:
+  - parse the Linux shell smoke record id without a SIGPIPE-prone `head`
+    pipeline;
+  - call `Run-Cargo -Args` explicitly in the Windows PowerShell smoke and
+    release dry-run paths, and assert that in the pipeline contract;
+  - route macOS smoke/release lanes through Buildkite's `custom-checkout#v1.8.0`
+    plugin with `skip_checkout: true` and per-build checkout subdirectories, so
+    default checkout cleanup does not touch the stale shared-agent directory.
+
 ## 2026-06-22 Buildkite Bad-SHA Checkout Follow-Up
 
 - Build 39:

@@ -127,6 +127,11 @@ validate_contract() {
   require_text "macOS x64 queue" "${pipeline}" 'queue: "ctx-mac-gui-shared-x64"'
   require_text "Windows x64 queue" "${pipeline}" 'queue: "windows-x64"'
   require_text "Windows PowerShell wrapper" "${pipeline}" 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\ci-windows.ps1'
+  require_text "macOS custom checkout plugin" "${pipeline}" 'custom-checkout#v1.8.0'
+  require_text "macOS arm64 smoke isolated checkout" "${pipeline}" 'ctx-macos-arm64-smoke-${BUILDKITE_BUILD_NUMBER}'
+  require_text "macOS x64 smoke isolated checkout" "${pipeline}" 'ctx-macos-x64-smoke-${BUILDKITE_BUILD_NUMBER}'
+  require_text "macOS arm64 release isolated checkout" "${pipeline}" 'ctx-macos-arm64-release-${BUILDKITE_BUILD_NUMBER}'
+  require_text "macOS x64 release isolated checkout" "${pipeline}" 'ctx-macos-x64-release-${BUILDKITE_BUILD_NUMBER}'
 
   require_text "docs command wired" "${pipeline}" './scripts/check.sh docs'
   require_text "examples command wired" "${pipeline}" './scripts/check.sh examples'

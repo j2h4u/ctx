@@ -1,6 +1,6 @@
 # Work Recorder Productization Risk Register
 
-Updated: 2026-06-22T22:24:00-05:00
+Updated: 2026-06-22T22:47:00-05:00
 
 | Risk | Impact | Current Mitigation |
 | --- | --- | --- |
@@ -20,6 +20,8 @@ Updated: 2026-06-22T22:24:00-05:00
 | Local Git/jj/gh wrapper shims can capture sensitive command output. | Accidental local retention of secrets, source, paths, or private PR data. | Shims are opt-in, local-only, capped per stream, imported explicitly, documented as sensitive, and not connected to hosted sync in this branch. |
 | Hosted worker could accidentally become raw transcript sync before policy exists. | Private prompts, tool output, source snippets, or credentials could leave the machine. | Hosted sync endpoint rejects raw transcript/prompt/tool-output-like keys by default; initial hosted API accepts metadata batches and explicit blob uploads only. |
 | Buildkite runner routing/tooling can block live proof even when the pipeline syntax is valid. | Matrix jobs can remain scheduled or fail before product checks, preventing release evidence. | Public builds 24-27 proved pipeline expansion, routing, and missing-Cargo host issues. Public scripts now bootstrap Rust tools through a locked no-op-first rustup path; the next public Buildkite run must prove it. |
+| macOS shared Buildkite checkout directories can contain stale files that the agent user cannot remove. | macOS lanes can fail before running repo commands. | macOS smoke/release lanes now use Buildkite `custom-checkout#v1.8.0` with `skip_checkout: true` and isolated per-build checkout subdirectories. |
+| PowerShell argument binding differs from Bash array passing. | Windows CI wrappers can accidentally invoke bare tools even when local shell scripts pass. | `scripts/ci-windows.ps1` calls `Run-Cargo -Args` explicitly, and the Buildkite pipeline contract asserts the named-argument call shape. |
 | Production hosted endpoint is not deployed. | Team sync cannot be claimed production-ready. | Staging Worker, Neon role/migration, Infisical secrets, R2 buckets, readiness, and live smoke are proven; production route deployment remains deliberately uncut. |
 
 ## Accepted Risks

@@ -1592,6 +1592,40 @@ Future entries must include:
   - `git diff --check`: PASS;
   - fresh public Buildkite release-verification build for `origin/work-record`.
 
+## 2026-06-22 Platform Smoke Failure Remediation
+
+- Remote Buildkite evidence:
+  - build 39 failed before checkout because it was manually triggered with a
+    mistyped full commit SHA; the actual pushed head was
+    `0d4c232b2bd1697e7a8d3f0e8bec0daa5d34ed59`;
+  - build 40 ran the corrected SHA and proved Linux fmt/docs/check/clippy/test,
+    examples, and Bazel passed before platform smoke;
+  - build 40 Linux smoke failed with exit 141 from a SIGPIPE-prone shell
+    pipeline while extracting the smoke record id;
+  - build 40 Windows smoke reached PowerShell and Rust bootstrap, then failed
+    because `Run-Cargo` was invoked without named `-Args` and effectively ran
+    bare `cargo`;
+  - build 40 macOS smoke did not reach repo commands because default checkout
+    cleanup could not remove a stale shared-agent path.
+- Remediation:
+  - `scripts/check.sh` now captures `ctx record --json` before parsing the
+    record id, avoiding `head` under `pipefail`;
+  - `scripts/ci-windows.ps1` now calls `Run-Cargo -Args` for both platform
+    smoke and release dry-run builds;
+  - `.buildkite/pipeline.yml` now runs macOS smoke/release lanes through
+    Buildkite `custom-checkout#v1.8.0` with `skip_checkout: true` and isolated
+    per-build checkout subdirectories.
+- Local validation:
+  - `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 CTX_ARTIFACT_DIR=target/ctx-artifacts/platform-smoke-local ./scripts/check.sh platform-smoke`:
+    PASS;
+  - `./scripts/check-buildkite-pipeline.sh`: PASS;
+  - `./scripts/check-docs.sh`: PASS;
+  - `bash -n scripts/check.sh scripts/ci-common.sh scripts/release-dry-run.sh scripts/check-buildkite-pipeline.sh`:
+    PASS;
+  - `git diff --check`: PASS;
+  - `pwsh` is unavailable on this Linux host, so PowerShell execution remains
+    validated by the next Windows Buildkite lane.
+
 - Command:
   `./scripts/check-buildkite-pipeline.sh`
 - Repo/worktree:
