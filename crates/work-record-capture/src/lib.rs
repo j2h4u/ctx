@@ -708,9 +708,10 @@ impl ProviderCaptureAdapter for PiSessionJsonlAdapter {
                 });
                 continue;
             };
-            result
-                .captures
-                .push((line_number, pi_session_capture(header, Some(value), line_number, context)));
+            result.captures.push((
+                line_number,
+                pi_session_capture(header, Some(value), line_number, context),
+            ));
         }
 
         Ok(result)
@@ -751,6 +752,13 @@ pub struct ShimCaptureSummary {
 struct ArchiveCounts {
     records: usize,
     evidence: usize,
+}
+
+impl ArchiveCounts {
+    fn add(&mut self, other: Self) {
+        self.records += other.records;
+        self.evidence += other.evidence;
+    }
 }
 
 pub fn inbox_dir(data_root: impl AsRef<Path>) -> PathBuf {
@@ -1124,18 +1132,16 @@ fn pi_session_capture(
     context: &ProviderAdapterContext,
 ) -> ProviderCaptureEnvelope {
     let event = entry.map(|entry| pi_session_event(&entry, line_number));
-    let cursor = event
-        .as_ref()
-        .and_then(|event| {
-            event.cursor.as_ref().map(|cursor| ProviderCursorRange {
-                before: None,
-                after: Some(ProviderCursorCheckpoint {
-                    stream: provider_cursor_stream(CaptureProvider::Pi, "pi_session_jsonl"),
-                    cursor: cursor.clone(),
-                    observed_at: event.occurred_at,
-                }),
-            })
-        });
+    let cursor = event.as_ref().and_then(|event| {
+        event.cursor.as_ref().map(|cursor| ProviderCursorRange {
+            before: None,
+            after: Some(ProviderCursorCheckpoint {
+                stream: provider_cursor_stream(CaptureProvider::Pi, "pi_session_jsonl"),
+                cursor: cursor.clone(),
+                observed_at: event.occurred_at,
+            }),
+        })
+    });
 
     ProviderCaptureEnvelope {
         schema_version: PROVIDER_CAPTURE_ENVELOPE_SCHEMA_VERSION,
@@ -2754,10 +2760,7 @@ mod tests {
         assert_eq!(events[4].event_type, EventType::Summary);
         assert!(events[3].payload.to_string().contains("cargo test"));
         assert!(events[3].payload.to_string().contains("[REDACTED]"));
-        assert!(!events[3]
-            .payload
-            .to_string()
-            .contains("fixture-secret"));
+        assert!(!events[3].payload.to_string().contains("fixture-secret"));
     }
 
     #[test]
@@ -2804,8 +2807,7 @@ mod tests {
         assert_eq!(summary.imported_events, 3);
         assert_eq!(summary.imported_edges, 1);
         let parent_id = provider_session_uuid(CaptureProvider::OpenCode, "opencode-session-1");
-        let child_id =
-            provider_session_uuid(CaptureProvider::OpenCode, "opencode-session-1-scout");
+        let child_id = provider_session_uuid(CaptureProvider::OpenCode, "opencode-session-1-scout");
         let parent = store.get_session(parent_id).unwrap();
         let child = store.get_session(child_id).unwrap();
         assert_eq!(parent.provider, CaptureProvider::OpenCode);
@@ -2844,9 +2846,12 @@ mod tests {
         );
 
         let gemini = provider_fixture("gemini.jsonl");
-        let gemini_summary =
-            import_provider_fixture_jsonl(&gemini, &mut store, fixed_import_options(gemini.clone()))
-                .unwrap();
+        let gemini_summary = import_provider_fixture_jsonl(
+            &gemini,
+            &mut store,
+            fixed_import_options(gemini.clone()),
+        )
+        .unwrap();
         assert_eq!(gemini_summary.failed, 0);
         assert_eq!(gemini_summary.imported_sessions, 1);
         assert_eq!(gemini_summary.imported_events, 2);
@@ -2859,9 +2864,12 @@ mod tests {
         );
 
         let cursor = provider_fixture("cursor.jsonl");
-        let cursor_summary =
-            import_provider_fixture_jsonl(&cursor, &mut store, fixed_import_options(cursor.clone()))
-                .unwrap();
+        let cursor_summary = import_provider_fixture_jsonl(
+            &cursor,
+            &mut store,
+            fixed_import_options(cursor.clone()),
+        )
+        .unwrap();
         assert_eq!(cursor_summary.failed, 0);
         assert_eq!(cursor_summary.imported_sessions, 1);
         assert_eq!(cursor_summary.imported_events, 2);

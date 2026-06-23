@@ -177,7 +177,7 @@ fn assert_dashboard_assets(output_dir: &Path) {
 }
 
 fn spool_file_with_suffix(temp: &TempDir, suffix: &str) -> PathBuf {
-    let spool = temp.path().join("work-record").join("inbox");
+    let spool = temp.path().join("spool");
     fs::read_dir(&spool)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -452,23 +452,49 @@ exit 7
 #[cfg(unix)]
 #[test]
 fn installed_git_shim_falls_back_to_spool_when_database_is_locked() {
+    assert_installed_shim_falls_back_to_spool_when_database_is_locked(
+        "git",
+        &["status", "--short"],
+        "status --short",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_jj_shim_falls_back_to_spool_when_database_is_locked() {
+    assert_installed_shim_falls_back_to_spool_when_database_is_locked("jj", &["status"], "status");
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_gh_shim_falls_back_to_spool_when_database_is_locked() {
+    assert_installed_shim_falls_back_to_spool_when_database_is_locked(
+        "gh",
+        &["pr", "view", "123"],
+        "pr view 123",
+    );
+}
+
+#[cfg(unix)]
+fn assert_installed_shim_falls_back_to_spool_when_database_is_locked(
+    tool: &str,
+    args: &[&str],
+    rendered_args: &str,
+) {
     let temp = tempdir();
-    let shim_dir = temp.path().join("work-record").join("shims");
+    let shim_dir = temp.path().join("shims");
     let real_dir = temp.path().join("real");
     fs::create_dir_all(&real_dir).unwrap();
+    let stdout_line = format!("locked {tool} stdout $*");
+    let stderr_line = format!("locked {tool} stderr");
     write_executable(
-        &real_dir.join("git"),
-        r#"#!/bin/sh
-echo "locked git stdout $*"
-echo "locked git stderr" >&2
-exit 23
-"#,
+        &real_dir.join(tool),
+        &format!("#!/bin/sh\necho \"{stdout_line}\"\necho \"{stderr_line}\" >&2\nexit 23\n"),
     );
 
     ctx(&temp).args(["setup"]).assert().success();
 
-    let lock =
-        rusqlite::Connection::open(temp.path().join("work-record").join("work.sqlite")).unwrap();
+    let lock = rusqlite::Connection::open(temp.path().join("work.sqlite")).unwrap();
     lock.execute_batch("BEGIN IMMEDIATE;").unwrap();
 
     let path = format!(
@@ -477,9 +503,8 @@ exit 23
         real_dir.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let output = std::process::Command::new(shim_dir.join("git"))
-        .arg("status")
-        .arg("--short")
+    let output = std::process::Command::new(shim_dir.join(tool))
+        .args(args)
         .env("PATH", path)
         .env("CTX_DATA_ROOT", temp.path())
         .output()
@@ -487,11 +512,11 @@ exit 23
     assert_eq!(output.status.code(), Some(23));
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "locked git stdout status --short\n"
+        format!("locked {tool} stdout {rendered_args}\n")
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "locked git stderr\n"
+        format!("locked {tool} stderr\n")
     );
 
     ctx(&temp)
@@ -513,8 +538,8 @@ exit 23
         .args(["export"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("locked git stdout"))
-        .stdout(predicate::str::contains("locked git stderr"));
+        .stdout(predicate::str::contains(format!("locked {tool} stdout")))
+        .stdout(predicate::str::contains(format!("locked {tool} stderr")));
 }
 
 #[cfg(unix)]
@@ -557,12 +582,8 @@ fn shim_capture_command_isolates_scratch_read_and_timestamp_errors() {
         .args(["export"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "[ctx shim failed to read stdout:",
-        ))
-        .stdout(predicate::str::contains(
-            "[ctx shim failed to read stderr:",
-        ));
+        .stdout(predicate::str::contains("[ctx shim failed to read stdout:"))
+        .stdout(predicate::str::contains("[ctx shim failed to read stderr:"));
 }
 
 #[cfg(unix)]
@@ -763,8 +784,25 @@ exit 91
         .args(["capture", "import", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"imported_records\": 1"))
-        .stdout(predicate::str::contains("\"imported_evidence\": 1"));
+        .stdout(predicate::str::contains("\"imported_records\": 0"))
+        .stdout(predicate::str::contains("\"imported_evidence\": 0"));
+
+    ctx(&temp)
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("spool_pending: 0"));
+
+    ctx(&temp)
+        .args(["export"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "stdout-without-newline:status --short",
+        ))
+        .stdout(predicate::str::contains(
+            "stderr-without-newline:status --short",
+        ));
 }
 
 #[cfg(unix)]
@@ -1045,10 +1083,7 @@ fn setup_can_activate_passive_capture_in_shell_rc_and_deactivate_it() {
             "shim",
             "deactivate-shell",
             "--dir",
-            temp.path()
-                .join("shims")
-                .to_str()
-                .unwrap(),
+            temp.path().join("shims").to_str().unwrap(),
             "--shell-rc",
             shell_rc.to_str().unwrap(),
         ])
@@ -1106,7 +1141,7 @@ fn capture_write_fixture_is_quiet_and_imports_from_spool() {
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::is_empty());
 
-    let spool = temp.path().join("work-record").join("inbox");
+    let spool = temp.path().join("spool");
     let pending = fs::read_dir(&spool)
         .unwrap()
         .filter(|entry| {
@@ -1469,7 +1504,11 @@ fn import_local_providers_reports_longtail_detected_unsupported_rows() {
     fs::create_dir_all(home.join(".copilot")).unwrap();
     fs::create_dir_all(home.join(".factory")).unwrap();
     fs::create_dir_all(home.join(".config/goose")).unwrap();
-    fs::write(home.join(".config/goose/config.yaml"), "GOOSE_PROVIDER: test\n").unwrap();
+    fs::write(
+        home.join(".config/goose/config.yaml"),
+        "GOOSE_PROVIDER: test\n",
+    )
+    .unwrap();
     fs::create_dir_all(home.join(".config/amp")).unwrap();
     fs::write(home.join(".config/amp/settings.json"), "{}\n").unwrap();
     fs::create_dir_all(home.join(".openhands/conversations")).unwrap();
@@ -1483,17 +1522,17 @@ fn import_local_providers_reports_longtail_detected_unsupported_rows() {
     fs::create_dir_all(home.join(".continue/logs")).unwrap();
     fs::create_dir_all(home.join(".augment")).unwrap();
     fs::create_dir_all(home.join(".junie")).unwrap();
-    fs::create_dir_all(home.join(".config/Code/User/globalStorage/kilocode.kilo-code"))
-        .unwrap();
+    fs::create_dir_all(home.join(".config/Code/User/globalStorage/kilocode.kilo-code")).unwrap();
     fs::create_dir_all(&workspace).unwrap();
     fs::write(workspace.join(".aider.chat.history.md"), "# aider\n").unwrap();
     fs::create_dir_all(workspace.join("trajectories")).unwrap();
 
     let mut command = ctx(&temp);
-    command
-        .env("HOME", &home)
-        .current_dir(&workspace)
-        .args(["capture", "import-local-providers", "--json"]);
+    command.env("HOME", &home).current_dir(&workspace).args([
+        "capture",
+        "import-local-providers",
+        "--json",
+    ]);
     let payload = json_output(&mut command);
     let providers = payload["providers"].as_array().unwrap();
     let provider = |name: &str| {
@@ -1536,7 +1575,11 @@ fn import_local_providers_reports_longtail_detected_unsupported_rows() {
 fn import_local_providers_imports_discovered_pi_sessions() {
     let temp = tempdir();
     let home = temp.path().join("home");
-    let session_dir = home.join(".pi").join("agent").join("sessions").join("--workspace--");
+    let session_dir = home
+        .join(".pi")
+        .join("agent")
+        .join("sessions")
+        .join("--workspace--");
     fs::create_dir_all(&session_dir).unwrap();
     fs::copy(
         provider_history_fixture("pi-session.jsonl"),
@@ -1902,7 +1945,7 @@ fn doctor_privacy_reports_local_storage_spool_and_permissions() {
 #[test]
 fn validate_reports_failed_and_processing_capture_spool_files() {
     let temp = tempdir();
-    let spool = temp.path().join("work-record").join("inbox");
+    let spool = temp.path().join("spool");
     fs::create_dir_all(&spool).unwrap();
     fs::write(spool.join("capture-one.jsonl.failed"), "{}\n").unwrap();
     fs::write(spool.join("capture-two.jsonl.processing"), "{}\n").unwrap();

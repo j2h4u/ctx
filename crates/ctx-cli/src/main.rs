@@ -21,12 +21,12 @@ use work_record_capture::{
     ProviderFixtureImportOptions, ProviderImportSummary, ShimCommandOptions,
 };
 use work_record_core::{
-    blob_dir, database_path, default_data_root, device_path, new_id,
-    redact_share_safe_markers, work_record_dir, Artifact, CaptureProvider, Confidence,
-    EntityTimestamps, Evidence, EvidenceFreshness, EvidenceKind, EvidenceMetadata, EvidenceStatus,
-    Fidelity, FileTouched, PullRequest, Run, Session, Summary, SummaryKind, SyncMetadata,
-    VcsChange, VcsChangeKind, VcsKind, VcsWorkspace, Visibility, WorkRecord, WorkRecordArchive,
-    WorkRecordLink, WorkRecordLinkTargetType, WorkRecordLinkType,
+    blob_dir, database_path, default_data_root, device_path, new_id, redact_share_safe_markers,
+    work_record_dir, Artifact, CaptureProvider, Confidence, EntityTimestamps, Evidence,
+    EvidenceFreshness, EvidenceKind, EvidenceMetadata, EvidenceStatus, Fidelity, FileTouched,
+    PullRequest, Run, Session, Summary, SummaryKind, SyncMetadata, VcsChange, VcsChangeKind,
+    VcsKind, VcsWorkspace, Visibility, WorkRecord, WorkRecordArchive, WorkRecordLink,
+    WorkRecordLinkTargetType, WorkRecordLinkType,
 };
 use work_record_publish::{
     render_pr_comment, upsert_github_pr_comment, GhCliGitHubPrCommentClient, PublishOptions,

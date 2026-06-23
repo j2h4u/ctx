@@ -224,7 +224,9 @@ pub fn dashboard_static_assets() -> Vec<(&'static str, &'static [u8])> {
     vec![
         (
             "assets/dashboard-DnBIV6pA.js",
-            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/dashboard-DnBIV6pA.js"),
+            include_bytes!(
+                "../../../apps/work-recorder-dashboard/dist/assets/dashboard-DnBIV6pA.js"
+            ),
         ),
         (
             "assets/styles-CVYnGeXJ.js",
