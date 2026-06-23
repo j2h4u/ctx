@@ -60,6 +60,85 @@ Updated: 2026-06-22T20:02:05-05:00
   - `target/ctx-artifacts/release-dry-run/checksums.sha256`;
   - `target/ctx-artifacts/release-dry-run/timings.json`.
 
+## 2026-06-22 Hardened Local Product And Public Matrix Checks
+
+- Command:
+  `./scripts/check-buildkite-pipeline.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / `6d73e2c`
+- Outcome: PASS
+- Coverage:
+  - Buildkite agent dry-run parser accepted `.buildkite/pipeline.yml`;
+  - checked Linux fmt/docs/check/clippy/test/examples/Bazel/release lanes;
+  - checked macOS arm64, macOS x64, Windows x64, and FreeBSD blocker lanes;
+  - checked host-triple guards, runner labels, docs/examples wiring, and
+    dry-run-only release behavior.
+
+- Command:
+  `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 BAZEL_JOBS=2 ./scripts/check.sh all`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / `6d73e2c`
+- Outcome: PASS
+- Coverage:
+  - `cargo fmt --all -- --check`;
+  - docs lane;
+  - `cargo check --workspace --all-targets --locked`;
+  - `cargo clippy --workspace --all-targets --locked -- -D warnings`;
+  - `cargo test --workspace --all-targets --locked -- --test-threads 1`;
+  - 26 CLI integration tests, 4 capture unit tests, 5 core unit tests, 2 report
+    unit tests, 2 search unit tests, 10 store unit tests, and 7 VCS unit tests
+    passed;
+  - checked examples `local-record-workflow.sh` and
+    `capture-spool-fixture.sh`;
+  - Bazel lane recorded `skipped` because neither `bazel` nor `bazelisk` is
+    installed.
+
+- Command:
+  `./scripts/check-docs.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / `6d73e2c`
+- Outcome: PASS
+- Coverage:
+  - docs claim checks passed.
+
+- Command:
+  `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 ./scripts/release-dry-run.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / `6d73e2c`
+- Outcome: PASS
+- Artifacts:
+  - `target/ctx-artifacts/release-dry-run/manifest.json`;
+  - `target/ctx-artifacts/release-dry-run/checksums.sha256`;
+  - `target/ctx-artifacts/release-dry-run/timings.json`.
+
+- Command:
+  `./scripts/release-platform-blocker.sh freebsd-x64 x86_64-unknown-freebsd target/ctx-artifacts/freebsd-blocker`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / `6d73e2c`
+- Outcome: PASS
+- Artifacts:
+  - `target/ctx-artifacts/release-platform-blocker/freebsd-x64-blocker.md`;
+  - `target/ctx-artifacts/release-platform-blocker/freebsd-x64-blocker.json`;
+  - `target/ctx-artifacts/release-platform-blocker/timings.json`.
+
+- Command:
+  `git diff --check`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / `6d73e2c`
+- Outcome: PASS
+
 ## 2026-06-22 Local Product Review Blocker Checks
 
 - Command:

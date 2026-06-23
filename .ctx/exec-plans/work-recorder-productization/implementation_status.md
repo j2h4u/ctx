@@ -505,7 +505,8 @@ None accepted yet.
 ## 2026-06-22 Local Product Review Blocker Fix
 
 - Owner: manager continuation after primary agent hit usage limit.
-- Commit state: uncommitted changes on top of `83611d2`.
+- Commit state: committed at `703eaba` and followed by release-matrix commit
+  `6d73e2c`.
 - Scope:
   - Moved public redaction to shared `work-record-core` helpers and reused it
     from store previews, dashboard HTML, and agent search/context snippets.
@@ -515,4 +516,32 @@ None accepted yet.
     falling back to LIKE.
   - Added regression coverage for secret redaction, source persistence, and
     evidence-only FTS matches.
-- Status: focused CLI/unit gates are PASS; full capped local check pending.
+- Status: focused CLI/unit gates and the full capped local check are PASS.
+
+## 2026-06-22 Public CI/Release Matrix Integration
+
+- Owner: manager integration of the CI/release worker slice.
+- Commit state: committed at `6d73e2c`.
+- Scope:
+  - Added a public `.buildkite/pipeline.yml` with Linux, macOS arm64, macOS x64,
+    Windows x64, and documented FreeBSD blocker lanes.
+  - Added `scripts/check-buildkite-pipeline.sh` to validate the pipeline shape
+    locally, including Buildkite dry-run parsing when `buildkite-agent` is
+    installed.
+  - Added `scripts/release-platform-blocker.sh` for machine-readable missing
+    platform evidence.
+  - Extended `scripts/check.sh` with docs/examples lanes and updated release
+    dry-run host-triple guards.
+- Local validation on clean head `6d73e2c`:
+  - `./scripts/check-buildkite-pipeline.sh`: PASS.
+  - `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 BAZEL_JOBS=2 ./scripts/check.sh all`: PASS.
+  - `./scripts/check-docs.sh`: PASS.
+  - `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 ./scripts/release-dry-run.sh`: PASS.
+  - `./scripts/release-platform-blocker.sh freebsd-x64 x86_64-unknown-freebsd target/ctx-artifacts/freebsd-blocker`: PASS.
+  - `git diff --check`: PASS.
+- Remaining external evidence gap:
+  - Live Buildkite green URLs are still pending.
+  - Native FreeBSD remains blocked until a runner/pool or proven cross-build
+    path exists.
+  - Local Bazel remains skipped because neither `bazel` nor `bazelisk` is
+    installed on this host.
