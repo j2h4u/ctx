@@ -1,31 +1,35 @@
 use std::{
     env, fs,
     io::{self, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 use work_record_capture::{
-    import_spool, inbox_dir as capture_inbox_dir, spool_counts, write_fixture, FixtureOptions,
+    import_spool, inbox_dir as capture_inbox_dir, spool_counts, write_fixture, write_shim_command,
+    FixtureOptions, ShimCommandOptions,
 };
 use work_record_core::{
-    blob_dir, database_path, default_data_root, device_path, inbox_dir, work_record_dir, Evidence,
-    WorkRecord, WorkRecordArchive,
+    blob_dir, database_path, default_data_root, device_path, inbox_dir, work_record_dir,
+    CaptureProvider, Evidence, WorkRecord, WorkRecordArchive,
 };
 use work_record_store::Store;
 use work_record_vcs::{inspect_path, parse_pull_request_url, GitDetection, JjDetection};
 
 #[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
 const DEFAULT_EVIDENCE_MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const DEFAULT_EVIDENCE_TIMEOUT_SECONDS: u64 = 300;
+const DEFAULT_SHIM_MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const TIMEOUT_EXIT_CODE: i32 = 124;
 
 #[derive(Debug, Parser)]
@@ -68,6 +72,8 @@ enum CommandRoot {
     Evidence(EvidenceCommand),
     #[command(about = "Import passive capture spool events")]
     Capture(CaptureCommand),
+    #[command(about = "Install local git/jj/gh capture shims")]
+    Shim(ShimCommand),
     #[command(about = "Inspect local VCS workspace metadata")]
     Vcs(VcsCommand),
     #[command(about = "Parse pull request URLs")]
@@ -261,6 +267,8 @@ struct CaptureCommand {
 enum CaptureSubcommand {
     #[command(hide = true, about = "Write one capture fixture to the JSONL spool")]
     WriteFixture(CaptureWriteFixtureArgs),
+    #[command(hide = true, about = "Write one local shim command to the JSONL spool")]
+    WriteShimCommand(CaptureWriteShimCommandArgs),
     #[command(about = "Import pending capture spool files")]
     Import(CaptureImportArgs),
 }
@@ -285,6 +293,81 @@ struct CaptureWriteFixtureArgs {
 struct CaptureImportArgs {
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Debug, Args)]
+struct CaptureWriteShimCommandArgs {
+    #[arg(long, value_enum)]
+    provider: ShimTool,
+    #[arg(long)]
+    exit_code: i32,
+    #[arg(long)]
+    stdout_file: PathBuf,
+    #[arg(long)]
+    stderr_file: PathBuf,
+    #[arg(long)]
+    started_at: String,
+    #[arg(long)]
+    duration_ms: i64,
+    #[arg(long)]
+    machine_id: Option<String>,
+    #[arg(long)]
+    cwd: Option<PathBuf>,
+    #[arg(long)]
+    real_command: Option<PathBuf>,
+    #[arg(long)]
+    shim_dir: Option<PathBuf>,
+    #[arg(required = true, trailing_var_arg = true)]
+    command: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct ShimCommand {
+    #[command(subcommand)]
+    command: ShimSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ShimSubcommand {
+    #[command(about = "Create local git/jj/gh wrapper scripts")]
+    Install(ShimDirArgs),
+    #[command(about = "Print shell exports for local wrapper scripts")]
+    Env(ShimDirArgs),
+    #[command(about = "Remove local wrapper scripts created by ctx")]
+    Uninstall(ShimDirArgs),
+}
+
+#[derive(Debug, Args)]
+struct ShimDirArgs {
+    #[arg(long)]
+    dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ShimTool {
+    Git,
+    Jj,
+    Gh,
+}
+
+impl ShimTool {
+    const ALL: [Self; 3] = [Self::Git, Self::Jj, Self::Gh];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Git => "git",
+            Self::Jj => "jj",
+            Self::Gh => "gh",
+        }
+    }
+
+    fn provider(self) -> CaptureProvider {
+        match self {
+            Self::Git => CaptureProvider::Git,
+            Self::Jj => CaptureProvider::Jj,
+            Self::Gh => CaptureProvider::Gh,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -375,6 +458,7 @@ fn main() -> Result<()> {
             run_work_subcommand(WorkSubcommand::Evidence(args), data_root)
         }
         CommandRoot::Capture(args) => run_capture(args, data_root),
+        CommandRoot::Shim(args) => run_shim(args),
         CommandRoot::Vcs(args) => run_vcs(args),
         CommandRoot::Pr(args) => run_pr(args),
         CommandRoot::LinkPr(args) => run_work_subcommand(WorkSubcommand::LinkPr(args), data_root),
@@ -666,6 +750,27 @@ fn run_capture(command: CaptureCommand, data_root: PathBuf) -> Result<()> {
                 },
             )?;
         }
+        CaptureSubcommand::WriteShimCommand(args) => {
+            let started_at = DateTime::parse_from_rfc3339(&args.started_at)
+                .with_context(|| format!("parse started_at `{}`", args.started_at))?
+                .with_timezone(&Utc);
+            write_shim_command(
+                capture_inbox_dir(&data_root),
+                ShimCommandOptions {
+                    provider: args.provider.provider(),
+                    command: args.command,
+                    exit_code: args.exit_code,
+                    stdout: read_file_capped(&args.stdout_file, DEFAULT_SHIM_MAX_OUTPUT_BYTES)?,
+                    stderr: read_file_capped(&args.stderr_file, DEFAULT_SHIM_MAX_OUTPUT_BYTES)?,
+                    started_at,
+                    duration_ms: args.duration_ms,
+                    machine_id: args.machine_id,
+                    cwd: args.cwd,
+                    real_command: args.real_command,
+                    shim_dir: args.shim_dir,
+                },
+            )?;
+        }
         CaptureSubcommand::Import(args) => {
             let mut store = Store::open(database_path(data_root.clone()))?;
             let summary = import_spool(capture_inbox_dir(&data_root), &mut store)?;
@@ -689,6 +794,132 @@ fn run_capture(command: CaptureCommand, data_root: PathBuf) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn run_shim(command: ShimCommand) -> Result<()> {
+    match command.command {
+        ShimSubcommand::Install(args) => install_shims(&args.dir),
+        ShimSubcommand::Env(args) => {
+            println!("export PATH={}:$PATH", shell_escape_path(&args.dir));
+            Ok(())
+        }
+        ShimSubcommand::Uninstall(args) => uninstall_shims(&args.dir),
+    }
+}
+
+fn install_shims(dir: &Path) -> Result<()> {
+    fs::create_dir_all(dir)?;
+    let ctx_bin = env::current_exe()?.canonicalize()?;
+    for tool in ShimTool::ALL {
+        let path = dir.join(tool.as_str());
+        if path.exists() && !is_ctx_shim(&path)? {
+            return Err(anyhow!(
+                "refusing to overwrite unrecognized file {}",
+                path.display()
+            ));
+        }
+        fs::write(&path, wrapper_script(tool, &ctx_bin)?)?;
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(&path)?.permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&path, permissions)?;
+        }
+        println!("installed {}", path.display());
+    }
+    Ok(())
+}
+
+fn uninstall_shims(dir: &Path) -> Result<()> {
+    for tool in ShimTool::ALL {
+        let path = dir.join(tool.as_str());
+        if !path.exists() {
+            continue;
+        }
+        if !is_ctx_shim(&path)? {
+            return Err(anyhow!(
+                "refusing to remove unrecognized shim {}",
+                path.display()
+            ));
+        }
+        fs::remove_file(&path)?;
+        println!("removed {}", path.display());
+    }
+    Ok(())
+}
+
+fn is_ctx_shim(path: &Path) -> Result<bool> {
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("read shim {}", path.display()))?;
+    Ok(contents.contains("CTX_WORK_RECORD_SHIM=1"))
+}
+
+fn wrapper_script(tool: ShimTool, ctx_bin: &Path) -> Result<String> {
+    let tool_name = tool.as_str();
+    let ctx_bin = shell_escape_path(ctx_bin);
+    Ok(format!(
+        r#"#!/bin/sh
+# CTX_WORK_RECORD_SHIM=1
+tool="{tool_name}"
+shim_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ctx_bin="${{CTX_SHIM_CTX_BIN:-{ctx_bin}}}"
+old_ifs=$IFS
+IFS=:
+clean_path=
+for entry in $PATH; do
+    if [ "$entry" = "$shim_dir" ]; then
+        continue
+    fi
+    if [ -z "$clean_path" ]; then
+        clean_path=$entry
+    else
+        clean_path=$clean_path:$entry
+    fi
+done
+IFS=$old_ifs
+real_cmd=$(PATH="$clean_path" command -v "$tool" 2>/dev/null)
+if [ -z "$real_cmd" ]; then
+    echo "ctx shim: real $tool not found outside $shim_dir" >&2
+    exit 127
+fi
+tmpdir=$(mktemp -d "${{TMPDIR:-/tmp}}/ctx-shim-$tool.XXXXXX") || exit 125
+stdout_file=$tmpdir/stdout
+stderr_file=$tmpdir/stderr
+started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+start_ms=$(date +%s%3N 2>/dev/null || printf '%s000' "$(date +%s)")
+"$real_cmd" "$@" >"$stdout_file" 2>"$stderr_file"
+status=$?
+end_ms=$(date +%s%3N 2>/dev/null || printf '%s000' "$(date +%s)")
+duration_ms=$((end_ms - start_ms))
+cat "$stdout_file"
+cat "$stderr_file" >&2
+"$ctx_bin" capture write-shim-command \
+    --provider "$tool" \
+    --exit-code "$status" \
+    --stdout-file "$stdout_file" \
+    --stderr-file "$stderr_file" \
+    --started-at "$started_at" \
+    --duration-ms "$duration_ms" \
+    --cwd "$PWD" \
+    --real-command "$real_cmd" \
+    --shim-dir "$shim_dir" \
+    -- "$tool" "$@" >/dev/null 2>&1 || true
+rm -rf "$tmpdir"
+exit "$status"
+"#
+    ))
+}
+
+fn shell_escape_path(path: &Path) -> String {
+    let raw = path.display().to_string();
+    if raw
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-'))
+    {
+        raw
+    } else {
+        format!("'{}'", raw.replace('\'', "'\\''"))
+    }
 }
 
 fn run_evidence(args: EvidenceCommand, store: &Store) -> Result<()> {
@@ -870,6 +1101,22 @@ fn capture_capped(mut stream: impl Read, max_output_bytes: usize) -> io::Result<
         }
     }
     Ok(String::from_utf8_lossy(&output).into_owned())
+}
+
+fn read_file_capped(path: &Path, max_output_bytes: usize) -> Result<String> {
+    let file = fs::File::open(path).with_context(|| format!("read file {}", path.display()))?;
+    let mut reader = file.take(max_output_bytes as u64 + 1);
+    let mut output = Vec::with_capacity(max_output_bytes.min(8192));
+    reader.read_to_end(&mut output)?;
+    let truncated = output.len() > max_output_bytes;
+    if truncated {
+        output.truncate(max_output_bytes);
+    }
+    let mut text = String::from_utf8_lossy(&output).into_owned();
+    if truncated {
+        text.push_str("\n[ctx shim output truncated]\n");
+    }
+    Ok(text)
 }
 
 fn join_capture_task(

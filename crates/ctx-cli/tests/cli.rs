@@ -2,6 +2,8 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::{json, Value};
 #[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::time::Duration;
 use std::{fs, path::Path};
 use tempfile::{Builder, TempDir};
@@ -53,6 +55,14 @@ fn write_json(temp: &TempDir, name: &str, value: &Value) -> String {
     let path = temp.path().join(name);
     fs::write(&path, serde_json::to_string_pretty(value).unwrap()).unwrap();
     path.to_str().unwrap().to_string()
+}
+
+#[cfg(unix)]
+fn write_executable(path: &Path, contents: &str) {
+    fs::write(path, contents).unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
 }
 
 #[test]
@@ -123,6 +133,126 @@ fn pr_parse_json_reports_confidence_labeled_link() {
     assert_eq!(parsed["confidence"], "explicit");
     assert_eq!(parsed["link"]["target_type"], "pull_request");
     assert_eq!(parsed["link"]["confidence"], "explicit");
+}
+
+#[cfg(unix)]
+#[test]
+fn shim_install_env_uninstall_are_local_and_reversible() {
+    let temp = tempdir();
+    let shim_dir = temp.path().join("shims");
+
+    ctx(&temp)
+        .args(["shim", "install", "--dir", shim_dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("git"))
+        .stdout(predicate::str::contains("jj"))
+        .stdout(predicate::str::contains("gh"));
+    assert!(shim_dir.join("git").exists());
+    assert!(shim_dir.join("jj").exists());
+    assert!(shim_dir.join("gh").exists());
+
+    ctx(&temp)
+        .args(["shim", "env", "--dir", shim_dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("export PATH="))
+        .stdout(predicate::str::contains(shim_dir.to_str().unwrap()));
+
+    ctx(&temp)
+        .args(["shim", "uninstall", "--dir", shim_dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed"));
+    assert!(!shim_dir.join("git").exists());
+    assert!(!shim_dir.join("jj").exists());
+    assert!(!shim_dir.join("gh").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn shim_install_refuses_to_overwrite_unrecognized_files() {
+    let temp = tempdir();
+    let shim_dir = temp.path().join("shims");
+    fs::create_dir_all(&shim_dir).unwrap();
+    fs::write(shim_dir.join("git"), "#!/bin/sh\n").unwrap();
+
+    ctx(&temp)
+        .args(["shim", "install", "--dir", shim_dir.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "refusing to overwrite unrecognized file",
+        ));
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_git_shim_runs_real_command_and_spools_capture() {
+    let temp = tempdir();
+    let shim_dir = temp.path().join("shims");
+    let real_dir = temp.path().join("real");
+    fs::create_dir_all(&real_dir).unwrap();
+    write_executable(
+        &real_dir.join("git"),
+        r#"#!/bin/sh
+echo "fake git stdout $*"
+echo "fake git stderr" >&2
+exit 7
+"#,
+    );
+
+    ctx(&temp)
+        .args(["shim", "install", "--dir", shim_dir.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let path = format!(
+        "{}:{}:{}",
+        shim_dir.display(),
+        real_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = std::process::Command::new(shim_dir.join("git"))
+        .arg("status")
+        .arg("--short")
+        .env("PATH", path)
+        .env("CTX_DATA_ROOT", temp.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "fake git stdout status --short\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "fake git stderr\n");
+
+    ctx(&temp)
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("spool_pending: 1"));
+
+    ctx(&temp)
+        .args(["capture", "import", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"imported_records\": 1"))
+        .stdout(predicate::str::contains("\"imported_evidence\": 1"));
+
+    ctx(&temp)
+        .args(["export"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("fake git stdout"))
+        .stdout(predicate::str::contains("fake git stderr"));
+
+    ctx(&temp)
+        .args(["context", "git status", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("git command: git status --short"))
+        .stdout(predicate::str::contains("\"status\": \"failed\""));
 }
 
 #[test]

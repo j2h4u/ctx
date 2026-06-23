@@ -77,6 +77,24 @@ safe stdout/stderr previews, start time, and duration in SQLite. Full
 stdout/stderr content is stored as local-only blob artifacts. Use
 `--record <record-id>` to attach the evidence to a specific record.
 
+## Local shims
+
+```bash
+ctx shim install --dir .ctx-shims
+ctx shim env --dir .ctx-shims
+ctx shim uninstall --dir .ctx-shims
+```
+
+- `shim install` writes local wrapper scripts for `git`, `jj`, and `gh` into
+  the chosen directory.
+- `shim env` prints a shell `PATH` export that places that directory before the
+  real tools.
+- `shim uninstall` removes only wrapper scripts marked as ctx-created shims.
+
+The wrappers run the real command found later on `PATH`, preserve its exit code,
+and best-effort spool command metadata plus stdout/stderr into the local JSONL
+capture inbox. They do not install repository hooks or start a daemon.
+
 ## Pull requests
 
 ```bash
@@ -106,5 +124,6 @@ ctx validate
 
 ## Not yet implemented
 
-This branch does not include hosted sync, passive provider hooks, Git/jj/gh
-shims, public installer flow, or pull request comment publisher.
+This branch does not include hosted sync, passive provider hooks beyond the
+local Git/jj/gh wrapper shims, public installer flow, or pull request comment
+publisher.

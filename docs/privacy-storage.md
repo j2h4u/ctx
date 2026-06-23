@@ -11,7 +11,8 @@ The recorder stores structured metadata in SQLite:
 - record timestamps
 - tags, kinds, and optional workspace paths
 - command evidence metadata
-- safe previews of command stdout and stderr captured by `ctx evidence run`
+- safe previews of command stdout and stderr captured by `ctx evidence run` or
+  imported local shims
 - pull request URLs attached by `ctx link-pr`
 
 The current implementation stores records and command evidence metadata in the
@@ -21,8 +22,9 @@ with SQLite rows pointing at those artifacts. Export and import use JSON
 archives that include the blob payloads needed to preserve recorded evidence on
 another machine.
 
-The current implementation does not store passive provider transcripts, shim
-events, dashboard state, or hosted sync state.
+The current implementation does not store passive provider transcripts,
+dashboard state, or hosted sync state. Local Git/jj/gh shim events are written
+to the JSONL capture inbox and imported only into local storage.
 
 ## What may be sensitive
 

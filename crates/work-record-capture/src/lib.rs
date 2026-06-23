@@ -130,6 +130,21 @@ impl Default for FixtureOptions {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ShimCommandOptions {
+    pub provider: CaptureProvider,
+    pub command: Vec<String>,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub started_at: DateTime<Utc>,
+    pub duration_ms: i64,
+    pub machine_id: Option<String>,
+    pub cwd: Option<PathBuf>,
+    pub real_command: Option<PathBuf>,
+    pub shim_dir: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpoolCounts {
     pub pending: usize,
@@ -167,6 +182,13 @@ pub fn inbox_dir(data_root: impl AsRef<Path>) -> PathBuf {
 
 pub fn write_fixture(inbox: impl AsRef<Path>, options: FixtureOptions) -> Result<PathBuf> {
     let envelope = fixture_envelope(options)?;
+    let mut writer = SpoolWriter::create(inbox, &envelope.source.machine_id)?;
+    writer.write_envelope(&envelope)?;
+    writer.finish()
+}
+
+pub fn write_shim_command(inbox: impl AsRef<Path>, options: ShimCommandOptions) -> Result<PathBuf> {
+    let envelope = shim_command_envelope(options)?;
     let mut writer = SpoolWriter::create(inbox, &envelope.source.machine_id)?;
     writer.write_envelope(&envelope)?;
     writer.finish()
@@ -216,6 +238,71 @@ pub fn fixture_envelope(options: FixtureOptions) -> Result<CaptureEnvelope> {
         payload,
         payload_hash,
         fidelity: Fidelity::Imported,
+    })
+}
+
+pub fn shim_command_envelope(options: ShimCommandOptions) -> Result<CaptureEnvelope> {
+    let machine_id = options.machine_id.unwrap_or_else(default_machine_id);
+    let cwd_path = match options.cwd {
+        Some(path) => path,
+        None => env::current_dir()?,
+    };
+    let cwd = cwd_path.display().to_string();
+    let command = options.command.join(" ");
+    let provider = options.provider;
+    let dedupe_key = format!(
+        "shim:{}:{}:{}:{}",
+        provider.as_str(),
+        options.started_at.timestamp_millis(),
+        std::process::id(),
+        new_id()
+    );
+    let payload = json!({
+        "kind": "evidence",
+        "title": format!("{} command: {}", provider.as_str(), command),
+        "body": format!(
+            "Captured local {} shim command in {} with exit code {}.",
+            provider.as_str(),
+            cwd,
+            options.exit_code
+        ),
+        "tags": ["capture", "shim", provider.as_str()],
+        "record_kind": "command",
+        "workspace": cwd,
+        "command": command,
+        "exit_code": options.exit_code,
+        "stdout": options.stdout,
+        "stderr": options.stderr,
+        "started_at": options.started_at,
+        "duration_ms": options.duration_ms,
+    });
+    let payload_hash = Some(compute_payload_hash(&payload)?);
+
+    Ok(CaptureEnvelope {
+        schema_version: CAPTURE_SCHEMA_VERSION,
+        capture_event_id: new_id(),
+        dedupe_key,
+        source: CaptureSourceDescriptor {
+            kind: CaptureSourceKind::Shim,
+            provider,
+            machine_id,
+            process_id: Some(std::process::id()),
+            cwd: Some(cwd.clone()),
+            raw_source_path: options
+                .real_command
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            external_session_id: None,
+        },
+        occurred_at: options.started_at,
+        cwd: Some(cwd),
+        env_session_hints: json!({
+            "shim_dir": options.shim_dir.map(|path| path.display().to_string()),
+            "real_command": options.real_command.map(|path| path.display().to_string()),
+        }),
+        payload,
+        payload_hash,
+        fidelity: Fidelity::Partial,
     })
 }
 

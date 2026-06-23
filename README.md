@@ -8,8 +8,8 @@ to pull requests or team workflows.
 
 This branch is an early local Work Recorder. It is useful today for explicit
 records, command evidence, pull request links, search, reports, context output,
-JSON export/import, and local storage validation. It is not yet the full passive
-recorder described in the product direction.
+JSON export/import, local Git/jj/gh command shims, and local storage validation.
+It is not yet the full passive recorder described in the product direction.
 
 ## Current Status
 
@@ -18,6 +18,7 @@ Implemented in this branch:
 - create local Work Records with title, body, tags, kind, optional workspace,
   timestamps, and id;
 - capture command evidence when commands are run through `ctx evidence run`;
+- install local reversible Git/jj/gh wrapper shims that spool command evidence;
 - link one pull request URL to a record with `ctx link-pr`;
 - list, show, search, and render context for local records;
 - generate text or JSON reports from recent records and evidence;
@@ -27,7 +28,7 @@ Implemented in this branch:
 Not implemented yet:
 
 - a local dashboard;
-- passive provider hooks, shell hooks, or Git/jj/gh shims;
+- passive provider hooks or shell hooks;
 - importing existing Codex, Claude, Cursor, or other local agent history;
 - posting or updating pull request comments;
 - hosted sync, hosted sharing, accounts, or team policy;
@@ -80,6 +81,15 @@ Capture command evidence:
 
 ```bash
 ctx evidence run --record <record-id> cargo test -p checkout
+```
+
+Optionally capture local Git/jj/GitHub CLI commands without repo hooks:
+
+```bash
+ctx shim install --dir .ctx-shims
+eval "$(ctx shim env --dir .ctx-shims)"
+git status
+ctx capture import
 ```
 
 Link a pull request URL locally:
@@ -146,6 +156,9 @@ ctx search <query>
 ctx context [query]
 ctx report
 ctx evidence run [--record <record-id>] <command> [args...]
+ctx shim install --dir <dir>
+ctx shim env --dir <dir>
+ctx shim uninstall --dir <dir>
 ctx link-pr <record-id> <pull-request-url>
 ctx export [--output work-records.json]
 ctx import [--input work-records.json] [--overwrite]
@@ -165,9 +178,9 @@ By default, ctx uses machine-local storage under:
 ```
 
 Set `CTX_DATA_ROOT` to use a different root. The current implementation stores
-records and command evidence in SQLite. Blob storage, JSONL capture inboxes, and
-passive normalization pipelines are planned Work Recorder architecture, not
-current branch behavior.
+records and imported command evidence in SQLite, full evidence payloads in local
+blob files, and pending passive captures in a JSONL inbox. Provider-history
+importers and broader passive normalization pipelines remain product direction.
 
 No account is required. No hosted sync runs in this branch. Exported JSON files
 should be reviewed before they leave your machine because records and command

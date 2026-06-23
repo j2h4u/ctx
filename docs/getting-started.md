@@ -48,8 +48,8 @@ The JSON output includes the record id. Use that id when attaching evidence or a
 Run your normal agent or tools from the same workspace. ctx is designed to work beside existing CLIs instead of replacing them.
 
 This branch does not yet passively import existing agent history or install
-provider hooks/shims; create records explicitly and run important commands
-through `ctx evidence run` when you want durable evidence.
+provider hooks; create records explicitly and run important commands through
+`ctx evidence run` when you want durable evidence.
 
 You can also pipe a longer note into a record:
 
@@ -68,6 +68,30 @@ ctx evidence run --record <record-id> cargo test -p checkout
 The command is executed normally. ctx stores the command string, exit code,
 safe stdout/stderr previews, start time, and duration in SQLite, with full
 stdout/stderr saved as local-only blob artifacts.
+
+## Capture local Git/jj/gh commands
+
+Install reversible wrappers into a directory you control:
+
+```bash
+ctx shim install --dir .ctx-shims
+eval "$(ctx shim env --dir .ctx-shims)"
+```
+
+Commands such as `git status`, `jj log`, and `gh pr view` run through the real
+tool found later on `PATH`, then best-effort spool command metadata into the
+local capture inbox. Import pending shim captures when you want them in the
+record store:
+
+```bash
+ctx capture import
+```
+
+Remove the wrappers with:
+
+```bash
+ctx shim uninstall --dir .ctx-shims
+```
 
 ## Link review state
 

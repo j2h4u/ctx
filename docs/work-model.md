@@ -17,7 +17,8 @@ Typical record kinds:
 
 ## Evidence
 
-Evidence is command output captured by `ctx evidence run`. Each evidence item stores:
+Evidence is command output captured by `ctx evidence run` or imported from a
+local Git/jj/gh shim capture. Each evidence item stores:
 
 - the command string
 - exit code
@@ -27,6 +28,15 @@ Evidence is command output captured by `ctx evidence run`. Each evidence item st
 - optional record id
 
 This is the current local evidence model. Store file paths, reproduction notes, or links in the record body when they matter.
+
+## Local shims
+
+`ctx shim install --dir <path>` creates local wrapper scripts for `git`, `jj`,
+and `gh`. The wrappers run the real command found later on `PATH`, preserve its
+exit code, and spool command metadata plus stdout/stderr to the JSONL capture
+inbox. `ctx capture import` imports those pending envelopes into the local
+record store. `ctx shim uninstall --dir <path>` removes only ctx-marked wrapper
+scripts.
 
 ## Pull requests
 
@@ -52,8 +62,7 @@ ctx does not require a special agent runtime. You can use Codex, Claude Code, Cu
 
 The current open recorder focuses on explicit local records and review packets.
 It does not yet passively capture provider sessions, import existing local agent
-history, install Git/jj/gh shims, publish pull request comments, or open a local
-dashboard.
+history, publish pull request comments, or open a local dashboard.
 
 Hosted team sync, shared policy enforcement, centralized dashboards, and
 organization-level analytics are separate product concerns and are not part of
