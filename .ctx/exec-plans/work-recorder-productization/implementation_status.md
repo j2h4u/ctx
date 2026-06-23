@@ -1,6 +1,6 @@
 # Work Recorder Productization Implementation Status
 
-Updated: 2026-06-22T19:26:21-05:00
+Updated: 2026-06-22T19:29:23-05:00
 
 Task: `feb64c1c-e58c-40f8-b1e9-1094dca0646e`
 
@@ -230,6 +230,19 @@ Integrated implementation work:
 - Resolved merge overlap with capture root subcommands and fixed Clippy
   `needless_borrow` findings in the PR parser.
 
+## Search And Agent Context Integration
+
+Integrated implementation work:
+
+- Added `work-record-search` with ranked local search/context packet builders,
+  safe snippet redaction, citations, evidence metadata, token-budget truncation,
+  pagination metadata, and optional share-safe dashboard links.
+- `ctx search --json` now emits a schema-versioned redacted search packet.
+- `ctx context --json` now uses the search packet builder to emit an
+  `AgentContextPacket` with max-token controls and local-only visibility.
+- Added tests for agent packet shape, why-matched/citations/evidence, token
+  budget truncation, dashboard URL safety, and secret-like snippet redaction.
+
 ## Validation
 
 - `./scripts/check.sh` in the public `work-record-product` worktree: PASS at
@@ -300,6 +313,13 @@ Integrated implementation work:
   PASS after VCS merge. Covered 15 CLI integration tests.
 - `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 BAZEL_JOBS=2 ./scripts/check.sh all && git diff --check`:
   PASS after VCS merge. Covered fmt, check, clippy, and tests; Bazel lane
+  recorded `skipped` because neither `bazel` nor `bazelisk` is installed.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo test -p work-record-search --lib -- --test-threads 1`:
+  PASS after search merge. Covered 2 search unit tests.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo test -p ctx --test cli -- --test-threads 1`:
+  PASS after search merge. Covered 20 CLI integration tests.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 BAZEL_JOBS=2 ./scripts/check.sh all && git diff --check`:
+  PASS after search merge. Covered fmt, check, clippy, and tests; Bazel lane
   recorded `skipped` because neither `bazel` nor `bazelisk` is installed.
 
 ## Reviewer Status

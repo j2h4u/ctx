@@ -282,6 +282,46 @@ Future entries must include:
   - Bazel lane recorded `skipped` because neither `bazel` nor `bazelisk` is
     installed.
 
+## 2026-06-22 Search And Context Integration Checks
+
+- Command:
+  `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo test -p work-record-search --lib -- --test-threads 1`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / `e9b5e29`
+- Outcome: PASS
+- Coverage:
+  - 2 search unit tests passed.
+
+- Command:
+  `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo test -p ctx --test cli -- --test-threads 1`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / `e9b5e29`
+- Outcome: PASS
+- Coverage:
+  - 20 CLI integration tests passed.
+
+- Command:
+  `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 BAZEL_JOBS=2 ./scripts/check.sh all && git diff --check`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / `e9b5e29`
+- Outcome: PASS
+- Coverage:
+  - `cargo fmt --all -- --check`;
+  - `cargo check --workspace --all-targets --locked`;
+  - `cargo clippy --workspace --all-targets --locked -- -D warnings`;
+  - `cargo test --workspace --all-targets --locked -- --test-threads 1`;
+  - 20 CLI integration tests, 3 capture unit tests, 4 core unit tests, 1 report
+    unit test, 2 search unit tests, 9 store unit tests, and 7 VCS unit tests
+    passed;
+  - Bazel lane recorded `skipped` because neither `bazel` nor `bazelisk` is
+    installed.
+
 ## 2026-06-22 Foundation Review Fix Checks
 
 - Command:
