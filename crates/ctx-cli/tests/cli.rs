@@ -1089,7 +1089,7 @@ fn setup_can_activate_passive_capture_in_shell_rc_and_deactivate_it() {
         .stdout(predicate::str::contains("✓ shell_rc:"));
 
     let contents = fs::read_to_string(&shell_rc).unwrap();
-    assert!(contents.contains("# >>> ctx work recorder passive capture >>>"));
+    assert!(contents.contains("# >>> ctx passive capture >>>"));
     assert!(contents.contains("shims"));
     assert!(contents.contains("export EXISTING=1"));
     assert!(temp.path().join(".testrc.ctxbak").exists());
@@ -1108,7 +1108,7 @@ fn setup_can_activate_passive_capture_in_shell_rc_and_deactivate_it() {
         .stdout(predicate::str::contains("deactivated"));
 
     let contents = fs::read_to_string(&shell_rc).unwrap();
-    assert!(!contents.contains("ctx work recorder passive capture"));
+    assert!(!contents.contains("ctx passive capture"));
     assert!(contents.contains("export EXISTING=1"));
 
     ctx(&temp)
@@ -1134,7 +1134,7 @@ fn setup_can_activate_passive_capture_in_shell_rc_and_deactivate_it() {
         .stdout(predicate::str::contains("removed_shims:"))
         .stdout(predicate::str::contains("kept_data:"));
     let contents = fs::read_to_string(&shell_rc).unwrap();
-    assert!(!contents.contains("ctx work recorder passive capture"));
+    assert!(!contents.contains("ctx passive capture"));
     assert!(temp.path().join("work.sqlite").exists());
 }
 
@@ -2080,11 +2080,11 @@ fn publish_pr_comment_dry_run_renders_marker_bounded_redacted_markdown() {
         .clone();
     let markdown = String::from_utf8(output).unwrap();
 
-    assert!(markdown.starts_with("<!-- ctx-work-record:finished-product:start -->"));
+    assert!(markdown.starts_with("<!-- ctx-records:pr-comment:start -->"));
     assert!(markdown
         .trim_end()
-        .ends_with("<!-- ctx-work-record:finished-product:end -->"));
-    assert!(markdown.contains("## Work Recorder Finished Product"));
+        .ends_with("<!-- ctx-records:pr-comment:end -->"));
+    assert!(markdown.contains("## ctx work records"));
     assert!(markdown.contains("https://github.com/ctxrs/ctx/pull/42"));
     assert!(markdown.contains("token=[REDACTED_SECRET]"));
     assert!(markdown.contains("password=[REDACTED_SECRET]"));
@@ -2109,7 +2109,7 @@ fn publish_pr_comment_dry_run_renders_marker_bounded_redacted_markdown() {
     assert!(payload["markdown"]
         .as_str()
         .unwrap()
-        .contains("## Work Recorder Finished Product"));
+        .contains("## ctx work records"));
     let rendered = serde_json::to_string(&payload).unwrap();
     assert!(!rendered.contains("ghp_123456"));
     assert!(!rendered.contains("hunter2"));
@@ -2241,7 +2241,7 @@ fn dashboard_export_writes_static_local_html_report() {
     assert_dashboard_assets(&output_dir);
     let data = dashboard_data(&output_dir);
     let rendered = data.to_string();
-    assert_eq!(data["product"], "ctx Work Recorder");
+    assert_eq!(data["product"], "ctx");
     assert_eq!(data["status"]["export_mode"], "Static local export");
     assert_eq!(
         data["status"]["search_command"],

@@ -5,7 +5,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/dashboard-review-dogfood.sh [options]
 
-Build local-only Work Recorder dashboard/review artifacts.
+Build local-only ctx dashboard/review artifacts for work records.
 
 Options:
   --archive PATH         Import a ctx archive fixture.

@@ -1,6 +1,6 @@
 # Work Recorder Provider Release Implementation Status
 
-Last updated: 2026-06-23T22:24:00Z.
+Last updated: 2026-06-23T23:40:03Z.
 
 ## Current Integration Branch
 
@@ -8,14 +8,17 @@ Last updated: 2026-06-23T22:24:00Z.
 - Worktree:
   `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
 - Branch: `work-record`
-- Current pushed head: `1c895fe51a92a3ad12d4916605c5e65727e13e32`
+- Current local head: this status checkpoint commit on `work-record`
+  (`Record ctx records contract validation`; pending push).
 - Previous certification: Buildkite public release verification build #73
   passed 26/26 for the earlier baseline head
   `71dfdb45543902b4f6bc01f5a961eabe5ef0e729`.
-- Current Buildkite verification: build #74
-  `https://buildkite.com/luca-king/ctx-public-release-verification/builds/74`
-  was triggered for the current head after the product-decision and
-  spool-fallback checkpoints.
+- Buildkite #74 failed on the previous checkpoint because `clippy` and the
+  gated live-provider E2E lane exposed release-gate issues. The clippy issue
+  was fixed earlier. The current `38d7864` checkpoint also makes the
+  live-provider gated job truly opt-in and keeps normal CI on lane definitions
+  only. A new Buildkite verification run is required after this status
+  checkpoint is pushed.
 
 ## Scope
 
@@ -102,6 +105,96 @@ ADE desktop release, `ade.ctx.rs` migration, production hosted launch, and
     `cargo-lowio clippy -p work-record-core --all-targets -- -D warnings`.
   - The broken gated live provider E2E job was routed to the provider and
     release workers for semantics/pipeline remediation.
+
+## 2026-06-23 Product Contract Checkpoint
+
+Public checkpoint:
+
+- Commit: `38d7864 Tighten ctx records product contract`.
+- Scope:
+  - Public CLI/report/dashboard/publish language now uses `ctx` and work-record
+    concepts instead of treating `Work Recorder` as the product name.
+  - PR publish markers now use `ctx-records:pr-comment`.
+  - `ctx setup --no-open` and headless setup still start/reuse the local
+    dashboard and print the dashboard URL plus `ctx dashboard --no-open`.
+  - Codex provider matrix no longer claims assistant/tool-call/parent-child
+    fidelity for prompt-history imports.
+  - Dogfood screenshot docs match the six generated dashboard screenshots.
+  - The Buildkite `provider-live-e2e-gated` job is gated by
+    `CTX_LIVE_PROVIDER_E2E=1` plus a provider-specific opt-in, and
+    `run-selected` writes a skipped artifact if the global opt-in is absent.
+- Public validations:
+  - `git diff --check` passed.
+  - `bash scripts/check-docs.sh` passed.
+  - `bash scripts/check-buildkite-pipeline.sh` passed.
+  - `bash scripts/check.sh product-decisions` passed.
+  - `CTX_ARTIFACT_DIR=target/ctx-artifacts/provider-live-e2e-skip
+    ./scripts/release-provider-live-e2e-lanes.sh run-selected` passed and wrote
+    a skipped artifact with the global opt-in disabled.
+  - `cargo-lowio fmt --check` passed.
+  - `cargo-lowio test --locked -p ctx --test cli
+    setup_status_golden_output_is_idempotent_and_validate_work --
+    --test-threads 1` passed.
+  - `cargo-lowio test --locked -p ctx --test cli
+    setup_headless_skips_dashboard_without_no_open -- --test-threads 1`
+    passed.
+  - `cargo-lowio test --locked -p ctx --test cli
+    dashboard_interactive_golden_output_starts_reuses_and_respects_open_modes --
+    --test-threads 1` passed.
+  - `cargo-lowio test --locked -p work-record-report -p work-record-publish --
+    --test-threads 1` passed.
+  - `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/google-chrome npx playwright
+    test tests/dashboard.spec.ts --workers=1` passed in `apps/ctx-dashboard`.
+- Review status:
+  - Private hosted reviewer returned PASS for the dirty staging-boundary diff.
+  - Public reviewer found the live-provider gate issue on the pre-checkpoint
+    head; that issue is fixed in `38d7864`.
+  - Public re-review of `38d7864` found stale dogfood script help and CLI test
+    assertions that still used old `Work Recorder`, `ctx work recorder passive
+    capture`, `ctx-work-record:finished-product`, and `ctx Work Recorder`
+    public strings. The manager fixed those strings in the follow-up status
+    checkpoint and reran focused validation before push.
+- Follow-up public validations after the re-review:
+  - `rg -n "ctx work recorder passive capture|ctx-work-record:finished-product|Work Recorder Finished Product|ctx Work Recorder|Build local-only Work Recorder"
+    scripts crates/ctx-cli/tests crates/work-record-report
+    crates/work-record-publish apps/ctx-dashboard docs -g '!target'` returned
+    no matches.
+  - `git diff --check` passed.
+  - `cargo-lowio test --locked -p ctx --test cli
+    setup_can_activate_passive_capture_in_shell_rc_and_deactivate_it --
+    --test-threads 1` passed.
+  - `cargo-lowio test --locked -p ctx --test cli
+    publish_pr_comment_dry_run_renders_marker_bounded_redacted_markdown --
+    --test-threads 1` passed.
+  - `cargo-lowio test --locked -p ctx --test cli
+    dashboard_export_writes_static_local_html_report -- --test-threads 1`
+    passed.
+  - `cargo-lowio fmt --check` passed.
+  - `bash scripts/check-docs.sh` passed.
+  - `bash scripts/check.sh product-decisions` passed.
+  - `bash scripts/check-buildkite-pipeline.sh` passed.
+
+Private hosted checkpoint:
+
+- Commit: `4823ec837 Keep Work Recorder hosted staging reserved` on
+  `ctx-private` branch `ctx/work-recorder-hosted-team`.
+- Scope:
+  - Hosted export route validates request shape but returns an explicit 501
+    reserved/staging response instead of fake queued success.
+  - Work Recorder worker Wrangler/package surfaces are staging-only; no prod
+    route, prod Wrangler env, or `deploy:prod` remains for this worker.
+  - Hosted allowed visibility/redaction states exclude `sync_full` and `raw` in
+    code and Neon constraints.
+  - Readiness defaults the Work Recorder profile to staging only.
+- Private validations:
+  - `git diff --check` passed.
+  - `pnpm -C work-recorder-worker typecheck` passed.
+  - `pnpm -C work-recorder-worker exec vitest run test/worker.test.ts
+    --pool=threads` passed, 30 tests.
+  - `pnpm -C work-recorder-worker readiness:check:local` passed with only the
+    staging Wrangler environment reported.
+  - `pnpm -C llm-relay-worker exec vitest run
+    test/cloudflare-neon-readiness.test.mjs --pool=threads` passed, 8 tests.
 
 ## Validation
 
