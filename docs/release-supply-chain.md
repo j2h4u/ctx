@@ -28,6 +28,17 @@ for the finished-product review:
 The completion certificate references these artifacts beside the platform
 release dry-run manifests and FreeBSD blocker artifact.
 
+Current-head release completion is not implied by local self-tests. The
+certificate validator requires Linux x64, macOS arm64, macOS x64, and Windows
+x64 release dry-run manifests whose `git_commit` matches the current checkout,
+plus the explicit FreeBSD blocker artifact. Synthetic self-test manifests are
+marked as fixtures and are rejected by normal certificate runs.
+
+Installer/release smoke status for this branch is dry-run only. The installer
+smoke validates metadata parsing, unsafe input refusals, and the planned
+install path, but it does not download, install, sign, notarize, or publish a
+release artifact.
+
 ## Checksums
 
 Every installable artifact must have one SHA-256 digest in release metadata and

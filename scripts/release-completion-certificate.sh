@@ -153,6 +153,29 @@ require_manifest_value() {
   fi
 }
 
+require_manifest_current_head() {
+  local path="$1"
+  local description="$2"
+  local expected_commit actual_commit
+
+  expected_commit="$(git rev-parse HEAD)"
+  actual_commit="$(manifest_value "${path}" ".git_commit")"
+  if [[ "${actual_commit}" != "${expected_commit}" ]]; then
+    fail_certificate "${description}: ${path} git_commit must match current HEAD ${expected_commit}, got ${actual_commit:-<missing>}"
+  fi
+}
+
+require_no_self_test_fixture() {
+  local path="$1"
+  local description="$2"
+  local self_test_fixture
+
+  self_test_fixture="$(manifest_value "${path}" ".self_test_fixture")"
+  if [[ "${self_test_fixture}" == "true" && "${CTX_COMPLETION_CERTIFICATE_ALLOW_SELF_TEST_FIXTURES:-0}" != "1" ]]; then
+    fail_certificate "${description}: ${path} is a self-test fixture and cannot satisfy real completion evidence"
+  fi
+}
+
 require_summary_status() {
   local path="$1"
   local expected_mode="$2"
@@ -182,6 +205,8 @@ validate_release_dry_run() {
   require_manifest_value "${manifest}" ".package" "ctx" "${platform} manifest records package"
   require_manifest_value "${manifest}" ".platform" "${platform}" "${platform} manifest records platform"
   require_manifest_value "${manifest}" ".target_triple" "${target_triple}" "${platform} manifest records target triple"
+  require_manifest_current_head "${manifest}" "${platform} manifest records current head"
+  require_no_self_test_fixture "${manifest}" "${platform} manifest records real release evidence"
 
   artifact_count="$(manifest_value "${manifest}" '.artifacts | if type == "array" then length else -1 end')"
   if [[ "${artifact_count}" != "1" ]]; then
@@ -271,6 +296,7 @@ validate_evidence() {
   require_manifest_value "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" ".platform" "freebsd-x64" "FreeBSD blocker records platform"
   require_manifest_value "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" ".target_triple" "x86_64-unknown-freebsd" "FreeBSD blocker records target triple"
   require_manifest_value "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" ".publishing" "false" "FreeBSD blocker records non-publishing status"
+  require_manifest_current_head "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json" "FreeBSD blocker records current head"
   require_summary_status "artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json" "provider-fixtures"
   require_summary_status "artifacts/buildkite/finished-product/rich-search-context/rich-search-context.json" "rich-search-context"
   require_file "artifacts/buildkite/finished-product/rich-search-context/rich-context.json"

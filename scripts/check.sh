@@ -478,6 +478,7 @@ write_release_evidence_self_test_fixture() {
   "git_commit": "$(git rev-parse HEAD)",
   "git_branch": "$(git branch --show-current)",
   "generated_at_unix_s": 1,
+  "self_test_fixture": true,
   "artifacts": [
     {
       "path": "${artifact_path}",
@@ -572,7 +573,9 @@ run_completion_certificate_self_test() {
   write_release_evidence_self_test_fixture "${root}" "macos-x64" "x86_64-apple-darwin"
   write_release_evidence_self_test_fixture "${root}" "windows-x64" "x86_64-pc-windows-gnu"
 
-  CTX_COMPLETION_EVIDENCE_ROOT="${root}" bash scripts/release-completion-certificate.sh
+  CTX_COMPLETION_CERTIFICATE_ALLOW_SELF_TEST_FIXTURES=1 \
+    CTX_COMPLETION_EVIDENCE_ROOT="${root}" \
+    bash scripts/release-completion-certificate.sh
 
   rm -rf "${empty_root}"
   mkdir -p "${empty_root}"
@@ -616,6 +619,10 @@ mutate_completion_certificate_negative_fixture() {
         "${root}/artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json"
       rm -f "${root}/artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json.bak"
       ;;
+    stale-release-commit)
+      sed -i.bak 's/"git_commit": "[^"]*"/"git_commit": "0000000000000000000000000000000000000000"/' "${manifest}"
+      rm -f "${manifest}.bak"
+      ;;
     *)
       printf 'unknown completion certificate negative fixture: %s\n' "${case_name}" >&2
       return 2
@@ -634,11 +641,24 @@ run_completion_certificate_negative_case() {
   cp -R "${source_root}" "${case_root}"
   mutate_completion_certificate_negative_fixture "${case_root}" "${case_name}"
 
-  if CTX_COMPLETION_EVIDENCE_ROOT="${case_root}" bash scripts/release-completion-certificate.sh >"${output}" 2>&1; then
+  if CTX_COMPLETION_CERTIFICATE_ALLOW_SELF_TEST_FIXTURES=1 \
+    CTX_COMPLETION_EVIDENCE_ROOT="${case_root}" \
+    bash scripts/release-completion-certificate.sh >"${output}" 2>&1; then
     printf 'completion certificate unexpectedly passed negative case %s\n' "${case_name}" >&2
     return 1
   fi
   file_contains "${output}" "${expected}"
+}
+
+run_completion_certificate_self_test_fixture_rejection_case() {
+  local source_root="$1"
+  local output="${CTX_ARTIFACT_DIR}/completion-certificate-negative-self-test-fixture-without-allow.txt"
+
+  if CTX_COMPLETION_EVIDENCE_ROOT="${source_root}" bash scripts/release-completion-certificate.sh >"${output}" 2>&1; then
+    printf 'completion certificate unexpectedly accepted self-test release fixtures without explicit allow\n' >&2
+    return 1
+  fi
+  file_contains "${output}" "is a self-test fixture and cannot satisfy real completion evidence"
 }
 
 run_completion_certificate_negative_cases() {
@@ -655,7 +675,10 @@ missing-checksum-file|required evidence is missing or empty: artifacts/buildkite
 unsafe-artifact-path|manifest must record a safe relative artifact path
 bad-artifact-count|manifest must record exactly one release artifact
 failing-finished-product-summary|provider-fixtures summary records passing status
+stale-release-commit|git_commit must match current HEAD
 EOF
+
+  run_completion_certificate_self_test_fixture_rejection_case "${source_root}"
 }
 
 run_bazel() {
