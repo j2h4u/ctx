@@ -1,6 +1,6 @@
 # Work Recorder Productization Validation Log
 
-Updated: 2026-06-22T22:11:53-05:00
+Updated: 2026-06-22T22:20:10-05:00
 
 ## 2026-06-22 Baseline Public Branch Check
 
@@ -1389,3 +1389,46 @@ Future entries must include:
 - Coverage:
   - optional local Bazel mode still records a skip when `CTX_REQUIRE_BAZEL` is
     unset.
+
+## 2026-06-22 Windows Git Bash Wrapper Check
+
+- Remote Buildkite evidence:
+  - build `https://buildkite.com/luca-king/ctx-public-release-verification/builds/34`
+    passed the Linux fmt, docs, check, clippy, test, examples, and Bazel lanes;
+  - Windows smoke failed before product code because `bash` was not recognized
+    on the `windows-x64` runner `PATH`.
+
+- Command:
+  `bash -n scripts/check.sh scripts/ci-common.sh scripts/bazel-test.sh scripts/check-docs.sh scripts/check-buildkite-pipeline.sh scripts/release-dry-run.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted Windows Git Bash wrapper changes on `eacef2a`
+- Outcome: PASS.
+
+- Command:
+  `./scripts/check-buildkite-pipeline.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted Windows Git Bash wrapper changes on `eacef2a`
+- Outcome: PASS.
+- Coverage:
+  - Buildkite parser accepted the pipeline;
+  - contract requires `scripts\\ci-windows-bash.cmd` in the Windows lanes.
+
+- Command:
+  `./scripts/check-docs.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted Windows Git Bash wrapper changes on `eacef2a`
+- Outcome: PASS.
+
+- Command:
+  `git diff --check`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted Windows Git Bash wrapper changes on `eacef2a`
+- Outcome: PASS.

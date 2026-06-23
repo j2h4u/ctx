@@ -120,6 +120,7 @@ validate_contract() {
   require_text "macOS arm64 queue" "${pipeline}" 'queue: "ctx-mac-gui-shared-arm64"'
   require_text "macOS x64 queue" "${pipeline}" 'queue: "ctx-mac-gui-shared-x64"'
   require_text "Windows x64 queue" "${pipeline}" 'queue: "windows-x64"'
+  require_text "Windows Git Bash wrapper" "${pipeline}" 'scripts\\ci-windows-bash.cmd'
 
   require_text "docs command wired" "${pipeline}" './scripts/check.sh docs'
   require_text "examples command wired" "${pipeline}" './scripts/check.sh examples'

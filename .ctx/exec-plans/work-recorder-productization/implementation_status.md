@@ -1,6 +1,6 @@
 # Work Recorder Productization Implementation Status
 
-Updated: 2026-06-22T22:11:53-05:00
+Updated: 2026-06-22T22:20:10-05:00
 
 Task: `feb64c1c-e58c-40f8-b1e9-1094dca0646e`
 
@@ -852,3 +852,29 @@ None accepted yet.
   - commit and push the remediation;
   - trigger and observe a fresh public Buildkite build proving the Bazel lane on
     the Linux runner.
+
+## 2026-06-22 Buildkite Windows Git Bash Remediation
+
+- Build 34:
+  - URL: `https://buildkite.com/luca-king/ctx-public-release-verification/builds/34`;
+  - Linux fmt, docs, check, clippy, test, examples, and Bazel lanes passed;
+  - Windows smoke failed before product code because `bash` was not on the
+    `windows-x64` runner `PATH`.
+- Repo-owned remediation:
+  - added `scripts/ci-windows-bash.cmd`, a batch wrapper that locates Git Bash
+    in common Git for Windows/MSYS2 install paths or falls back to `where bash`;
+  - Windows smoke and release dry-run lanes now invoke the wrapper instead of
+    assuming `bash` is on `PATH`;
+  - if Git Bash is genuinely absent, the wrapper exits with a precise infra
+    message instructing the runner to install Git for Windows or add `bash.exe`
+    to `PATH`.
+- Local validation:
+  - `bash -n scripts/check.sh scripts/ci-common.sh scripts/bazel-test.sh scripts/check-docs.sh scripts/check-buildkite-pipeline.sh scripts/release-dry-run.sh`:
+    PASS;
+  - `./scripts/check-buildkite-pipeline.sh`: PASS, including the Windows Git
+    Bash wrapper contract;
+  - `./scripts/check-docs.sh`: PASS;
+  - `git diff --check`: PASS.
+- Remaining external evidence gap:
+  - commit and push the Windows wrapper remediation;
+  - trigger and observe a fresh public Buildkite build proving Windows smoke.
