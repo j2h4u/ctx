@@ -28,6 +28,8 @@ pub enum PublishError {
     RateLimited,
     #[error("raw transcript publishing requires a non-empty acknowledgement reason")]
     InvalidRawTranscriptOptIn,
+    #[error("PR comment body must contain exactly one ctx marker-bounded section")]
+    InvalidMarkedComment,
     #[error("GitHub client error: {0}")]
     Client(String),
 }
@@ -215,6 +217,13 @@ pub fn has_comment_markers(body: &str) -> bool {
     marked_section_bounds(body).is_some()
 }
 
+pub fn has_single_comment_marker_section(body: &str) -> bool {
+    let Some((_start, end)) = marked_section_bounds(body) else {
+        return false;
+    };
+    !body[end..].contains(COMMENT_MARKER_START) && !body[end..].contains(COMMENT_MARKER_END)
+}
+
 fn marked_section_bounds(body: &str) -> Option<(usize, usize)> {
     let start = body.find(COMMENT_MARKER_START)?;
     let after_start = start + COMMENT_MARKER_START.len();
@@ -333,6 +342,9 @@ pub fn upsert_github_pr_comment<C: GitHubPrCommentClient>(
     body: &str,
     options: &PublishOptions,
 ) -> Result<PublishOutcome> {
+    if !has_single_comment_marker_section(body) {
+        return Err(PublishError::InvalidMarkedComment);
+    }
     if target.provider != PullRequestProvider::Github {
         return Err(match target.provider {
             PullRequestProvider::Gitlab => PublishError::GitlabUnsupported,
@@ -547,6 +559,11 @@ mod tests {
 
         assert!(!has_comment_markers(&reversed));
         assert_eq!(replace_marked_comment_section(&reversed, "new"), None);
+        assert!(!has_single_comment_marker_section(&reversed));
+        assert!(!has_single_comment_marker_section("plain body"));
+        assert!(!has_single_comment_marker_section(&format!(
+            "{COMMENT_MARKER_START}\none\n{COMMENT_MARKER_END}\n{COMMENT_MARKER_START}\ntwo\n{COMMENT_MARKER_END}"
+        )));
     }
 
     #[test]
@@ -655,6 +672,27 @@ mod tests {
                 .unwrap();
         assert_eq!(updated, PublishOutcome::Updated { comment_id: 7 });
         assert_eq!(client.comments[0].body, body);
+    }
+
+    #[test]
+    fn upsert_rejects_unmarked_or_ambiguous_desired_body() {
+        let target =
+            PullRequestTarget::github_from_url("https://github.com/ctxrs/ctx/pull/1").unwrap();
+        let mut client = MockClient {
+            comments: Vec::new(),
+            calls: Vec::new(),
+            fail_list: None,
+        };
+
+        let result = upsert_github_pr_comment(
+            &mut client,
+            &target,
+            "plain body",
+            &PublishOptions::default(),
+        );
+
+        assert!(matches!(result, Err(PublishError::InvalidMarkedComment)));
+        assert!(client.calls.is_empty());
     }
 
     #[test]
