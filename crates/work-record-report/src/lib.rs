@@ -221,12 +221,12 @@ pub fn render_dashboard_html_report(report: &DashboardReport<'_>) -> String {
 pub fn dashboard_static_assets() -> Vec<(&'static str, &'static [u8])> {
     vec![
         (
-            "assets/index-BZjtJJ8j.js",
-            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/index-BZjtJJ8j.js"),
+            "assets/index-CQUv9FY7.js",
+            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/index-CQUv9FY7.js"),
         ),
         (
-            "assets/index-vA4JKuue.css",
-            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/index-vA4JKuue.css"),
+            "assets/index-6W7gg-GW.css",
+            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/index-6W7gg-GW.css"),
         ),
     ]
 }

@@ -62,7 +62,8 @@ pre {
   padding: 16px;
 }
 
-.panel > .overflow-auto {
+.panel > .overflow-auto,
+.table-scroll {
   max-width: 100%;
   min-width: 0;
 }
@@ -76,11 +77,16 @@ pre {
   display: flex;
   gap: 6px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   border-bottom: 1px solid hsl(var(--border));
+  scroll-padding-inline: 12px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
 }
 
 .tab-trigger {
   display: inline-flex;
+  flex: 0 0 auto;
   min-height: 42px;
   align-items: center;
   gap: 8px;
@@ -92,6 +98,8 @@ pre {
   font-size: 14px;
   white-space: nowrap;
   cursor: pointer;
+  scroll-margin-inline: 12px;
+  scroll-snap-align: center;
 }
 
 .tab-trigger[data-state="active"] {
@@ -188,6 +196,11 @@ pre {
   font-size: 13px;
 }
 
+.table-scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
 .data-table th,
 .data-table td {
   border-bottom: 1px solid hsl(var(--border));
@@ -199,6 +212,40 @@ pre {
 .data-table th {
   color: hsl(var(--muted-foreground));
   font-weight: 600;
+}
+
+.command-card-list {
+  display: none;
+}
+
+.command-card {
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+  padding: 12px;
+}
+
+.command-card-command,
+.command-card-preview {
+  display: grid;
+  gap: 5px;
+}
+
+.command-card-command span,
+.command-card-preview span {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.command-card-command code,
+.command-card-preview p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.command-card-meta {
+  margin-top: 8px;
 }
 
 .preview {
@@ -253,4 +300,38 @@ pre {
 
 .key-value span {
   color: hsl(var(--muted-foreground));
+}
+
+@media (max-width: 640px) {
+  .tab-list {
+    gap: 6px;
+    margin-inline: -16px;
+    padding-inline: 16px;
+    scroll-padding-inline: 16px;
+    scroll-snap-type: x mandatory;
+  }
+
+  .tab-list::before,
+  .tab-list::after {
+    content: "";
+    flex: 0 0 36%;
+  }
+
+  .tab-trigger {
+    flex-basis: calc(100vw - 32px);
+    justify-content: center;
+    min-height: 42px;
+    gap: 6px;
+    padding-inline: 10px;
+    font-size: 13px;
+  }
+
+  .table-scroll {
+    display: none;
+  }
+
+  .command-card-list {
+    display: grid;
+    gap: 10px;
+  }
 }

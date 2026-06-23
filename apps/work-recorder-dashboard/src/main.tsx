@@ -31,12 +31,27 @@ const data = readDashboardData();
 function App() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [query, setQuery] = useState("");
+  const [activeTab, setActiveTab] = useState("overview");
   const failedCommands = data.commands.filter((command) => command.exit_code !== 0).length;
 
   React.useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
+
+  React.useEffect(() => {
+    const activeTrigger = document.querySelector<HTMLButtonElement>(`[data-dashboard-tab="${activeTab}"]`);
+    const tabList = activeTrigger?.closest<HTMLElement>(".tab-list");
+    if (!activeTrigger || !tabList) return;
+
+    const scrollActiveTab = () => {
+      const left = activeTrigger.offsetLeft - (tabList.clientWidth - activeTrigger.offsetWidth) / 2;
+      tabList.scrollTo({ left: Math.max(0, left), behavior: "auto" });
+    };
+
+    scrollActiveTab();
+    requestAnimationFrame(scrollActiveTab);
+  }, [activeTab]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -81,7 +96,7 @@ function App() {
           <Metric label="Raw transcripts withheld" value={data.privacy.raw_transcripts_withheld} />
         </div>
 
-        <Tabs.Root defaultValue="overview" className="space-y-4">
+        <Tabs.Root value={activeTab} onValueChange={setActiveTab} className="space-y-4">
           <Tabs.List className="tab-list" aria-label="Dashboard views">
             <Tab value="overview" icon={<Activity className="size-4" />} label="Overview" />
             <Tab value="workspace" icon={<GitBranch className="size-4" />} label="Workspace" />
@@ -117,11 +132,25 @@ function App() {
 
 function Tab({ value, icon, label }: { value: string; icon: React.ReactNode; label: string }) {
   return (
-    <Tabs.Trigger className="tab-trigger" value={value}>
+    <Tabs.Trigger className="tab-trigger" value={value} data-dashboard-tab={value}>
       {icon}
       <span>{label}</span>
     </Tabs.Trigger>
   );
+}
+
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = React.useState(false);
+
+  React.useEffect(() => {
+    const mediaQuery = window.matchMedia(query);
+    const update = () => setMatches(mediaQuery.matches);
+    update();
+    mediaQuery.addEventListener("change", update);
+    return () => mediaQuery.removeEventListener("change", update);
+  }, [query]);
+
+  return matches;
 }
 
 function Overview({ data }: { data: DashboardData }) {
@@ -430,6 +459,7 @@ function SettingsView({ data }: { data: DashboardData }) {
 }
 
 function CommandTable({ commands }: { commands: EvidenceCommand[] }) {
+  const isMobile = useMediaQuery("(max-width: 640px)");
   const columns = useMemo<ColumnDef<EvidenceCommand>[]>(
     () => [
       { accessorKey: "command", header: "Command", cell: (info) => <code>{String(info.getValue())}</code> },
@@ -441,8 +471,33 @@ function CommandTable({ commands }: { commands: EvidenceCommand[] }) {
   );
   const table = useReactTable({ data: commands, columns, getCoreRowModel: getCoreRowModel() });
   if (commands.length === 0) return <EmptyState text="No evidence has been captured yet." />;
+  if (isMobile) {
+    return (
+      <div className="command-card-list">
+        {commands.map((command) => (
+          <article className="command-card" key={command.id}>
+            <div className="command-card-command">
+              <span>Command</span>
+              <code>{command.command}</code>
+            </div>
+            <div className="command-card-meta">
+              <KeyValue label="Exit" value={command.exit_code} />
+              <KeyValue label="Duration" value={`${command.duration_ms}ms`} />
+            </div>
+            {command.output_preview ? (
+              <div className="command-card-preview">
+                <span>Preview</span>
+                <p>{command.output_preview}</p>
+              </div>
+            ) : null}
+          </article>
+        ))}
+      </div>
+    );
+  }
+
   return (
-    <div className="overflow-auto">
+    <div className="table-scroll">
       <table className="data-table">
         <thead>
           {table.getHeaderGroups().map((headerGroup) => (
