@@ -1,5 +1,5 @@
 {
-  "name": "@ctx/work-recorder-dashboard",
+  "name": "@ctx/dashboard",
   "version": "0.1.0",
   "private": true,
   "type": "module",

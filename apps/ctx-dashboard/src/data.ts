@@ -329,7 +329,7 @@ export const sampleDashboardData: DashboardData = {
       host: "github",
       owner: "ctxrs",
       name: "ctx",
-      monorepo_subpath: "apps/work-recorder-dashboard"
+      monorepo_subpath: "apps/ctx-dashboard"
     }
   ],
   vcs_changes: [
@@ -421,7 +421,7 @@ export const sampleDashboardData: DashboardData = {
     {
       id: "file-1",
       work_record_id: "rec-dashboard",
-      path: "apps/work-recorder-dashboard/src/main.tsx",
+      path: "apps/ctx-dashboard/src/main.tsx",
       change_kind: "modified",
       line_count_delta: 420,
       confidence: "explicit"
@@ -429,7 +429,7 @@ export const sampleDashboardData: DashboardData = {
     {
       id: "file-provider-1",
       work_record_id: "rec-provider",
-      path: "apps/work-recorder-dashboard/src/data.ts",
+      path: "apps/ctx-dashboard/src/data.ts",
       change_kind: "modified",
       line_count_delta: 180,
       confidence: "explicit"

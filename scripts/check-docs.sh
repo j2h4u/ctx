@@ -24,7 +24,7 @@ required_paths=(
   docs/freebsd-release-worker.md
   examples/local-record-workflow.sh
   examples/capture-spool-fixture.sh
-  apps/work-recorder-dashboard/site-preview.html
+  apps/ctx-dashboard/site-preview.html
   release/install/ctx-release-metadata.env.template
   release/completion-certificate-template.md
   release/r2-artifact-layout.json
@@ -58,10 +58,10 @@ public_docs=(
   README.md
   SECURITY.md
   docs
-  apps/work-recorder-dashboard/README.md
-  apps/work-recorder-dashboard/src/site-preview-data.ts
-  apps/work-recorder-dashboard/src/site-preview.tsx
-  apps/work-recorder-dashboard/site-preview.html
+  apps/ctx-dashboard/README.md
+  apps/ctx-dashboard/src/site-preview-data.ts
+  apps/ctx-dashboard/src/site-preview.tsx
+  apps/ctx-dashboard/site-preview.html
 )
 
 public_name_docs=(
@@ -77,10 +77,10 @@ public_name_docs=(
   docs/dependency-license-audit.md
   docs/provider-adapter-api.md
   docs/threat-model.md
-  apps/work-recorder-dashboard/README.md
-  apps/work-recorder-dashboard/src/site-preview-data.ts
-  apps/work-recorder-dashboard/src/site-preview.tsx
-  apps/work-recorder-dashboard/site-preview.html
+  apps/ctx-dashboard/README.md
+  apps/ctx-dashboard/src/site-preview-data.ts
+  apps/ctx-dashboard/src/site-preview.tsx
+  apps/ctx-dashboard/site-preview.html
 )
 
 doc_search "ctx capture import" README.md docs examples >/dev/null
@@ -113,15 +113,15 @@ doc_search "jj e2e blocker status" docs/release-supply-chain.md release/completi
 doc_search "R2 upload plan" docs/release-supply-chain.md docs/release-r2-layout.md release/completion-certificate-template.md >/dev/null
 doc_search "CTX_LIVE_PROVIDER_E2E=1" docs/release-supply-chain.md >/dev/null
 doc_search "freebsd-x64" docs/freebsd-release-worker.md docs/release-supply-chain.md >/dev/null
-doc_search "work records|records agent work" README.md docs apps/work-recorder-dashboard/src/site-preview-data.ts apps/work-recorder-dashboard/src/site-preview.tsx >/dev/null
+doc_search "work records|records agent work" README.md docs apps/ctx-dashboard/src/site-preview-data.ts apps/ctx-dashboard/src/site-preview.tsx >/dev/null
 doc_search "~/.ctx/" README.md docs/getting-started.md docs/threat-model.md >/dev/null
 doc_search "objects/" README.md docs/threat-model.md >/dev/null
 doc_search "spool/" README.md docs/getting-started.md docs/threat-model.md >/dev/null
 doc_search "shims/" README.md docs/getting-started.md docs/threat-model.md >/dev/null
 doc_search "config.toml" README.md docs/threat-model.md >/dev/null
 doc_search "logs/" README.md docs/threat-model.md >/dev/null
-doc_search "ctx dashboard.*--no-open|headless" README.md docs apps/work-recorder-dashboard/src/site-preview-data.ts apps/work-recorder-dashboard/src/site-preview.tsx >/dev/null
-doc_search "ctx service install|ctx setup --service" README.md docs apps/work-recorder-dashboard/src/site-preview-data.ts >/dev/null
+doc_search "ctx dashboard.*--no-open|headless" README.md docs apps/ctx-dashboard/src/site-preview-data.ts apps/ctx-dashboard/src/site-preview.tsx >/dev/null
+doc_search "ctx service install|ctx setup --service" README.md docs apps/ctx-dashboard/src/site-preview-data.ts >/dev/null
 doc_search "ctx uninstall --delete-data" README.md docs >/dev/null
 
 if doc_search "~/.ctx/work-record|work-record/(shims|inbox)|work-record\\\\(shims|inbox)|\\bblobs/|\\binbox\\b|blob files|blob artifacts" "${public_docs[@]}" >/dev/null; then
@@ -130,7 +130,7 @@ if doc_search "~/.ctx/work-record|work-record/(shims|inbox)|work-record\\\\(shim
 fi
 
 if doc_search "Work Recorder" "${public_docs[@]}" \
-  | doc_search_inverse "work-recorder-dashboard|work-recorder-dogfood|work-recorder-completion|work-recorder-finished-product|ctx-work-recorder-releases|work-record-core|work-record-capture|work-record-store|Work Recorder Completion Certificate" >/dev/null; then
+  | doc_search_inverse "ctx-dashboard|work-recorder-dogfood|work-recorder-completion|work-recorder-finished-product|ctx-work-recorder-releases|work-record-core|work-record-capture|work-record-store|Work Recorder Completion Certificate" >/dev/null; then
   printf 'public docs contain Work Recorder as product branding; use ctx/work records wording\n' >&2
   exit 1
 fi

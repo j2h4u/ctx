@@ -186,7 +186,7 @@ run_product_decisions() {
   product_decision_failures=0
   mkdir -p "${out_dir}"
 
-  for root in README.md docs apps/work-recorder-dashboard/src release .buildkite; do
+  for root in README.md docs apps/ctx-dashboard/src release .buildkite; do
     [[ -e "${root}" ]] && public_roots+=("${root}")
   done
 
@@ -273,7 +273,7 @@ capture_output() {
 
 dashboard_playwright_available() {
   command -v node >/dev/null 2>&1 || return 1
-  node - "${repo_root}/apps/work-recorder-dashboard/package.json" <<'NODE' >/dev/null 2>&1
+  node - "${repo_root}/apps/ctx-dashboard/package.json" <<'NODE' >/dev/null 2>&1
 const { createRequire } = require('module');
 const requireFromDashboard = createRequire(process.argv[2]);
 requireFromDashboard('playwright');
@@ -385,6 +385,10 @@ run_dashboard_report_artifact_review() {
       "${dogfood_args[@]}"
   cp "${dogfood_dir}/visual-evidence.json" "${CTX_ARTIFACT_DIR}/visual-evidence.json"
   cp "${dogfood_dir}/screenshot-status.txt" "${CTX_ARTIFACT_DIR}/screenshot-status.txt"
+  rm -rf "${CTX_ARTIFACT_DIR}/screenshots"
+  if [[ -d "${dogfood_dir}/screenshots" ]]; then
+    cp -R "${dogfood_dir}/screenshots" "${CTX_ARTIFACT_DIR}/screenshots"
+  fi
   file_contains "${dogfood_dir}/manifest.json" '"visual_evidence": "visual-evidence.json"'
   if file_contains "${CTX_ARTIFACT_DIR}/visual-evidence.json" '"visual_status": "captured"'; then
     test -s "${dogfood_dir}/screenshots/desktop-providers.png"

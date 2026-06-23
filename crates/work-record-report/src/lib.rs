@@ -223,18 +223,16 @@ pub fn render_dashboard_html_report(report: &DashboardReport<'_>) -> String {
 pub fn dashboard_static_assets() -> Vec<(&'static str, &'static [u8])> {
     vec![
         (
-            "assets/dashboard-Hm0CBhTe.js",
-            include_bytes!(
-                "../../../apps/work-recorder-dashboard/dist/assets/dashboard-Hm0CBhTe.js"
-            ),
+            "assets/dashboard-CFIwRE-6.js",
+            include_bytes!("../../../apps/ctx-dashboard/dist/assets/dashboard-CFIwRE-6.js"),
         ),
         (
             "assets/styles-D-8XnUVV.js",
-            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/styles-D-8XnUVV.js"),
+            include_bytes!("../../../apps/ctx-dashboard/dist/assets/styles-D-8XnUVV.js"),
         ),
         (
             "assets/styles-saCrjsu1.css",
-            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/styles-saCrjsu1.css"),
+            include_bytes!("../../../apps/ctx-dashboard/dist/assets/styles-saCrjsu1.css"),
         ),
     ]
 }
@@ -445,7 +443,7 @@ fn render_dashboard_spa_html(report: &DashboardReport<'_>) -> String {
         .replace('<', "\\u003c")
         .replace('>', "\\u003e")
         .replace('&', "\\u0026");
-    include_str!("../../../apps/work-recorder-dashboard/dist/index.html")
+    include_str!("../../../apps/ctx-dashboard/dist/index.html")
         .replace("__CTX_DASHBOARD_DATA__", &data_json)
 }
 

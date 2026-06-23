@@ -251,7 +251,7 @@ capture_screenshots() {
   local screenshot_dir="$2"
   local screenshot_status="$3"
   local module_name=""
-  local require_root="${repo_root}/apps/work-recorder-dashboard/package.json"
+  local require_root="${repo_root}/apps/ctx-dashboard/package.json"
   local browser_path="${CTX_DASHBOARD_REVIEW_BROWSER:-}"
   local expected
 
@@ -274,7 +274,7 @@ createRequire(process.argv[2])('playwright-core');
 NODE
     module_name="playwright-core"
   else
-    printf 'blocker: Playwright is unavailable under apps/work-recorder-dashboard; dashboard screenshots were not captured\n' | tee "${screenshot_status}"
+    printf 'blocker: Playwright is unavailable under apps/ctx-dashboard; dashboard screenshots were not captured\n' | tee "${screenshot_status}"
     return 1
   fi
 

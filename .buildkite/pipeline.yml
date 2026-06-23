@@ -211,7 +211,7 @@ steps:
     key: "dashboard-report-artifact-review"
     depends_on: "rich-search-context"
     command: |
-      npm --prefix apps/work-recorder-dashboard ci
+      npm --prefix apps/ctx-dashboard ci
       CTX_ARTIFACT_DIR=artifacts/buildkite/finished-product/dashboard-report-artifact-review ./scripts/check.sh dashboard-report-artifact-review
     agents:
       queue: "release-linux-managed"
