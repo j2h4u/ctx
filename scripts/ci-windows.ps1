@@ -179,7 +179,7 @@ function Ensure-MSVC-Build-Environment {
 
   Write-Host "link.exe not found on PATH; importing MSVC environment from $script"
   if ($script.EndsWith("VsDevCmd.bat", [StringComparison]::OrdinalIgnoreCase)) {
-    Invoke-Batch-Environment -BatchFile $script -BatchArgs @("-arch=x64", "-host_arch=x64")
+    Invoke-Batch-Environment -BatchFile $script -BatchArgs @("-arch=amd64", "-host_arch=amd64")
   } else {
     Invoke-Batch-Environment -BatchFile $script -BatchArgs @()
   }
