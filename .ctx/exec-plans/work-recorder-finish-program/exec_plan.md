@@ -484,3 +484,14 @@ Do not report final completion until all are true:
   by the `**/*` upload/download glob. Fix in progress: upload both `dir/*` and
   `dir/**/*`, and use a tolerant `download_artifacts` helper before the strict
   certificate script validates required files.
+- 2026-06-23T19:02Z: Buildkite #69 passed all 25 prerequisite
+  build/test/platform/release lanes, including Windows x64 release dry-run, then
+  failed only in the completion certificate. The Windows job log proved it
+  uploaded five release artifacts, but Buildkite stored their artifact paths
+  with Windows backslashes, for example
+  `artifacts\buildkite\release-dry-run\windows-x64\manifest.json`; the Linux
+  completion job was only searching forward-slash paths. Fix in progress:
+  make the completion downloader try both slash styles, normalize downloaded
+  backslash-path artifacts into the forward-slash evidence layout, and keep the
+  strict certificate requirement that Windows x64 manifest/package artifacts
+  exist.

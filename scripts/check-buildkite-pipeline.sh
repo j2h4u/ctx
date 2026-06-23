@@ -163,6 +163,8 @@ validate_contract() {
   require_text "Windows release dry-run command wired" "${pipeline}" 'scripts\\ci-windows.ps1 release-dry-run'
   require_text "completion certificate command wired" "${pipeline}" './scripts/release-completion-certificate.sh'
   require_text "completion certificate uses tolerant artifact download helper" "${pipeline}" 'download_artifacts()'
+  require_text "completion certificate normalizes Windows artifact paths" "${pipeline}" 'normalize_downloaded_artifact_paths()'
+  require_text "completion certificate downloads backslash artifact paths" "${pipeline}" 'buildkite-agent artifact download "${windows_prefix}\\*" . || true'
   require_text "completion certificate downloads pipeline contract artifact" "${pipeline}" 'download_artifacts "artifacts/buildkite/pipeline-contract"'
   require_text "completion certificate downloads Linux release dry-run artifacts" "${pipeline}" 'download_artifacts "artifacts/buildkite/release-dry-run/linux-x64"'
   require_text "completion certificate downloads macOS arm64 release dry-run artifacts" "${pipeline}" 'download_artifacts "artifacts/buildkite/release-dry-run/macos-arm64"'
