@@ -1,6 +1,6 @@
 # Work Recorder Productization Validation Log
 
-Updated: 2026-06-22T21:44:30-05:00
+Updated: 2026-06-22T21:49:01-05:00
 
 ## 2026-06-22 Baseline Public Branch Check
 
@@ -1195,4 +1195,45 @@ Future entries must include:
   `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
 - Branch/head:
   `work-record` / uncommitted docs fallback changes on `60d92cc`
+- Outcome: PASS.
+
+## 2026-06-22 Sccache Wrapper Disable Check
+
+- Remote Buildkite evidence:
+  - build `https://buildkite.com/luca-king/ctx-public-release-verification/builds/29`
+    failed checkout because the trigger used an invalid full SHA for `3f1b534`;
+    this was an operator-trigger error, not a repo/product failure.
+  - build `https://buildkite.com/luca-king/ctx-public-release-verification/builds/30`
+    passed pipeline upload, contract, fmt, and docs lanes, then failed
+    `cargo check` before source checks because inherited
+    `RUSTC_WRAPPER=/usr/bin/sccache` hit `path must be shorter than
+    libc::sockaddr_un.sun_path` on the Buildkite checkout/socket path.
+
+- Command:
+  `RUSTC_WRAPPER=/usr/bin/sccache TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 ./scripts/check.sh check`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted sccache wrapper changes on `3f1b534`
+- Outcome: PASS.
+- Coverage:
+  - proves `ctx_init_resource_env` disables inherited sccache by default before
+    running Cargo;
+  - sccache remains available only when explicitly opting in with
+    `CTX_USE_SCCACHE=1`.
+
+- Command:
+  `bash -n scripts/ci-common.sh scripts/check.sh scripts/release-dry-run.sh scripts/check-docs.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted sccache wrapper changes on `3f1b534`
+- Outcome: PASS.
+
+- Command:
+  `git diff --check`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted sccache wrapper changes on `3f1b534`
 - Outcome: PASS.

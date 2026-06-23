@@ -1,6 +1,6 @@
 # Work Recorder Productization Implementation Status
 
-Updated: 2026-06-22T21:44:30-05:00
+Updated: 2026-06-22T21:49:01-05:00
 
 Task: `feb64c1c-e58c-40f8-b1e9-1094dca0646e`
 
@@ -768,4 +768,34 @@ None accepted yet.
   - `git diff --check`: PASS.
 - Remaining external evidence gap:
   - commit and push the docs tooling remediation;
+  - trigger and observe a fresh public Buildkite build.
+
+## 2026-06-22 Buildkite Sccache Wrapper Remediation
+
+- Build 29:
+  - URL: `https://buildkite.com/luca-king/ctx-public-release-verification/builds/29`
+  - Outcome: failed in checkout because the trigger used an invalid full SHA for
+    `3f1b534`. This was an operator-trigger error, not a repo/product failure.
+- Build 30:
+  - URL: `https://buildkite.com/luca-king/ctx-public-release-verification/builds/30`
+  - Triggered on `work-record` at
+    `3f1b53421e7c929dc463e49a6679fb77c66a2404`.
+  - Pipeline upload, contract, fmt, and docs lanes passed.
+  - `cargo check` failed before checking source because the Buildkite agent
+    injected `RUSTC_WRAPPER=/usr/bin/sccache`, and sccache failed with
+    `path must be shorter than libc::sockaddr_un.sun_path` on the agent's
+    checkout/socket path.
+- Repo-owned remediation:
+  - `scripts/ci-common.sh` now unsets inherited sccache `RUSTC_WRAPPER` by
+    default during `ctx_init_resource_env`;
+  - sccache remains opt-in through `CTX_USE_SCCACHE=1`.
+- Local validation on `work-record` with uncommitted sccache wrapper changes on
+  `3f1b534`:
+  - `RUSTC_WRAPPER=/usr/bin/sccache TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 ./scripts/check.sh check`:
+    PASS;
+  - `bash -n scripts/ci-common.sh scripts/check.sh scripts/release-dry-run.sh scripts/check-docs.sh`:
+    PASS;
+  - `git diff --check`: PASS.
+- Remaining external evidence gap:
+  - commit and push the sccache wrapper remediation;
   - trigger and observe a fresh public Buildkite build.

@@ -216,6 +216,9 @@ ctx_init_resource_env() {
   export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-${CTX_CARGO_JOBS:-${default_jobs}}}"
   export RUST_TEST_THREADS="${RUST_TEST_THREADS:-${CTX_TEST_THREADS:-${CARGO_BUILD_JOBS}}}"
   export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}"
+  if [[ "${CTX_USE_SCCACHE:-0}" != "1" && "${RUSTC_WRAPPER:-}" == *sccache* ]]; then
+    unset RUSTC_WRAPPER
+  fi
   mkdir -p "${TMPDIR}"
 
   export BAZEL_JOBS="${BAZEL_JOBS:-${CARGO_BUILD_JOBS}}"
