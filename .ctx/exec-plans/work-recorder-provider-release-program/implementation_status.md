@@ -1,6 +1,6 @@
 # Work Recorder Provider Release Implementation Status
 
-Last updated: 2026-06-23T20:39:30Z.
+Last updated: 2026-06-23T20:43:30Z.
 
 ## Current Integration Branch
 
@@ -46,6 +46,20 @@ ADE desktop release, `ade.ctx.rs` migration, production hosted launch, and
 - Implementation agents launched for the initial provider/release/docs/hosted
   streams. Dashboard/CLI polish was launched through the alternate worker-agent
   path after stale prior ctx-MCP children consumed the ctx-MCP session limit.
+- Public implementation was reassigned to fresh `*-active` branches from the
+  pushed `8cc7719` checkpoint after the original ctx-MCP public workers stayed
+  queued without branch changes.
+- Active alternate-worker branches:
+  - `ctx/wr-provider-architecture-active`
+  - `ctx/wr-provider-p0-codex-claude-pi-opencode-active`
+  - `ctx/wr-provider-p0-antigravity-gemini-cursor-active`
+  - `ctx/wr-provider-longtail-active`
+  - `ctx/wr-vcs-pr-active`
+  - `ctx/wr-dashboard-cli-polish`
+- `ctx/wr-release-docs-active` was created from `8cc7719`, but a fresh
+  alternate worker could not be launched yet because the alternate pool reached
+  its six-agent limit. Release/docs remains covered by the earlier ctx-MCP
+  worker until a fresh slot opens.
 - Workers were instructed to avoid broad concurrent Cargo and use focused,
   resource-safe validation.
 
