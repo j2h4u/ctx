@@ -257,6 +257,7 @@ dependencies = [
  "uuid",
  "work-record-core",
  "work-record-report",
+ "work-record-search",
  "work-record-store",
 ]
 
@@ -1068,6 +1069,19 @@ dependencies = [
  "serde_json",
  "uuid",
  "work-record-core",
+]
+
+[[package]]
+name = "work-record-search"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "regex",
+ "serde",
+ "thiserror",
+ "uuid",
+ "work-record-core",
+ "work-record-store",
 ]
 
 [[package]]
