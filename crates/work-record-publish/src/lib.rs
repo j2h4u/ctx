@@ -390,17 +390,9 @@ impl GhCommandRunner for StdGhCommandRunner {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GhCliClientOptions {
     pub expected_author: Option<String>,
-}
-
-impl Default for GhCliClientOptions {
-    fn default() -> Self {
-        Self {
-            expected_author: None,
-        }
-    }
 }
 
 pub struct GhCliGitHubPrCommentClient<R = StdGhCommandRunner> {
@@ -795,7 +787,7 @@ mod tests {
 
         let first = render_pr_comment(
             &[later.clone(), earlier.clone()],
-            &[evidence.clone()],
+            std::slice::from_ref(&evidence),
             &RenderOptions::default(),
         );
         let second = render_pr_comment(&[earlier, later], &[evidence], &RenderOptions::default());
@@ -1194,7 +1186,7 @@ mod tests {
         let comments = client.list_comments(&target).unwrap();
         let runner = client.into_runner();
 
-        assert_eq!(comments[0].owned_by_ctx, true);
+        assert!(comments[0].owned_by_ctx);
         assert_eq!(
             runner.calls,
             vec![vec![

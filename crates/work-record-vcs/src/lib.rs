@@ -989,7 +989,7 @@ fn redact_key_value(input: &str, key: &str) -> String {
         output.push_str("<redacted>");
         remaining = &remaining[index + needle.len()..];
         let end = remaining
-            .find(|ch| matches!(ch, '&' | ' ' | '\'' | '"' | ')' | ']'))
+            .find(['&', ' ', '\'', '"', ')', ']'])
             .unwrap_or(remaining.len());
         remaining = &remaining[end..];
     }
