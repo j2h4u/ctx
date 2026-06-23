@@ -6,9 +6,10 @@ supported-wrapper proof with reviewable output and docs that match the actual
 implementation.
 
 This branch proves provider integration through explicit, local import commands
-and a conservative local discovery command. It does not install passive Codex,
-Claude Code, or Pi native hooks. The first shipped passive capture surface is
-the local Git/jj/gh wrapper shim path installed by `ctx setup`.
+and a conservative local discovery command. It does not install passive
+provider-native hooks for Codex, Claude, Pi, or long-tail providers. The first
+shipped passive capture surface is the local Git/jj/gh wrapper shim path
+installed by `ctx setup`.
 
 Authoritative machine-readable metadata lives in
 `docs/provider-support-matrix.json`. The shared provider adapter and normalized
@@ -47,6 +48,41 @@ snake_case where needed, such as `supported_import` and `fixture_only`.
   parser or hook is implemented.
 - Pi: `~/.pi/agent` or `~/.pi`; reported as `detected_unsupported` when
   present because no native Pi transcript/history parser or hook is implemented.
+- P1/P2 provider inventory paths listed below: reported as
+  `discovered_unsupported` when one of the documented config/history paths
+  exists. These probes check path existence only and do not read provider
+  settings, tokens, session stores, logs, or transcripts.
+
+## P1/P2 Classification
+
+The rows below are release inventory and blocker truth, not public support
+claims. Their machine-readable rows include primary source links in
+`metadata.evidence` and point at the path-existence detector proof in
+`crates/ctx-cli/src/main.rs` and `crates/ctx-cli/tests/cli.rs`.
+
+| Provider ID | Provider | Priority | Status | Detection paths | Evidence basis | Current blocker / next action |
+| --- | --- | --- | --- | --- | --- | --- |
+| `copilot_cli` | Copilot CLI | P1 | `detected_unsupported` | `~/.copilot`, `~/.config/gh/extensions/gh-copilot` | [GitHub config docs](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference), [hooks](https://docs.github.com/en/copilot/reference/hooks-reference), [session data](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/chronicle) | Build a read-only `~/.copilot` parser or ctx hook adapter before import/capture claims. |
+| `factory_droid` | Factory / Droid | P1 | `detected_unsupported` | `~/.factory`, `./.factory` | [CLI reference](https://docs.factory.ai/reference/cli-reference), [settings](https://docs.factory.ai/cli/configuration/settings), [hooks](https://docs.factory.ai/reference/hooks-reference), [droid exec](https://docs.factory.ai/cli/droid-exec/overview) | Prefer hooks or JSON-RPC over scraping private session files. |
+| `goose` | Goose | P1 | `detected_unsupported` | `~/.config/goose/config.yaml`, `~/.local/share/goose/sessions/sessions.db`, legacy sessions directory | [Goose logs](https://goose-docs.ai/docs/guides/logs/), [config files](https://goose-docs.ai/docs/guides/config-files/) | Add redacted SQLite/legacy JSONL fixtures and parser before import. |
+| `openhands` | OpenHands | P1 | `detected_unsupported` | `~/.openhands/conversations`, settings files | [CLI install](https://docs.openhands.dev/openhands/usage/cli/installation), [CLI commands](https://docs.openhands.dev/openhands/usage/cli/command-reference), [conversation architecture](https://docs.openhands.dev/sdk/arch/conversation) | Normalize ConversationState/EventLog fixtures before import. |
+| `amp` | Amp | P1 | `detected_unsupported` | `~/.config/amp/settings.json[c]`, `./.amp/settings.json[c]` | [Manual](https://ampcode.com/manual), [security](https://ampcode.com/security), [SDK](https://ampcode.com/manual/sdk) | Use SDK streaming or wrapper capture; no stable local thread importer is implemented. |
+| `cagent` | Docker cagent | P1 | `detected_unsupported` | `~/.cagent`, `~/.cagent/cagent.debug.log` | [Docker Agent CLI reference](https://docs.docker.com/ai/docker-agent/reference/cli/) | Debug logs are not a transcript contract; prefer OpenTelemetry or structured output. |
+| `qwen` | Qwen Code | P1 | `detected_unsupported` | `~/.qwen/settings.json`, `~/.qwen/tmp`, `~/.qwen`, `./.qwen` | [Qwen settings](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/), [repository](https://github.com/QwenLM/qwen-code) | Documented `shell_history` is not a full transcript; confirm stable session store. |
+| `mistral` | Mistral Vibe | P1 | `detected_unsupported` | `~/.vibe/config.toml`, `~/.vibe`, `./.vibe` | [Vibe install/setup](https://docs.mistral.ai/vibe/code/cli/install-setup), [repository](https://github.com/mistralai/mistral-vibe) | Need stable transcript source or ACP adapter. |
+| `kimi` | Kimi Code | P1 | `detected_unsupported` | `~/.kimi-code`, `~/.kimi-code/config.toml` | [Kimi CLI support](https://platform.kimi.ai/docs/guide/kimi-cli-support), [repository](https://github.com/MoonshotAI/kimi-code) | Build a redacted session-record fixture; no parser/hook/ACP adapter exists. |
+| `aider` | Aider | P2 | `detected_unsupported` | `./.aider.chat.history.md`, `./.aider.input.history`, `./.aider.conf.yml`, `~/.aider.conf.yml` | [Options](https://aider.chat/docs/config/options.html), [FAQ](https://aider.chat/docs/faq.html) | Add explicit markdown chat-history fixtures and redaction before import. |
+| `cline_roo` | Cline / Roo | P2 | `detected_unsupported` | common VS Code globalStorage IDs for Cline and Roo | [Cline task management](https://docs.cline.bot/core-workflows/task-management), [Roo chat interface](https://roocodeinc.github.io/Roo-Code/basic-usage/the-chat-interface/) | Collect redacted task-directory fixtures across extension versions. |
+| `continue_cody` | Continue / Cody | P2 | `detected_unsupported` | `~/.continue/config.yaml`, `~/.continue/logs`, Continue/Cody VS Code globalStorage IDs | [Continue config](https://docs.continue.dev/customize/deep-dives/configuration), [troubleshooting logs](https://docs.continue.dev/troubleshooting), [Cody export note](https://sourcegraph.com/blog/cody-vscode-0-10-release) | Use explicit exports/fixtures rather than scraping extension internals. |
+| `auggie` | Auggie | P2 | `detected_unsupported` | `~/.augment`, `~/.augment/settings.json`, `./.augment` | [Auggie CLI reference](https://docs.augmentcode.com/cli/reference) | Prototype structured print-mode, session-list export, or ACP capture. |
+| `junie` | Junie | P2 | `detected_unsupported` | `~/.junie`, `~/.junie/allowlist.json` | [Junie CLI quickstart](https://junie.jetbrains.com/docs/junie-cli.html) | Need documented local session schema or export path. |
+| `kilo` | Kilo Code | P2 | `detected_unsupported` | common VS Code globalStorage IDs for Kilo | [Kilo auto cleanup](https://kilo.ai/docs/getting-started/settings/auto-cleanup) | Collect redacted task-directory fixtures; cleanup can delete history. |
+| `swe_agent` | SWE-agent | P2 | `detected_unsupported` | `./trajectories`, `~/.swe-agent` | [SWE-agent trajectories](https://swe-agent.com/latest/usage/trajectories/) | Add `.traj` fixture parser with redaction and version handling. |
+
+The current matrix also keeps `copilot` and `droid_factory_ai` as separate
+blocked historical-surface rows. The source branch classified their current CLI
+surfaces as `copilot_cli` and `factory_droid`; release management should decide
+whether the historical rows become aliases or remain separate contracts.
 
 The command is intentionally conservative. It imports only the sources this
 branch can prove safely and refuses to upgrade unsupported providers into
@@ -69,6 +105,9 @@ mode, redaction boundary, cursor checkpoints, and explicit idempotency fields
 in sync metadata. Normalized fixture imports use
 `normalized_provider_fixture_jsonl` and `fidelity=imported`. Codex
 prompt-history imports use `codex_history_jsonl` and `fidelity=summary_only`.
+Detected-unsupported inventory rows use `path_existence_only` detection and do
+not claim prompt, message, tool, file, artifact, cost, token, or child-session
+fidelity.
 
 The Codex history path intentionally does not create parent/child edges. The
 local history format observed for this branch exposes prompt log rows only, not

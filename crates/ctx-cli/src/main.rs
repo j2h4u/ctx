@@ -2068,6 +2068,174 @@ fn import_local_providers(store: &mut Store) -> Result<LocalProviderImportReport
         discover_first_existing(&[&[".pi", "agent"], &[".pi"]]),
         "no supported local Pi transcript/history schema is implemented; use normalized fixture import only",
     ));
+    entries.push(provider_unsupported_entry(
+        "copilot_cli",
+        discover_first_existing(&[
+            &[".copilot"],
+            &[".config", "gh", "extensions", "gh-copilot"],
+        ]),
+        "Copilot CLI local configuration/session data can be detected, but no ctx Copilot session parser or hook adapter is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "factory_droid",
+        discover_first_existing_any(&[&[".factory"]], &[&[".factory"]]),
+        "Factory Droid configuration can be detected, but no ctx Droid session parser, hook adapter, or droid exec JSON-RPC adapter is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "goose",
+        discover_first_existing(&[
+            &[".config", "goose", "config.yaml"],
+            &[".local", "share", "goose", "sessions", "sessions.db"],
+            &[".local", "share", "goose", "sessions"],
+        ]),
+        "Goose local sessions can be detected, but no ctx sessions.db or legacy JSONL parser is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "amp",
+        discover_first_existing_any(
+            &[
+                &[".config", "amp", "settings.json"],
+                &[".config", "amp", "settings.jsonc"],
+            ],
+            &[&[".amp", "settings.json"], &[".amp", "settings.jsonc"]],
+        ),
+        "Amp settings can be detected, but no ctx Amp thread importer, SDK adapter, or wrapper is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "openhands",
+        discover_first_existing(&[
+            &[".openhands", "conversations"],
+            &[".openhands", "settings.json"],
+            &[".openhands", "agent_settings.json"],
+        ]),
+        "OpenHands local configuration/conversations can be detected, but no ctx ConversationState/EventLog parser is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "qwen",
+        discover_first_existing_any(
+            &[&[".qwen", "settings.json"], &[".qwen", "tmp"], &[".qwen"]],
+            &[&[".qwen"]],
+        ),
+        "Qwen Code configuration can be detected, but no ctx transcript parser is implemented and documented shell_history is not a full transcript",
+    ));
+    entries.push(provider_unsupported_entry(
+        "mistral",
+        discover_first_existing_any(
+            &[&[".vibe", "config.toml"], &[".vibe"]],
+            &[&[".vibe", "config.toml"], &[".vibe"]],
+        ),
+        "Mistral Vibe configuration can be detected, but no ctx Vibe transcript parser or ACP adapter is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "kimi",
+        discover_first_existing(&[&[".kimi-code", "config.toml"], &[".kimi-code"]]),
+        "Kimi Code local data can be detected, but no ctx Kimi session-record parser, hook adapter, or ACP adapter is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "cagent",
+        discover_first_existing(&[&[".cagent", "cagent.debug.log"], &[".cagent"]]),
+        "Docker cagent local state/log paths can be detected, but debug logs are not treated as a stable transcript import contract",
+    ));
+    entries.push(provider_unsupported_entry(
+        "aider",
+        discover_first_existing_any(
+            &[&[".aider.conf.yml"]],
+            &[
+                &[".aider.chat.history.md"],
+                &[".aider.input.history"],
+                &[".aider.conf.yml"],
+            ],
+        ),
+        "Aider chat/config files can be detected, but no ctx markdown chat-history parser is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "cline_roo",
+        discover_first_existing(&[
+            &[
+                ".config",
+                "Code",
+                "User",
+                "globalStorage",
+                "saoudrizwan.claude-dev",
+            ],
+            &[".config", "Code", "User", "globalStorage", "cline.cline"],
+            &[
+                ".config",
+                "Code",
+                "User",
+                "globalStorage",
+                "rooveterinaryinc.roo-cline",
+            ],
+            &[
+                ".config",
+                "Code",
+                "User",
+                "globalStorage",
+                "roocode.roo-code",
+            ],
+        ]),
+        "Cline/Roo VS Code storage can be detected, but no ctx task-directory parser or extension adapter is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "continue_cody",
+        discover_first_existing(&[
+            &[".continue", "config.yaml"],
+            &[".continue", "logs"],
+            &[
+                ".config",
+                "Code",
+                "User",
+                "globalStorage",
+                "continue.continue",
+            ],
+            &[
+                ".config",
+                "Code",
+                "User",
+                "globalStorage",
+                "sourcegraph.cody-ai",
+            ],
+        ]),
+        "Continue/Cody local config or extension storage can be detected, but no ctx chat-history importer is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "auggie",
+        discover_first_existing_any(
+            &[&[".augment", "settings.json"], &[".augment"]],
+            &[&[".augment", "settings.json"], &[".augment"]],
+        ),
+        "Auggie settings can be detected, but no ctx session-list, structured print-mode, or ACP adapter is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "junie",
+        discover_first_existing(&[&[".junie", "allowlist.json"], &[".junie"]]),
+        "Junie local configuration can be detected, but no ctx prompt/session-history parser is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "kilo",
+        discover_first_existing(&[
+            &[
+                ".config",
+                "Code",
+                "User",
+                "globalStorage",
+                "kilocode.kilo-code",
+            ],
+            &[
+                ".config",
+                "Code",
+                "User",
+                "globalStorage",
+                "kilo-org.kilocode",
+            ],
+        ]),
+        "Kilo VS Code storage can be detected, but no ctx task-history parser or extension adapter is implemented",
+    ));
+    entries.push(provider_unsupported_entry(
+        "swe_agent",
+        discover_first_existing_any(&[&[".swe-agent"]], &[&["trajectories"]]),
+        "SWE-agent trajectory output can be detected, but no ctx .traj parser is implemented",
+    ));
 
     Ok(LocalProviderImportReport { entries })
 }
@@ -2132,13 +2300,32 @@ fn discover_first_existing(candidates: &[&[&str]]) -> Option<PathBuf> {
         .find(|path| path.exists())
 }
 
+fn discover_first_existing_any(
+    home_candidates: &[&[&str]],
+    cwd_candidates: &[&[&str]],
+) -> Option<PathBuf> {
+    discover_first_existing(home_candidates)
+        .or_else(|| discover_first_existing_under_current_dir(cwd_candidates))
+}
+
+fn discover_first_existing_under_current_dir(candidates: &[&[&str]]) -> Option<PathBuf> {
+    let cwd = env::current_dir().ok()?;
+    candidates
+        .iter()
+        .map(|segments| path_from_segments(cwd.clone(), segments))
+        .find(|path| path.exists())
+}
+
 fn default_home_path(segments: &[&str]) -> Option<PathBuf> {
     let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))?;
-    let mut path = PathBuf::from(home);
+    Some(path_from_segments(PathBuf::from(home), segments))
+}
+
+fn path_from_segments(mut path: PathBuf, segments: &[&str]) -> PathBuf {
     for segment in segments {
         path.push(segment);
     }
-    Some(path)
+    path
 }
 
 #[derive(Debug)]

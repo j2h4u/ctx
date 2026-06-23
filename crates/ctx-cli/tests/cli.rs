@@ -1097,6 +1097,77 @@ fn import_local_providers_imports_codex_history_and_reports_unsupported_native_h
 }
 
 #[test]
+fn import_local_providers_reports_longtail_detected_unsupported_rows() {
+    let temp = tempdir();
+    let home = temp.path().join("home");
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(home.join(".copilot")).unwrap();
+    fs::create_dir_all(home.join(".factory")).unwrap();
+    fs::create_dir_all(home.join(".config/goose")).unwrap();
+    fs::write(home.join(".config/goose/config.yaml"), "GOOSE_PROVIDER: test\n").unwrap();
+    fs::create_dir_all(home.join(".config/amp")).unwrap();
+    fs::write(home.join(".config/amp/settings.json"), "{}\n").unwrap();
+    fs::create_dir_all(home.join(".openhands/conversations")).unwrap();
+    fs::create_dir_all(home.join(".qwen/tmp")).unwrap();
+    fs::create_dir_all(home.join(".vibe")).unwrap();
+    fs::write(home.join(".vibe/config.toml"), "# test\n").unwrap();
+    fs::create_dir_all(home.join(".kimi-code")).unwrap();
+    fs::create_dir_all(home.join(".cagent")).unwrap();
+    fs::create_dir_all(home.join(".config/Code/User/globalStorage/saoudrizwan.claude-dev"))
+        .unwrap();
+    fs::create_dir_all(home.join(".continue/logs")).unwrap();
+    fs::create_dir_all(home.join(".augment")).unwrap();
+    fs::create_dir_all(home.join(".junie")).unwrap();
+    fs::create_dir_all(home.join(".config/Code/User/globalStorage/kilocode.kilo-code"))
+        .unwrap();
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(workspace.join(".aider.chat.history.md"), "# aider\n").unwrap();
+    fs::create_dir_all(workspace.join("trajectories")).unwrap();
+
+    let mut command = ctx(&temp);
+    command
+        .env("HOME", &home)
+        .current_dir(&workspace)
+        .args(["capture", "import-local-providers", "--json"]);
+    let payload = json_output(&mut command);
+    let providers = payload["providers"].as_array().unwrap();
+    let provider = |name: &str| {
+        providers
+            .iter()
+            .find(|entry| entry["provider"] == name)
+            .unwrap_or_else(|| panic!("missing provider row {name}"))
+    };
+
+    for name in [
+        "copilot_cli",
+        "factory_droid",
+        "goose",
+        "amp",
+        "openhands",
+        "qwen",
+        "mistral",
+        "kimi",
+        "cagent",
+        "aider",
+        "cline_roo",
+        "continue_cody",
+        "auggie",
+        "junie",
+        "kilo",
+        "swe_agent",
+    ] {
+        let entry = provider(name);
+        assert_eq!(entry["status"], "discovered_unsupported", "{name}");
+        assert_eq!(entry["imported_sessions"], 0, "{name}");
+        assert_eq!(entry["imported_events"], 0, "{name}");
+        assert!(
+            !entry["blocker"].as_str().unwrap().is_empty(),
+            "{name} blocker was missing: {entry}"
+        );
+    }
+}
+
+#[test]
 fn provider_fixture_import_rejects_malformed_lines_without_partial_import() {
     let temp = tempdir();
     let fixture = temp.path().join("malformed-provider.jsonl");

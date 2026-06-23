@@ -62,6 +62,13 @@ ADE desktop release, `ade.ctx.rs` migration, production hosted launch, and
   worker until a fresh slot opens.
 - Workers were instructed to avoid broad concurrent Cargo and use focused,
   resource-safe validation.
+- Integration worker `ctx/wr-integrate-longtail-matrix` reconciled
+  `858b115 Classify long-tail work recorder providers` into the current shared
+  provider matrix schema. The integration preserved current provider IDs,
+  carried source evidence URLs into matrix metadata, added path-existence-only
+  P1/P2 `discovered_unsupported` CLI discovery rows, and left separate
+  historical `copilot` and `droid_factory_ai` rows blocked pending an alias vs
+  separate-contract decision. Validation was not run per manager instruction.
 
 ## Validation
 
