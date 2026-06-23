@@ -144,6 +144,23 @@ fn dashboard_data(output_dir: &Path) -> Value {
     serde_json::from_str(&tail[..end]).unwrap()
 }
 
+fn collect_json_strings(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(text) => out.push(text.clone()),
+        Value::Array(items) => {
+            for item in items {
+                collect_json_strings(item, out);
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values() {
+                collect_json_strings(item, out);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
 fn assert_dashboard_assets(output_dir: &Path) {
     let assets = output_dir.join("assets");
     assert!(
@@ -1700,9 +1717,13 @@ fn redaction_corpus_drives_active_shareable_cli_surfaces() {
         ])
         .assert()
         .success();
-    let dashboard = dashboard_data(&output_dir).to_string();
+    let dashboard_data = dashboard_data(&output_dir);
+    let mut dashboard_strings = Vec::new();
+    collect_json_strings(&dashboard_data, &mut dashboard_strings);
+    let dashboard_text = dashboard_strings.join("\n");
+    let dashboard = dashboard_data.to_string();
     for row in &rows {
-        assert!(dashboard.contains(row["expected_redacted"].as_str().unwrap()));
+        assert!(dashboard_text.contains(row["expected_redacted"].as_str().unwrap()));
     }
     assert_no_corpus_raw_values(&dashboard, &rows);
     assert_no_corpus_sensitive_fragments(&dashboard);
