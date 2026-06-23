@@ -1,6 +1,6 @@
 # Work Recorder Productization Implementation Status
 
-Updated: 2026-06-22T22:20:10-05:00
+Updated: 2026-06-22T22:24:00-05:00
 
 Task: `feb64c1c-e58c-40f8-b1e9-1094dca0646e`
 
@@ -140,9 +140,9 @@ Known remaining CI/release blockers:
   the public `ctxrs/ctx` Buildkite pipeline: `main-linux`,
   `release-linux-managed` with `ctx-runner-class=release-linux-x64-stage`,
   `ctx-mac-gui-shared-arm64`, `ctx-mac-gui-shared-x64`, and `windows-x64`.
-- The Windows lane additionally requires Git Bash in `PATH`, Rust stable, Cargo,
-  and an MSVC host toolchain so `rustc -vV` reports
-  `host: x86_64-pc-windows-msvc`.
+- The Windows lane uses `scripts/ci-windows.ps1` so smoke/release dry-runs do
+  not require Bash on `windows-x64`; it still requires an MSVC host toolchain so
+  `rustc -vV` reports `host: x86_64-pc-windows-msvc`.
 - FreeBSD native release artifacts are blocked until a native
   `queue=freebsd-x64` Buildkite agent pool exists, or until a separate
   cross-build lane proves the FreeBSD linker/toolchain contract.
@@ -853,28 +853,34 @@ None accepted yet.
   - trigger and observe a fresh public Buildkite build proving the Bazel lane on
     the Linux runner.
 
-## 2026-06-22 Buildkite Windows Git Bash Remediation
+## 2026-06-22 Buildkite Windows PowerShell Remediation
 
 - Build 34:
   - URL: `https://buildkite.com/luca-king/ctx-public-release-verification/builds/34`;
   - Linux fmt, docs, check, clippy, test, examples, and Bazel lanes passed;
   - Windows smoke failed before product code because `bash` was not on the
     `windows-x64` runner `PATH`.
+  - Direct final-state inspection from this shell was blocked by Buildkite
+    login and no `BUILDKITE_API_TOKEN`/`BUILDKITE_TOKEN` was available.
 - Repo-owned remediation:
-  - added `scripts/ci-windows-bash.cmd`, a batch wrapper that locates Git Bash
-    in common Git for Windows/MSYS2 install paths or falls back to `where bash`;
-  - Windows smoke and release dry-run lanes now invoke the wrapper instead of
-    assuming `bash` is on `PATH`;
-  - if Git Bash is genuinely absent, the wrapper exits with a precise infra
-    message instructing the runner to install Git for Windows or add `bash.exe`
-    to `PATH`.
+  - added `scripts/ci-windows.ps1`, a native PowerShell wrapper for
+    `platform-smoke` and `release-dry-run`;
+  - Windows smoke and release dry-run lanes now invoke PowerShell directly and
+    no longer depend on Bash/Git Bash;
+  - the PowerShell wrapper bootstraps Rust through `rustup-init.exe` if needed,
+    keeps `CARGO_HOME`, `RUSTUP_HOME`, temp files, and tool downloads under
+    repo-owned `target/` paths, enforces `CTX_EXPECT_HOST_TRIPLE`, and preserves
+    the same low Cargo/test resource caps as the Bash wrappers;
+  - release dry-run writes the Windows `.exe`, manifest, checksums, and timing
+    artifacts without requiring Unix tools.
 - Local validation:
   - `bash -n scripts/check.sh scripts/ci-common.sh scripts/bazel-test.sh scripts/check-docs.sh scripts/check-buildkite-pipeline.sh scripts/release-dry-run.sh`:
     PASS;
-  - `./scripts/check-buildkite-pipeline.sh`: PASS, including the Windows Git
-    Bash wrapper contract;
+  - `./scripts/check-buildkite-pipeline.sh`: PASS, including the Windows
+    PowerShell wrapper contract;
   - `./scripts/check-docs.sh`: PASS;
   - `git diff --check`: PASS.
 - Remaining external evidence gap:
-  - commit and push the Windows wrapper remediation;
-  - trigger and observe a fresh public Buildkite build proving Windows smoke.
+  - commit and push the Windows PowerShell remediation;
+  - trigger and observe a fresh public Buildkite build proving Windows smoke and
+    Windows release dry-run.

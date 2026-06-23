@@ -167,7 +167,7 @@ steps:
   - label: ":windows: smoke windows-x64"
     key: "platform-smoke-windows-x64"
     depends_on: "bazel"
-    command: "scripts\\ci-windows-bash.cmd ./scripts/check.sh platform-smoke"
+    command: "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\ci-windows.ps1 platform-smoke"
     env:
       CTX_ARTIFACT_DIR: "artifacts/buildkite/platform-smoke/windows-x64"
       CTX_EXPECT_HOST_TRIPLE: "x86_64-pc-windows-msvc"
@@ -240,7 +240,7 @@ steps:
   - label: ":windows: release dry-run windows-x64"
     key: "release-dry-run-windows-x64"
     depends_on: "platform-smoke-windows-x64"
-    command: "scripts\\ci-windows-bash.cmd ./scripts/release-dry-run.sh"
+    command: "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\ci-windows.ps1 release-dry-run"
     env:
       CTX_ARTIFACT_DIR: "artifacts/buildkite/release-dry-run/windows-x64"
       CTX_RELEASE_PLATFORM: "windows-x64"

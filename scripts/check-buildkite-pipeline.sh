@@ -88,10 +88,15 @@ validate_yaml_if_possible() {
 validate_contract() {
   local pipeline=".buildkite/pipeline.yml"
   local release_script="scripts/release-dry-run.sh"
+  local windows_script="scripts/ci-windows.ps1"
   local blocker_script="scripts/release-platform-blocker.sh"
 
   test -f "${pipeline}" || fail_contract "pipeline file exists"
   test -f "${release_script}" || fail_contract "release dry-run script exists"
+  test -f "${windows_script}" || fail_contract "Windows PowerShell CI script exists"
+  if [[ -f scripts/ci-windows-bash.cmd ]]; then
+    fail_contract "Windows Bash wrapper has been removed"
+  fi
   test -f "${blocker_script}" || fail_contract "release platform blocker script exists"
 
   validate_yaml_if_possible "${pipeline}"
@@ -120,12 +125,14 @@ validate_contract() {
   require_text "macOS arm64 queue" "${pipeline}" 'queue: "ctx-mac-gui-shared-arm64"'
   require_text "macOS x64 queue" "${pipeline}" 'queue: "ctx-mac-gui-shared-x64"'
   require_text "Windows x64 queue" "${pipeline}" 'queue: "windows-x64"'
-  require_text "Windows Git Bash wrapper" "${pipeline}" 'scripts\\ci-windows-bash.cmd'
+  require_text "Windows PowerShell wrapper" "${pipeline}" 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\ci-windows.ps1'
 
   require_text "docs command wired" "${pipeline}" './scripts/check.sh docs'
   require_text "examples command wired" "${pipeline}" './scripts/check.sh examples'
   require_text "Bazel is required in CI" "${pipeline}" 'CTX_REQUIRE_BAZEL=1 ./scripts/check.sh bazel'
   require_text "platform smoke command wired" "${pipeline}" './scripts/check.sh platform-smoke'
+  require_text "Windows platform smoke command wired" "${pipeline}" 'scripts\\ci-windows.ps1 platform-smoke'
+  require_text "Windows release dry-run command wired" "${pipeline}" 'scripts\\ci-windows.ps1 release-dry-run'
   require_text "Linux host triple guard" "${pipeline}" 'CTX_EXPECT_HOST_TRIPLE: "x86_64-unknown-linux-gnu"'
   require_text "macOS arm64 host triple guard" "${pipeline}" 'CTX_EXPECT_HOST_TRIPLE: "aarch64-apple-darwin"'
   require_text "macOS x64 host triple guard" "${pipeline}" 'CTX_EXPECT_HOST_TRIPLE: "x86_64-apple-darwin"'
@@ -135,6 +142,10 @@ validate_contract() {
   require_text "release script is dry-run only" "${release_script}" '"dry_run": true'
   require_text "release script does not publish" "${release_script}" '"upload": false'
   require_text "release script enforces host triple" "${release_script}" 'ctx_require_host_triple "${CTX_EXPECT_HOST_TRIPLE:-}"'
+  require_text "Windows script bootstraps Rust" "${windows_script}" 'Ensure-Rust-Toolchain'
+  require_text "Windows script uses target tool cache" "${windows_script}" 'target\tool-cache\cargo'
+  require_text "Windows script supports platform smoke" "${windows_script}" 'platform-smoke'
+  require_text "Windows script supports release dry-run" "${windows_script}" 'release-dry-run'
   require_text "FreeBSD blocker marks publishing false" "${blocker_script}" '"publishing": false'
 
   if (( contract_failures > 0 )); then

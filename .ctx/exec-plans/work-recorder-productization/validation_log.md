@@ -1,6 +1,6 @@
 # Work Recorder Productization Validation Log
 
-Updated: 2026-06-22T22:20:10-05:00
+Updated: 2026-06-22T22:24:00-05:00
 
 ## 2026-06-22 Baseline Public Branch Check
 
@@ -1390,20 +1390,22 @@ Future entries must include:
   - optional local Bazel mode still records a skip when `CTX_REQUIRE_BAZEL` is
     unset.
 
-## 2026-06-22 Windows Git Bash Wrapper Check
+## 2026-06-22 Windows PowerShell Wrapper Check
 
 - Remote Buildkite evidence:
   - build `https://buildkite.com/luca-king/ctx-public-release-verification/builds/34`
     passed the Linux fmt, docs, check, clippy, test, examples, and Bazel lanes;
   - Windows smoke failed before product code because `bash` was not recognized
     on the `windows-x64` runner `PATH`.
+  - Direct final-state inspection from this shell was blocked by Buildkite
+    login and no Buildkite API token was present in the environment.
 
 - Command:
   `bash -n scripts/check.sh scripts/ci-common.sh scripts/bazel-test.sh scripts/check-docs.sh scripts/check-buildkite-pipeline.sh scripts/release-dry-run.sh`
 - Repo/worktree:
   `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
 - Branch/head:
-  `work-record` / uncommitted Windows Git Bash wrapper changes on `eacef2a`
+  `work-record` / uncommitted Windows PowerShell wrapper changes on `eacef2a`
 - Outcome: PASS.
 
 - Command:
@@ -1411,18 +1413,21 @@ Future entries must include:
 - Repo/worktree:
   `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
 - Branch/head:
-  `work-record` / uncommitted Windows Git Bash wrapper changes on `eacef2a`
+  `work-record` / uncommitted Windows PowerShell wrapper changes on `eacef2a`
 - Outcome: PASS.
 - Coverage:
   - Buildkite parser accepted the pipeline;
-  - contract requires `scripts\\ci-windows-bash.cmd` in the Windows lanes.
+  - contract requires `powershell -NoProfile -ExecutionPolicy Bypass -File
+    scripts\\ci-windows.ps1` in the Windows lanes;
+  - contract requires the PowerShell wrapper to support `platform-smoke`,
+    `release-dry-run`, Rust bootstrap, and `target\tool-cache\cargo`.
 
 - Command:
   `./scripts/check-docs.sh`
 - Repo/worktree:
   `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
 - Branch/head:
-  `work-record` / uncommitted Windows Git Bash wrapper changes on `eacef2a`
+  `work-record` / uncommitted Windows PowerShell wrapper changes on `eacef2a`
 - Outcome: PASS.
 
 - Command:
@@ -1430,5 +1435,16 @@ Future entries must include:
 - Repo/worktree:
   `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
 - Branch/head:
-  `work-record` / uncommitted Windows Git Bash wrapper changes on `eacef2a`
+  `work-record` / uncommitted Windows PowerShell wrapper changes on `eacef2a`
 - Outcome: PASS.
+
+- Command:
+  `if command -v pwsh >/dev/null 2>&1; then pwsh -NoProfile -Command '$null = [System.Management.Automation.Language.Parser]::ParseFile("scripts/ci-windows.ps1", [ref]$null, [ref]$errors); if ($errors.Count) { $errors | Format-List; exit 1 }'; elif command -v powershell >/dev/null 2>&1; then powershell -NoProfile -Command '$null = [System.Management.Automation.Language.Parser]::ParseFile("scripts/ci-windows.ps1", [ref]$null, [ref]$errors); if ($errors.Count) { $errors | Format-List; exit 1 }'; else echo 'SKIP: no pwsh or powershell available locally'; fi`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted Windows PowerShell wrapper changes on `eacef2a`
+- Outcome: SKIP.
+- Blocker:
+  - this Linux host has neither `pwsh` nor Windows PowerShell installed, so the
+    PowerShell parser could not be exercised locally.
