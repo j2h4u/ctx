@@ -16,11 +16,11 @@ use thiserror::Error;
 use uuid::Uuid;
 use work_record_core::{
     new_id, redact_preview, AgentType, Artifact, ArtifactKind, CaptureProvider, CaptureSource,
-    CaptureSourceDescriptor, EntityTimestamps, Event, EventRole, EventType, Evidence, Fidelity,
-    FileTouched, PullRequest, RedactionState, Run, RunStatus, RunType, Session, SessionEdge,
-    SessionStatus, Summary, SyncCursor, SyncMetadata, SyncState, VcsChange, VcsWorkspace,
-    Visibility, WorkContext, WorkRecord, WorkRecordArchive, WorkRecordArchiveArtifact,
-    WorkRecordLink,
+    CaptureSourceDescriptor, EntityTimestamps, Event, EventRole, EventType, Evidence,
+    EvidenceFreshness, EvidenceKind, EvidenceMetadata, EvidenceStatus, Fidelity, FileTouched,
+    PullRequest, RedactionState, Run, RunStatus, RunType, Session, SessionEdge, SessionStatus,
+    Summary, SyncCursor, SyncMetadata, SyncState, VcsChange, VcsWorkspace, Visibility, WorkContext,
+    WorkRecord, WorkRecordArchive, WorkRecordArchiveArtifact, WorkRecordLink,
 };
 
 #[derive(Debug, Error)]
@@ -69,8 +69,59 @@ pub enum StoreError {
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
-const SCHEMA_VERSION: i64 = 2;
+pub fn classify_evidence_freshness(
+    metadata: &EvidenceMetadata,
+    current_head_sha: Option<&str>,
+    current_tree_hash: Option<&str>,
+    dirty: bool,
+) -> EvidenceFreshness {
+    if metadata.vcs_change_id.is_none()
+        && metadata.observed_head_sha.is_none()
+        && metadata.observed_tree_hash.is_none()
+    {
+        return EvidenceFreshness::Unbound;
+    }
+    if metadata
+        .observed_head_sha
+        .as_deref()
+        .zip(current_head_sha)
+        .is_some_and(|(observed, current)| observed != current)
+        || metadata
+            .observed_tree_hash
+            .as_deref()
+            .zip(current_tree_hash)
+            .is_some_and(|(observed, current)| observed != current)
+    {
+        return EvidenceFreshness::Stale;
+    }
+    if dirty || metadata.observed_tree_hash.is_none() || current_tree_hash.is_none() {
+        return EvidenceFreshness::ProbablyFresh;
+    }
+    EvidenceFreshness::Fresh
+}
+
+const SCHEMA_VERSION: i64 = 3;
 const BUSY_TIMEOUT: Duration = Duration::from_millis(5_000);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalDeviceIdentity {
+    pub id: Uuid,
+    pub stable_device_id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalWorkspaceIdentity {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub vcs_workspace_id: Option<Uuid>,
+    pub repo_fingerprint: String,
+    pub root_path_hash: String,
+    pub display_root: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
 
 const WORK_RECORD_COLUMNS: &[ColumnSpec] = &[
     ColumnSpec {
@@ -654,6 +705,27 @@ CREATE TABLE IF NOT EXISTS sync_outbox (
     UNIQUE(local_table, local_id, operation, team_id)
 );
 
+CREATE TABLE IF NOT EXISTS local_devices (
+    id TEXT PRIMARY KEY NOT NULL,
+    stable_device_id TEXT NOT NULL UNIQUE,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS local_workspaces (
+    id TEXT PRIMARY KEY NOT NULL,
+    device_id TEXT NOT NULL REFERENCES local_devices(id),
+    vcs_workspace_id TEXT REFERENCES vcs_workspaces(id),
+    repo_fingerprint TEXT NOT NULL,
+    root_path_hash TEXT NOT NULL,
+    display_root TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(device_id, repo_fingerprint, root_path_hash)
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id TEXT PRIMARY KEY NOT NULL,
     actor_kind TEXT NOT NULL CHECK (actor_kind IN ('human', 'agent', 'system', 'hosted')),
@@ -745,6 +817,8 @@ CREATE INDEX IF NOT EXISTS idx_record_edges_to_record_id ON record_edges(to_reco
 CREATE INDEX IF NOT EXISTS idx_record_edges_source_id ON record_edges(source_id);
 
 CREATE INDEX IF NOT EXISTS idx_sync_outbox_sync_state_updated_at_ms ON sync_outbox(sync_state, updated_at_ms);
+CREATE INDEX IF NOT EXISTS idx_local_workspaces_device_id ON local_workspaces(device_id);
+CREATE INDEX IF NOT EXISTS idx_local_workspaces_vcs_workspace_id ON local_workspaces(vcs_workspace_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_source_id ON audit_log(source_id);
 "#;
 
@@ -841,6 +915,9 @@ impl Store {
         }
         if user_version < 2 {
             migrate_to_v2(&self.conn)?;
+        }
+        if user_version < 3 {
+            migrate_to_v3(&self.conn)?;
         }
         create_fts_tables_if_supported(&self.conn)?;
         Ok(())
@@ -1408,6 +1485,92 @@ impl Store {
                 params![workspace.kind.as_str(), workspace.repo_fingerprint.as_str()],
                 |row| parse_uuid(row.get::<_, String>(0)?),
             )
+            .map_err(StoreError::from)
+    }
+
+    pub fn get_or_create_local_device(&self) -> Result<LocalDeviceIdentity> {
+        if let Some(device) = self.local_device()? {
+            return Ok(device);
+        }
+        let now = Utc::now();
+        let device = LocalDeviceIdentity {
+            id: new_id(),
+            stable_device_id: format!("ctx-device-{}", new_id().simple()),
+            created_at: now,
+            updated_at: now,
+        };
+        self.conn.execute(
+            r#"
+            INSERT INTO local_devices
+            (id, stable_device_id, created_at_ms, updated_at_ms, metadata_json)
+            VALUES (?1, ?2, ?3, ?3, '{}')
+            "#,
+            params![
+                device.id.to_string(),
+                device.stable_device_id.as_str(),
+                timestamp_ms(now),
+            ],
+        )?;
+        Ok(device)
+    }
+
+    pub fn register_local_workspace(
+        &self,
+        root_path: impl AsRef<Path>,
+        repo_fingerprint: &str,
+        vcs_workspace_id: Option<Uuid>,
+    ) -> Result<LocalWorkspaceIdentity> {
+        let device = self.get_or_create_local_device()?;
+        let root = root_path.as_ref();
+        let root_path_hash = sha256_hex(root.display().to_string().as_bytes());
+        let display_root = redacted_root_label(root);
+        let now = Utc::now();
+        let id = new_id();
+        self.conn.execute(
+            r#"
+            INSERT INTO local_workspaces
+            (
+                id, device_id, vcs_workspace_id, repo_fingerprint, root_path_hash,
+                display_root, created_at_ms, updated_at_ms, metadata_json
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, '{}')
+            ON CONFLICT(device_id, repo_fingerprint, root_path_hash) DO UPDATE SET
+                vcs_workspace_id = COALESCE(excluded.vcs_workspace_id, local_workspaces.vcs_workspace_id),
+                display_root = excluded.display_root,
+                updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                id.to_string(),
+                device.id.to_string(),
+                optional_uuid_string(vcs_workspace_id),
+                repo_fingerprint,
+                root_path_hash,
+                display_root,
+                timestamp_ms(now),
+            ],
+        )?;
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, device_id, vcs_workspace_id, repo_fingerprint, root_path_hash,
+                       display_root, created_at_ms, updated_at_ms
+                FROM local_workspaces
+                WHERE device_id = ?1 AND repo_fingerprint = ?2 AND root_path_hash = ?3
+                "#,
+                params![device.id.to_string(), repo_fingerprint, root_path_hash],
+                local_workspace_from_row,
+            )
+            .map_err(StoreError::from)
+    }
+
+    pub fn local_device(&self) -> Result<Option<LocalDeviceIdentity>> {
+        self.conn
+            .query_row(
+                "SELECT id, stable_device_id, created_at_ms, updated_at_ms FROM local_devices ORDER BY created_at_ms, id LIMIT 1",
+                [],
+                local_device_from_row,
+            )
+            .optional()
             .map_err(StoreError::from)
     }
 
@@ -2357,6 +2520,93 @@ impl Store {
             .ok_or(StoreError::NotFound(id))
     }
 
+    pub fn get_evidence_metadata(&self, id: Uuid) -> Result<EvidenceMetadata> {
+        self.conn
+            .query_row(
+                evidence_metadata_select_sql("WHERE id = ?1").as_str(),
+                params![id.to_string()],
+                evidence_metadata_from_row,
+            )
+            .optional()?
+            .ok_or(StoreError::NotFound(id))
+    }
+
+    pub fn evidence_metadata_for_record(&self, record_id: Uuid) -> Result<Vec<EvidenceMetadata>> {
+        let mut stmt = self.conn.prepare(
+            evidence_metadata_select_sql(
+                "WHERE record_id = ?1 OR work_record_id = ?1 ORDER BY started_at_ms DESC, id",
+            )
+            .as_str(),
+        )?;
+        let rows = stmt.query_map(params![record_id.to_string()], evidence_metadata_from_row)?;
+        collect_rows(rows)
+    }
+
+    pub fn recent_evidence_metadata(&self, limit: usize) -> Result<Vec<EvidenceMetadata>> {
+        let mut stmt = self.conn.prepare(
+            evidence_metadata_select_sql("ORDER BY started_at_ms DESC, id LIMIT ?1").as_str(),
+        )?;
+        let rows = stmt.query_map(params![limit as i64], evidence_metadata_from_row)?;
+        collect_rows(rows)
+    }
+
+    pub fn update_evidence_metadata(&self, metadata: &EvidenceMetadata) -> Result<()> {
+        let changed = self.conn.execute(
+            r#"
+            UPDATE evidence
+            SET work_record_id = ?2,
+                record_id = ?2,
+                vcs_change_id = ?3,
+                kind = ?4,
+                status = ?5,
+                freshness = ?6,
+                command_run_id = ?7,
+                artifact_id = COALESCE(?8, artifact_id),
+                observed_tree_hash = ?9,
+                observed_head_sha = ?10,
+                started_at_ms = COALESCE(?11, started_at_ms),
+                ended_at_ms = COALESCE(?12, ended_at_ms),
+                stale_reason = ?13,
+                updated_at_ms = ?14,
+                source_id = ?15,
+                visibility = ?16,
+                fidelity = ?17,
+                sync_state = ?18,
+                sync_version = ?19,
+                deleted_at_ms = ?20,
+                metadata_json = ?21
+            WHERE id = ?1
+            "#,
+            params![
+                metadata.id.to_string(),
+                metadata.work_record_id.to_string(),
+                optional_uuid_string(metadata.vcs_change_id),
+                metadata.kind.as_str(),
+                metadata.status.as_str(),
+                metadata.freshness.as_str(),
+                optional_uuid_string(metadata.command_run_id),
+                optional_uuid_string(metadata.artifact_id),
+                metadata.observed_tree_hash.as_deref(),
+                metadata.observed_head_sha.as_deref(),
+                optional_timestamp_ms(metadata.started_at),
+                optional_timestamp_ms(metadata.ended_at),
+                metadata.stale_reason.as_deref(),
+                timestamp_ms(metadata.timestamps.updated_at),
+                optional_uuid_string(metadata.source_id),
+                metadata.sync.visibility.as_str(),
+                metadata.sync.fidelity.as_str(),
+                metadata.sync.sync_state.as_str(),
+                metadata.sync.sync_version as i64,
+                optional_timestamp_ms(metadata.sync.deleted_at),
+                serde_json::to_string(&metadata.sync.metadata)?,
+            ],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound(metadata.id));
+        }
+        Ok(())
+    }
+
     pub fn recent_evidence(&self, limit: usize) -> Result<Vec<Evidence>> {
         let mut stmt = self
             .conn
@@ -2392,6 +2642,7 @@ impl Store {
             records: self.list_records(usize::MAX)?,
             artifacts: self.archive_artifacts()?,
             evidence,
+            evidence_metadata: self.recent_evidence_metadata(usize::MAX)?,
             capture_sources: self.list_capture_sources()?,
             sessions: self.list_sessions()?,
             runs: self.list_runs()?,
@@ -2436,6 +2687,9 @@ impl Store {
             }
         }
         import_rich_archive_entities_tx(&tx, &blob_dir, archive, &mut blob_guard)?;
+        for metadata in &archive.evidence_metadata {
+            update_evidence_metadata_tx(&tx, metadata)?;
+        }
         tx.commit()?;
         blob_guard.commit();
         self.rebuild_search_projection()?;
@@ -2482,6 +2736,9 @@ impl Store {
             }
         }
         import_rich_archive_entities_tx(&tx, &blob_dir, archive, &mut blob_guard)?;
+        for metadata in &archive.evidence_metadata {
+            update_evidence_metadata_tx(&tx, metadata)?;
+        }
         tx.commit()?;
         blob_guard.commit();
         self.rebuild_search_projection()?;
@@ -2762,6 +3019,32 @@ fn migrate_to_v2(conn: &Connection) -> Result<()> {
     }
 }
 
+fn migrate_to_v3(conn: &Connection) -> Result<()> {
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+    let migration = (|| -> Result<()> {
+        conn.execute_batch(CREATE_TABLES_SQL)?;
+        ensure_columns(conn, "work_records", WORK_RECORD_COLUMNS)?;
+        ensure_columns(conn, "evidence", EVIDENCE_COLUMNS)?;
+        backfill_legacy_tables(conn)?;
+        conn.execute_batch(INDEXES_SQL)?;
+        conn.execute_batch("PRAGMA user_version = 3;")?;
+        Ok(())
+    })();
+
+    match migration {
+        Ok(()) => {
+            conn.execute_batch("COMMIT;")?;
+            Ok(())
+        }
+        Err(err) => {
+            if let Err(rollback_err) = conn.execute_batch("ROLLBACK;") {
+                return Err(StoreError::Sql(rollback_err));
+            }
+            Err(err)
+        }
+    }
+}
+
 fn create_fts_tables_if_supported(conn: &Connection) -> Result<()> {
     match conn.execute_batch(&format!("{DROP_FTS_TABLES_SQL}\n{FTS_TABLES_SQL}")) {
         Ok(()) => Ok(()),
@@ -2961,6 +3244,22 @@ fn count_foreign_key_failures(conn: &Connection) -> Result<i64> {
 
 fn timestamp_ms(value: DateTime<Utc>) -> i64 {
     value.timestamp_millis()
+}
+
+fn time_ms(value: i64) -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp_millis(value).unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
+}
+
+fn optional_time_ms(value: Option<i64>) -> Option<DateTime<Utc>> {
+    value.map(time_ms)
+}
+
+fn redacted_root_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("[REDACTED_ROOT]/{name}"))
+        .unwrap_or_else(|| "[REDACTED_ROOT]".to_owned())
 }
 
 fn evidence_status(exit_code: i32) -> &'static str {
@@ -4682,6 +4981,63 @@ fn upsert_evidence_with_archive_artifacts_tx(
     Ok(())
 }
 
+fn update_evidence_metadata_tx(tx: &Transaction<'_>, metadata: &EvidenceMetadata) -> Result<()> {
+    let changed = tx.execute(
+        r#"
+        UPDATE evidence
+        SET work_record_id = ?2,
+            record_id = ?2,
+            vcs_change_id = ?3,
+            kind = ?4,
+            status = ?5,
+            freshness = ?6,
+            command_run_id = ?7,
+            artifact_id = COALESCE(?8, artifact_id),
+            observed_tree_hash = ?9,
+            observed_head_sha = ?10,
+            started_at_ms = COALESCE(?11, started_at_ms),
+            ended_at_ms = COALESCE(?12, ended_at_ms),
+            stale_reason = ?13,
+            updated_at_ms = ?14,
+            source_id = ?15,
+            visibility = ?16,
+            fidelity = ?17,
+            sync_state = ?18,
+            sync_version = ?19,
+            deleted_at_ms = ?20,
+            metadata_json = ?21
+        WHERE id = ?1
+        "#,
+        params![
+            metadata.id.to_string(),
+            metadata.work_record_id.to_string(),
+            optional_uuid_string(metadata.vcs_change_id),
+            metadata.kind.as_str(),
+            metadata.status.as_str(),
+            metadata.freshness.as_str(),
+            optional_uuid_string(metadata.command_run_id),
+            optional_uuid_string(metadata.artifact_id),
+            metadata.observed_tree_hash.as_deref(),
+            metadata.observed_head_sha.as_deref(),
+            optional_timestamp_ms(metadata.started_at),
+            optional_timestamp_ms(metadata.ended_at),
+            metadata.stale_reason.as_deref(),
+            timestamp_ms(metadata.timestamps.updated_at),
+            optional_uuid_string(metadata.source_id),
+            metadata.sync.visibility.as_str(),
+            metadata.sync.fidelity.as_str(),
+            metadata.sync.sync_state.as_str(),
+            metadata.sync.sync_version as i64,
+            optional_timestamp_ms(metadata.sync.deleted_at),
+            serde_json::to_string(&metadata.sync.metadata)?,
+        ],
+    )?;
+    if changed == 0 {
+        return Err(StoreError::NotFound(metadata.id));
+    }
+    Ok(())
+}
+
 fn store_archive_artifact_tx(
     tx: &Transaction<'_>,
     blob_dir: &Path,
@@ -5231,6 +5587,12 @@ fn evidence_select_sql(tail: &str) -> String {
     )
 }
 
+fn evidence_metadata_select_sql(tail: &str) -> String {
+    format!(
+        "SELECT id, work_record_id, vcs_change_id, kind, status, freshness, command_run_id, artifact_id, observed_tree_hash, observed_head_sha, started_at_ms, ended_at_ms, stale_reason, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json FROM evidence {tail}"
+    )
+}
+
 fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkRecord> {
     let tags_json: String = row.get(3)?;
     Ok(WorkRecord {
@@ -5261,6 +5623,81 @@ fn evidence_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Evidence> {
         stderr: row.get(5)?,
         started_at: parse_time(row.get::<_, String>(6)?)?,
         duration_ms: row.get(7)?,
+    })
+}
+
+fn evidence_metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvidenceMetadata> {
+    let vcs_change_id: Option<String> = row.get(2)?;
+    let command_run_id: Option<String> = row.get(6)?;
+    let artifact_id: Option<String> = row.get(7)?;
+    let source_id: Option<String> = row.get(15)?;
+    let metadata_json: String = row.get(21)?;
+    Ok(EvidenceMetadata {
+        id: parse_uuid(row.get::<_, String>(0)?)?,
+        work_record_id: parse_uuid(row.get::<_, String>(1)?)?,
+        vcs_change_id: vcs_change_id
+            .map(parse_uuid)
+            .transpose()
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?,
+        kind: parse_text_enum::<EvidenceKind>(row.get::<_, String>(3)?)?,
+        status: parse_text_enum::<EvidenceStatus>(row.get::<_, String>(4)?)?,
+        freshness: parse_text_enum::<EvidenceFreshness>(row.get::<_, String>(5)?)?,
+        command_run_id: command_run_id
+            .map(parse_uuid)
+            .transpose()
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?,
+        artifact_id: artifact_id
+            .map(parse_uuid)
+            .transpose()
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?,
+        observed_tree_hash: row.get(8)?,
+        observed_head_sha: row.get(9)?,
+        started_at: optional_time_ms(row.get(10)?),
+        ended_at: optional_time_ms(row.get(11)?),
+        stale_reason: row.get(12)?,
+        timestamps: EntityTimestamps {
+            created_at: time_ms(row.get(13)?),
+            updated_at: time_ms(row.get(14)?),
+        },
+        source_id: source_id
+            .map(parse_uuid)
+            .transpose()
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?,
+        sync: SyncMetadata {
+            visibility: parse_text_enum::<Visibility>(row.get::<_, String>(16)?)?,
+            fidelity: parse_text_enum::<Fidelity>(row.get::<_, String>(17)?)?,
+            sync_state: parse_text_enum::<SyncState>(row.get::<_, String>(18)?)?,
+            sync_version: row.get::<_, i64>(19)? as u64,
+            deleted_at: optional_time_ms(row.get(20)?),
+            metadata: serde_json::from_str(&metadata_json)
+                .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?,
+        },
+    })
+}
+
+fn local_device_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LocalDeviceIdentity> {
+    Ok(LocalDeviceIdentity {
+        id: parse_uuid(row.get::<_, String>(0)?)?,
+        stable_device_id: row.get(1)?,
+        created_at: time_ms(row.get(2)?),
+        updated_at: time_ms(row.get(3)?),
+    })
+}
+
+fn local_workspace_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LocalWorkspaceIdentity> {
+    let vcs_workspace_id: Option<String> = row.get(2)?;
+    Ok(LocalWorkspaceIdentity {
+        id: parse_uuid(row.get::<_, String>(0)?)?,
+        device_id: parse_uuid(row.get::<_, String>(1)?)?,
+        vcs_workspace_id: vcs_workspace_id
+            .map(parse_uuid)
+            .transpose()
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?,
+        repo_fingerprint: row.get(3)?,
+        root_path_hash: row.get(4)?,
+        display_root: row.get(5)?,
+        created_at: time_ms(row.get(6)?),
+        updated_at: time_ms(row.get(7)?),
     })
 }
 
@@ -5357,6 +5794,22 @@ mod tests {
         }
     }
 
+    fn temp_store() -> (tempfile::TempDir, Store) {
+        let temp = tempdir();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        (temp, store)
+    }
+
+    fn test_record() -> WorkRecord {
+        WorkRecord::new(
+            "Fresh evidence",
+            "body",
+            vec!["evidence".to_owned()],
+            "task",
+            Some("workspace".to_owned()),
+        )
+    }
+
     fn archive_with_stdout_artifact(content: &str) -> WorkRecordArchive {
         let record = WorkRecord::new("Archive security", "body", Vec::new(), "task", None);
         let evidence = Evidence::new(
@@ -5442,6 +5895,169 @@ mod tests {
             source_id: None,
             sync: sync_metadata(),
         }
+    }
+
+    #[test]
+    fn evidence_metadata_defaults_to_unbound_for_legacy_command_rows() {
+        let (_temp, store) = temp_store();
+        let record = test_record();
+        store.insert_record(&record).unwrap();
+        let evidence = Evidence::new(
+            Some(record.id),
+            "cargo test",
+            0,
+            "ok".to_owned(),
+            String::new(),
+            fixed_time(),
+            42,
+        );
+        store.insert_evidence(&evidence).unwrap();
+
+        let metadata = store.get_evidence_metadata(evidence.id).unwrap();
+        assert_eq!(metadata.work_record_id, record.id);
+        assert_eq!(metadata.kind, EvidenceKind::Manual);
+        assert_eq!(metadata.status, EvidenceStatus::Passed);
+        assert_eq!(metadata.freshness, EvidenceFreshness::Unbound);
+        assert_eq!(
+            classify_evidence_freshness(&metadata, Some("head"), Some("tree"), false),
+            EvidenceFreshness::Unbound
+        );
+    }
+
+    #[test]
+    fn evidence_metadata_update_projects_fresh_vcs_binding() {
+        let (_temp, store) = temp_store();
+        let record = test_record();
+        store.insert_record(&record).unwrap();
+        let evidence = Evidence::new(
+            Some(record.id),
+            "cargo test",
+            0,
+            String::new(),
+            String::new(),
+            fixed_time(),
+            7,
+        );
+        store.insert_evidence(&evidence).unwrap();
+
+        let workspace = git_workspace(new_id());
+        let workspace_id = store.upsert_vcs_workspace(&workspace).unwrap();
+        let change = VcsChange {
+            id: new_id(),
+            vcs_workspace_id: workspace_id,
+            kind: VcsChangeKind::GitCommit,
+            change_id: "abc123".to_owned(),
+            parent_change_ids: Vec::new(),
+            branch_or_bookmark: Some("main".to_owned()),
+            tree_hash: Some("tree123".to_owned()),
+            author_time: None,
+            confidence: Confidence::Explicit,
+            timestamps: timestamps(),
+            source_id: None,
+            sync: sync_metadata(),
+        };
+        let change_id = store.upsert_vcs_change(&change).unwrap();
+        let mut metadata = store.get_evidence_metadata(evidence.id).unwrap();
+        metadata.vcs_change_id = Some(change_id);
+        metadata.kind = EvidenceKind::Test;
+        metadata.freshness = EvidenceFreshness::Fresh;
+        metadata.observed_head_sha = Some("abc123".to_owned());
+        metadata.observed_tree_hash = Some("tree123".to_owned());
+        metadata.sync.metadata = serde_json::json!({
+            "repo_root": "[REDACTED_ROOT]/ctx",
+            "branch_or_bookmark": "main",
+            "dirty": false,
+        });
+        store.update_evidence_metadata(&metadata).unwrap();
+
+        let projected = store.evidence_metadata_for_record(record.id).unwrap();
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].vcs_change_id, Some(change_id));
+        assert_eq!(projected[0].kind, EvidenceKind::Test);
+        assert_eq!(projected[0].freshness, EvidenceFreshness::Fresh);
+        assert_eq!(
+            projected[0].sync.metadata["dirty"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            classify_evidence_freshness(&projected[0], Some("abc123"), Some("tree123"), false),
+            EvidenceFreshness::Fresh
+        );
+        assert_eq!(
+            classify_evidence_freshness(&projected[0], Some("def456"), Some("tree123"), false),
+            EvidenceFreshness::Stale
+        );
+        assert_eq!(
+            classify_evidence_freshness(&projected[0], Some("abc123"), Some("tree123"), true),
+            EvidenceFreshness::ProbablyFresh
+        );
+    }
+
+    #[test]
+    fn archive_round_trip_preserves_evidence_metadata_when_present() {
+        let (_source_temp, source) = temp_store();
+        let record = test_record();
+        source.insert_record(&record).unwrap();
+        let evidence = Evidence::new(
+            Some(record.id),
+            "cargo test",
+            0,
+            String::new(),
+            String::new(),
+            fixed_time(),
+            7,
+        );
+        source.insert_evidence(&evidence).unwrap();
+        let mut metadata = source.get_evidence_metadata(evidence.id).unwrap();
+        metadata.kind = EvidenceKind::Test;
+        metadata.freshness = EvidenceFreshness::ProbablyFresh;
+        metadata.observed_head_sha = Some("abc123".to_owned());
+        metadata.sync.metadata = serde_json::json!({
+            "repo_root": "[REDACTED_ROOT]/ctx",
+            "dirty": true,
+        });
+        source.update_evidence_metadata(&metadata).unwrap();
+
+        let archive = source.export_archive().unwrap();
+        assert_eq!(archive.evidence_metadata.len(), 1);
+
+        let (_dest_temp, mut dest) = temp_store();
+        dest.import_archive(&archive, false).unwrap();
+        let imported = dest.get_evidence_metadata(evidence.id).unwrap();
+        assert_eq!(imported.kind, EvidenceKind::Test);
+        assert_eq!(imported.freshness, EvidenceFreshness::ProbablyFresh);
+        assert_eq!(imported.observed_head_sha.as_deref(), Some("abc123"));
+        assert_eq!(
+            imported.sync.metadata["repo_root"],
+            serde_json::json!("[REDACTED_ROOT]/ctx")
+        );
+    }
+
+    #[test]
+    fn local_device_and_workspace_identity_are_stable_and_redacted() {
+        let temp = tempdir();
+        let db_path = temp.path().join("work.sqlite");
+        let store = Store::open(&db_path).unwrap();
+        let first_device = store.get_or_create_local_device().unwrap();
+        let second_device = store.get_or_create_local_device().unwrap();
+        assert_eq!(first_device.id, second_device.id);
+        assert_eq!(
+            first_device.stable_device_id,
+            second_device.stable_device_id
+        );
+
+        let workspace = store
+            .register_local_workspace(temp.path().join("private/repo-name"), "fingerprint-1", None)
+            .unwrap();
+        let same_workspace = store
+            .register_local_workspace(temp.path().join("private/repo-name"), "fingerprint-1", None)
+            .unwrap();
+        assert_eq!(workspace.id, same_workspace.id);
+        assert_ne!(
+            workspace.root_path_hash,
+            temp.path().join("private/repo-name").display().to_string()
+        );
+        assert_eq!(workspace.display_root, "[REDACTED_ROOT]/repo-name");
     }
 
     fn codex_source_descriptor(external_session_id: &str) -> CaptureSourceDescriptor {

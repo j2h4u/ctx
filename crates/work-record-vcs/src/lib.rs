@@ -50,6 +50,8 @@ pub struct GitWorkspace {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head_sha: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     #[serde(default)]
     pub status: GitStatus,
@@ -291,6 +293,11 @@ pub fn inspect_git(cwd: &Path) -> GitDetection {
             git_common_dir: path_to_string(&git_common_dir),
             is_worktree,
             head_sha: optional_command_stdout("git", &["rev-parse", "--verify", "HEAD"], cwd),
+            tree_hash: optional_command_stdout(
+                "git",
+                &["rev-parse", "--verify", "HEAD^{tree}"],
+                cwd,
+            ),
             branch: optional_non_empty_command_stdout("git", &["branch", "--show-current"], cwd),
             status: git_status(cwd),
             upstream: git_upstream(cwd),

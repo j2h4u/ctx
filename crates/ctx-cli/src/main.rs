@@ -20,9 +20,11 @@ use work_record_capture::{
 };
 use work_record_core::{
     blob_dir, database_path, default_data_root, device_path, inbox_dir, new_id,
-    redact_share_safe_markers, work_record_dir, Artifact, CaptureProvider, EntityTimestamps,
-    Evidence, EvidenceMetadata, Fidelity, FileTouched, PullRequest, Run, Session, Summary,
-    SummaryKind, SyncMetadata, VcsChange, VcsWorkspace, WorkRecord, WorkRecordArchive,
+    redact_share_safe_markers, work_record_dir, Artifact, CaptureProvider, Confidence,
+    EntityTimestamps, Evidence, EvidenceFreshness, EvidenceKind, EvidenceMetadata, EvidenceStatus,
+    Fidelity, FileTouched, PullRequest, Run, Session, Summary, SummaryKind, SyncMetadata,
+    VcsChange, VcsChangeKind, VcsKind, VcsWorkspace, Visibility, WorkRecord, WorkRecordArchive,
+    WorkRecordLink, WorkRecordLinkTargetType, WorkRecordLinkType,
 };
 use work_record_publish::{
     render_pr_comment, upsert_github_pr_comment, GhCliGitHubPrCommentClient, PublishOptions,
@@ -30,7 +32,8 @@ use work_record_publish::{
 };
 use work_record_store::{Store, StoreError};
 use work_record_vcs::{
-    inspect_path, parse_pull_request_url, GitDetection, GitStatus, JjCommit, JjDetection,
+    inspect_path, parse_pull_request_url, GitDetection, GitStatus, GitWorkspace, JjCommit,
+    JjDetection, JjWorkspace,
 };
 
 #[cfg(unix)]
@@ -1041,6 +1044,7 @@ fn run_work_subcommand(command: WorkSubcommand, data_root: PathBuf) -> Result<()
         WorkSubcommand::Evidence(args) => run_evidence(args, &store)?,
         WorkSubcommand::LinkPr(args) => {
             let record = store.link_pr(args.id, &args.pr_url)?;
+            persist_typed_pr_link(&store, record.id, &args.pr_url)?;
             print_record(&record, args.json)?;
         }
         WorkSubcommand::Export(args) => {
@@ -1144,6 +1148,61 @@ fn open_dashboard_file(index: &Path) -> Result<()> {
     Ok(())
 }
 
+fn persist_typed_pr_link(store: &Store, record_id: Uuid, pr_url: &str) -> Result<()> {
+    let parsed = match parse_pull_request_url(pr_url) {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(()),
+    };
+    let now = Utc::now();
+    let pr = PullRequest {
+        id: new_id(),
+        vcs_workspace_id: None,
+        provider: parsed.provider,
+        url: parsed.normalized_url,
+        number: Some(parsed.number),
+        owner: Some(parsed.owner),
+        repo: Some(parsed.repo),
+        title: None,
+        state: None,
+        head_ref: None,
+        base_ref: None,
+        head_sha: None,
+        confidence: parsed.confidence,
+        link_source: parsed.link_source,
+        timestamps: EntityTimestamps {
+            created_at: now,
+            updated_at: now,
+        },
+        source_id: None,
+        sync: SyncMetadata {
+            visibility: Visibility::Reportable,
+            fidelity: Fidelity::Partial,
+            ..SyncMetadata::default()
+        },
+    };
+    let pr_id = store.upsert_pull_request(&pr)?;
+    let link = WorkRecordLink {
+        id: new_id(),
+        work_record_id: record_id,
+        target_type: WorkRecordLinkTargetType::PullRequest,
+        target_id: pr_id,
+        link_type: WorkRecordLinkType::References,
+        confidence: parsed.confidence,
+        source_id: None,
+        timestamps: EntityTimestamps {
+            created_at: now,
+            updated_at: now,
+        },
+        sync: SyncMetadata {
+            visibility: Visibility::Reportable,
+            fidelity: Fidelity::Partial,
+            ..SyncMetadata::default()
+        },
+    };
+    store.upsert_work_record_link(&link)?;
+    Ok(())
+}
+
 struct DashboardData {
     records: Vec<WorkRecord>,
     evidence: Vec<Evidence>,
@@ -1201,6 +1260,7 @@ fn load_dashboard_data(store: &Store, limit: usize) -> Result<DashboardData> {
     let mut vcs_changes = Vec::new();
     let mut pull_requests = Vec::new();
     let mut artifacts = Vec::new();
+    let mut evidence_metadata = Vec::new();
     let mut files_touched = Vec::new();
     let mut summaries = Vec::new();
 
@@ -1211,8 +1271,12 @@ fn load_dashboard_data(store: &Store, limit: usize) -> Result<DashboardData> {
         vcs_changes.extend(store.vcs_changes_for_record(record.id)?);
         pull_requests.extend(store.pull_requests_for_record(record.id)?);
         artifacts.extend(store.artifacts_for_record(record.id)?);
+        evidence_metadata.extend(store.evidence_metadata_for_record(record.id)?);
         files_touched.extend(store.files_touched_for_record(record.id)?);
         summaries.extend(store.summaries_for_record(record.id)?);
+    }
+    if evidence_metadata.is_empty() {
+        evidence_metadata = store.recent_evidence_metadata(limit)?;
     }
     let archive = store.export_archive()?;
     let mut workspace_ids = BTreeSet::new();
@@ -1246,7 +1310,7 @@ fn load_dashboard_data(store: &Store, limit: usize) -> Result<DashboardData> {
         vcs_changes,
         pull_requests,
         artifacts,
-        evidence_metadata: Vec::new(),
+        evidence_metadata,
         files_touched,
         summaries,
     })
@@ -2366,10 +2430,12 @@ fn run_evidence(args: EvidenceCommand, store: &Store) -> Result<()> {
                 duration_ms,
             );
             store.insert_evidence(&evidence)?;
+            bind_evidence_to_observed_vcs(store, &evidence, started_at)?;
             let persisted_evidence = store.get_evidence(evidence.id)?;
             print_json(serde_json::json!({
                 "schema_version": 1,
                 "evidence": persisted_evidence,
+                "metadata": store.get_evidence_metadata(evidence.id)?,
             }))?;
             if output.exit_code == 0 {
                 Ok(())
@@ -2378,6 +2444,265 @@ fn run_evidence(args: EvidenceCommand, store: &Store) -> Result<()> {
             }
         }
     }
+}
+
+fn bind_evidence_to_observed_vcs(
+    store: &Store,
+    evidence: &Evidence,
+    observed_at: DateTime<Utc>,
+) -> Result<()> {
+    let Some(work_record_id) = evidence.record_id else {
+        return Ok(());
+    };
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(_) => return Ok(()),
+    };
+    let inspection = match inspect_path(&cwd) {
+        Ok(inspection) => inspection,
+        Err(_) => return Ok(()),
+    };
+    if let Some(git) = inspection.git.workspace.as_ref() {
+        let metadata =
+            evidence_metadata_for_git(store, evidence, work_record_id, git, observed_at)?;
+        store.update_evidence_metadata(&metadata)?;
+        return Ok(());
+    }
+    if let Some(jj) = inspection.jj.workspace.as_ref() {
+        let metadata = evidence_metadata_for_jj(store, evidence, work_record_id, jj, observed_at)?;
+        store.update_evidence_metadata(&metadata)?;
+    }
+    Ok(())
+}
+
+fn evidence_metadata_for_git(
+    store: &Store,
+    evidence: &Evidence,
+    work_record_id: Uuid,
+    git: &GitWorkspace,
+    observed_at: DateTime<Utc>,
+) -> Result<EvidenceMetadata> {
+    let now = Utc::now();
+    let workspace = VcsWorkspace {
+        id: new_id(),
+        kind: VcsKind::Git,
+        root_path: git.root_path.clone(),
+        repo_fingerprint: git.repo_fingerprint.value.clone(),
+        primary_remote_url_normalized: git
+            .primary_remote
+            .as_ref()
+            .map(|remote| remote.normalized_url.clone()),
+        host: git
+            .primary_remote
+            .as_ref()
+            .map(|remote| remote.host)
+            .unwrap_or_default(),
+        owner: git
+            .primary_remote
+            .as_ref()
+            .and_then(|remote| remote.owner.clone()),
+        name: git
+            .primary_remote
+            .as_ref()
+            .and_then(|remote| remote.repo.clone()),
+        monorepo_subpath: None,
+        timestamps: EntityTimestamps {
+            created_at: now,
+            updated_at: now,
+        },
+        source_id: None,
+        sync: SyncMetadata {
+            visibility: Visibility::LocalOnly,
+            fidelity: Fidelity::Full,
+            ..SyncMetadata::default()
+        },
+    };
+    let workspace_id = store.upsert_vcs_workspace(&workspace)?;
+    store.register_local_workspace(
+        &git.root_path,
+        &git.repo_fingerprint.value,
+        Some(workspace_id),
+    )?;
+
+    let change_id = git
+        .head_sha
+        .clone()
+        .unwrap_or_else(|| format!("working-copy:{}", git.repo_fingerprint.value));
+    let change = VcsChange {
+        id: new_id(),
+        vcs_workspace_id: workspace_id,
+        kind: if git.head_sha.is_some() {
+            VcsChangeKind::GitCommit
+        } else {
+            VcsChangeKind::WorkingCopy
+        },
+        change_id: change_id.clone(),
+        parent_change_ids: Vec::new(),
+        branch_or_bookmark: git.branch.clone(),
+        tree_hash: git.tree_hash.clone(),
+        author_time: None,
+        confidence: Confidence::Explicit,
+        timestamps: EntityTimestamps {
+            created_at: now,
+            updated_at: now,
+        },
+        source_id: None,
+        sync: SyncMetadata {
+            visibility: Visibility::LocalOnly,
+            fidelity: Fidelity::Full,
+            metadata: serde_json::json!({
+                "observed_dirty": git.status.dirty,
+            }),
+            ..SyncMetadata::default()
+        },
+    };
+    let change_id = store.upsert_vcs_change(&change)?;
+    let mut metadata = store.get_evidence_metadata(evidence.id)?;
+    metadata.work_record_id = work_record_id;
+    metadata.vcs_change_id = Some(change_id);
+    metadata.kind = evidence_kind_from_command(&evidence.command);
+    metadata.status = evidence_status_from_exit(evidence.exit_code);
+    metadata.freshness = if git.status.dirty {
+        EvidenceFreshness::ProbablyFresh
+    } else {
+        EvidenceFreshness::Fresh
+    };
+    metadata.observed_head_sha = git.head_sha.clone();
+    metadata.observed_tree_hash = git.tree_hash.clone();
+    metadata.stale_reason = None;
+    metadata.timestamps.updated_at = now;
+    metadata.sync.fidelity = Fidelity::Full;
+    metadata.sync.metadata = serde_json::json!({
+        "observed_at": observed_at.to_rfc3339(),
+        "vcs_kind": "git",
+        "repo_fingerprint": git.repo_fingerprint.value,
+        "repo_root": redacted_root_label(&git.root_path),
+        "branch_or_bookmark": git.branch,
+        "dirty": git.status.dirty,
+        "staged": git.status.staged,
+        "unstaged": git.status.unstaged,
+        "untracked": git.status.untracked,
+    });
+    Ok(metadata)
+}
+
+fn evidence_metadata_for_jj(
+    store: &Store,
+    evidence: &Evidence,
+    work_record_id: Uuid,
+    jj: &JjWorkspace,
+    observed_at: DateTime<Utc>,
+) -> Result<EvidenceMetadata> {
+    let now = Utc::now();
+    let fingerprint = format!("jj:{}", redact_share_safe_markers(&jj.root_path));
+    let workspace = VcsWorkspace {
+        id: new_id(),
+        kind: VcsKind::Jj,
+        root_path: jj.root_path.clone(),
+        repo_fingerprint: fingerprint.clone(),
+        primary_remote_url_normalized: None,
+        host: Default::default(),
+        owner: None,
+        name: None,
+        monorepo_subpath: None,
+        timestamps: EntityTimestamps {
+            created_at: now,
+            updated_at: now,
+        },
+        source_id: None,
+        sync: SyncMetadata {
+            visibility: Visibility::LocalOnly,
+            fidelity: Fidelity::Partial,
+            ..SyncMetadata::default()
+        },
+    };
+    let workspace_id = store.upsert_vcs_workspace(&workspace)?;
+    store.register_local_workspace(&jj.root_path, &fingerprint, Some(workspace_id))?;
+    let working_copy = jj.working_copy.as_ref();
+    let change = VcsChange {
+        id: new_id(),
+        vcs_workspace_id: workspace_id,
+        kind: VcsChangeKind::JjChange,
+        change_id: working_copy
+            .map(|change| change.change_id.clone())
+            .unwrap_or_else(|| "working-copy".to_owned()),
+        parent_change_ids: working_copy
+            .map(|change| change.parent_change_ids.clone())
+            .unwrap_or_default(),
+        branch_or_bookmark: working_copy
+            .and_then(|change| change.bookmarks.first().cloned())
+            .or_else(|| {
+                jj.bookmarks
+                    .iter()
+                    .find(|bookmark| !bookmark.remote)
+                    .map(|bookmark| bookmark.name.clone())
+            }),
+        tree_hash: working_copy.map(|change| change.commit_id.clone()),
+        author_time: None,
+        confidence: Confidence::Explicit,
+        timestamps: EntityTimestamps {
+            created_at: now,
+            updated_at: now,
+        },
+        source_id: None,
+        sync: SyncMetadata {
+            visibility: Visibility::LocalOnly,
+            fidelity: Fidelity::Partial,
+            ..SyncMetadata::default()
+        },
+    };
+    let change_id = store.upsert_vcs_change(&change)?;
+    let mut metadata = store.get_evidence_metadata(evidence.id)?;
+    metadata.work_record_id = work_record_id;
+    metadata.vcs_change_id = Some(change_id);
+    metadata.kind = evidence_kind_from_command(&evidence.command);
+    metadata.status = evidence_status_from_exit(evidence.exit_code);
+    metadata.freshness = EvidenceFreshness::ProbablyFresh;
+    metadata.observed_head_sha = working_copy.map(|change| change.change_id.clone());
+    metadata.observed_tree_hash = working_copy.map(|change| change.commit_id.clone());
+    metadata.timestamps.updated_at = now;
+    metadata.sync.fidelity = Fidelity::Partial;
+    metadata.sync.metadata = serde_json::json!({
+        "observed_at": observed_at.to_rfc3339(),
+        "vcs_kind": "jj",
+        "repo_fingerprint": fingerprint,
+        "repo_root": redacted_root_label(&jj.root_path),
+        "branch_or_bookmark": change.branch_or_bookmark,
+        "dirty": true,
+    });
+    Ok(metadata)
+}
+
+fn evidence_status_from_exit(exit_code: i32) -> EvidenceStatus {
+    if exit_code == 0 {
+        EvidenceStatus::Passed
+    } else {
+        EvidenceStatus::Failed
+    }
+}
+
+fn evidence_kind_from_command(command: &str) -> EvidenceKind {
+    let lower = command.to_ascii_lowercase();
+    if lower.contains("test") {
+        EvidenceKind::Test
+    } else if lower.contains("clippy") || lower.contains("lint") {
+        EvidenceKind::Lint
+    } else if lower.contains("build") {
+        EvidenceKind::Build
+    } else if lower.contains("check") || lower.contains("typecheck") {
+        EvidenceKind::Typecheck
+    } else {
+        EvidenceKind::Manual
+    }
+}
+
+fn redacted_root_label(root_path: &str) -> String {
+    Path::new(root_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("[REDACTED_ROOT]/{name}"))
+        .unwrap_or_else(|| "[REDACTED_ROOT]".to_owned())
 }
 
 struct LimitedOutput {

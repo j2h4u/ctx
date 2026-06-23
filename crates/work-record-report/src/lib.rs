@@ -63,6 +63,7 @@ impl<'a> DashboardReport<'a> {
             records: &archive.records,
             evidence: &archive.evidence,
             archive_artifacts: &archive.artifacts,
+            evidence_metadata: &archive.evidence_metadata,
             ..Self::from_records(&archive.records, &archive.evidence)
         }
     }
@@ -402,6 +403,7 @@ pub fn dashboard_export_data(report: &DashboardReport<'_>) -> DashboardExportDat
                     "stale_reason": evidence.stale_reason.as_deref().map(redact_share_safe_markers),
                     "observed_tree_hash": evidence.observed_tree_hash.as_deref().map(redact_share_safe_markers),
                     "observed_head_sha": evidence.observed_head_sha.as_deref().map(redact_share_safe_markers),
+                    "metadata": redact_metadata_value(&evidence.sync.metadata),
                 })
             })
             .collect(),
@@ -1060,6 +1062,19 @@ fn privacy_summary(report: &DashboardReport<'_>) -> PrivacySummary {
         redacted_previews,
         withheld_links,
         local_paths_redacted: true,
+    }
+}
+
+fn redact_metadata_value(value: &Value) -> Value {
+    match value {
+        Value::String(value) => Value::String(redact_share_safe_markers(value)),
+        Value::Array(values) => Value::Array(values.iter().map(redact_metadata_value).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| (key.clone(), redact_metadata_value(value)))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
 

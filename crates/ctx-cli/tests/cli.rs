@@ -1573,6 +1573,15 @@ fn dashboard_export_writes_static_local_html_report() {
         data["status"]["search_command"],
         "ctx search <query> --json"
     );
+    assert_eq!(data["evidence_metadata"][0]["status"], "passed");
+    assert!(
+        data["evidence_metadata"][0]["freshness"] == "fresh"
+            || data["evidence_metadata"][0]["freshness"] == "probably_fresh"
+    );
+    assert!(data["evidence_metadata"][0]["metadata"]["repo_root"]
+        .as_str()
+        .unwrap()
+        .starts_with("[REDACTED_ROOT]/"));
     assert!(rendered.contains("Render dashboard token=[REDACTED_SECRET]"));
     assert!(rendered.contains("https://github.com/ctxrs/ctx/pull/77"));
     assert!(rendered.contains("password=[REDACTED_SECRET]"));

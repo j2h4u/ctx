@@ -586,6 +586,8 @@ pub struct WorkRecordArchive {
     pub records: Vec<WorkRecord>,
     pub evidence: Vec<Evidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_metadata: Vec<EvidenceMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<WorkRecordArchiveArtifact>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capture_sources: Vec<CaptureSource>,
@@ -618,6 +620,7 @@ impl Default for WorkRecordArchive {
             version: archive_schema_version(),
             records: Vec::new(),
             evidence: Vec::new(),
+            evidence_metadata: Vec::new(),
             artifacts: Vec::new(),
             capture_sources: Vec::new(),
             sessions: Vec::new(),
