@@ -584,6 +584,26 @@ pub struct WorkRecordArchive {
     pub version: u32,
     pub records: Vec<WorkRecord>,
     pub evidence: Vec<Evidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<WorkRecordArchiveArtifact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkRecordArchiveArtifact {
+    pub id: Uuid,
+    pub evidence_id: Uuid,
+    pub stream: String,
+    pub kind: ArtifactKind,
+    pub blob_hash: String,
+    pub blob_path: String,
+    pub byte_size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_text: Option<String>,
+    #[serde(default)]
+    pub redaction_state: RedactionState,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,7 +1,8 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    str::FromStr,
     time::Duration,
 };
 
@@ -10,7 +11,10 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
-use work_record_core::{new_id, Evidence, WorkContext, WorkRecord, WorkRecordArchive};
+use work_record_core::{
+    new_id, ArtifactKind, Evidence, RedactionState, WorkContext, WorkRecord, WorkRecordArchive,
+    WorkRecordArchiveArtifact,
+};
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -34,6 +38,8 @@ pub enum StoreError {
     ImportConflict { kind: &'static str, id: Uuid },
     #[error("evidence must be attached to a work record")]
     EvidenceMissingWorkRecord,
+    #[error("archive artifact {id} content does not match its blob hash")]
+    ArchiveArtifactHashMismatch { id: Uuid },
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -1243,17 +1249,20 @@ impl Store {
     }
 
     pub fn export_archive(&self) -> Result<WorkRecordArchive> {
+        let evidence = self.recent_evidence(usize::MAX)?;
         Ok(WorkRecordArchive {
             schema_version: 1,
             version: 1,
             records: self.list_records(usize::MAX)?,
-            evidence: self.recent_evidence(usize::MAX)?,
+            artifacts: self.archive_artifacts()?,
+            evidence,
         })
     }
 
     pub fn import_archive(&mut self, archive: &WorkRecordArchive, overwrite: bool) -> Result<()> {
         validate_archive_version(archive)?;
         validate_import_evidence_references(&self.conn, archive)?;
+        let archive_artifacts = archive_artifacts_by_evidence(archive);
         let blob_dir = self.blob_dir.clone();
         let tx = self.conn.transaction()?;
         if !overwrite {
@@ -1263,7 +1272,11 @@ impl Store {
             upsert_record_tx(&tx, record)?;
         }
         for evidence in &archive.evidence {
-            upsert_evidence_tx(&tx, &blob_dir, evidence)?;
+            if let Some(artifacts) = archive_artifacts.get(&evidence.id) {
+                upsert_evidence_with_archive_artifacts_tx(&tx, &blob_dir, evidence, artifacts)?;
+            } else {
+                upsert_evidence_tx(&tx, &blob_dir, evidence)?;
+            }
         }
         tx.commit()?;
         Ok(())
@@ -1300,6 +1313,63 @@ impl Store {
             ));
         }
         Ok(findings)
+    }
+
+    fn archive_artifacts(&self) -> Result<Vec<WorkRecordArchiveArtifact>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT
+                a.id,
+                ea.evidence_id,
+                ea.stream,
+                a.kind,
+                a.blob_hash,
+                a.blob_path,
+                a.byte_size,
+                a.media_type,
+                a.preview_text,
+                a.redaction_state
+            FROM evidence_artifacts ea
+            JOIN artifacts a ON a.id = ea.artifact_id
+            ORDER BY ea.evidence_id, ea.stream, a.id
+            "#,
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let id = parse_uuid(row.get::<_, String>(0)?)?;
+            let evidence_id = parse_uuid(row.get::<_, String>(1)?)?;
+            let stream = row.get::<_, String>(2)?;
+            let kind = parse_text_enum::<ArtifactKind>(row.get::<_, String>(3)?)?;
+            let blob_hash = row.get::<_, String>(4)?;
+            let blob_path = row.get::<_, String>(5)?;
+            let byte_size = row.get::<_, i64>(6)? as u64;
+            let media_type = row.get::<_, Option<String>>(7)?;
+            let preview_text = row.get::<_, Option<String>>(8)?;
+            let redaction_state = parse_text_enum::<RedactionState>(row.get::<_, String>(9)?)?;
+            let content = fs::read_to_string(self.absolute_blob_path(&blob_path))
+                .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+            Ok(WorkRecordArchiveArtifact {
+                id,
+                evidence_id,
+                stream,
+                kind,
+                blob_hash,
+                blob_path,
+                byte_size,
+                media_type,
+                preview_text,
+                redaction_state,
+                content,
+            })
+        })?;
+        collect_rows(rows)
+    }
+
+    fn absolute_blob_path(&self, blob_path: &str) -> PathBuf {
+        if let Some(relative_path) = blob_path.strip_prefix("blobs/") {
+            self.blob_dir.join(relative_path)
+        } else {
+            self.blob_dir.join(blob_path)
+        }
     }
 }
 
@@ -1526,7 +1596,30 @@ fn validate_import_evidence_references(
         }
         return Err(StoreError::NotFound(record_id));
     }
+    let archive_evidence_ids = archive
+        .evidence
+        .iter()
+        .map(|evidence| evidence.id)
+        .collect::<HashSet<_>>();
+    for artifact in &archive.artifacts {
+        if !archive_evidence_ids.contains(&artifact.evidence_id) {
+            return Err(StoreError::NotFound(artifact.evidence_id));
+        }
+    }
     Ok(())
+}
+
+fn archive_artifacts_by_evidence(
+    archive: &WorkRecordArchive,
+) -> HashMap<Uuid, Vec<&WorkRecordArchiveArtifact>> {
+    let mut artifacts = HashMap::<Uuid, Vec<&WorkRecordArchiveArtifact>>::new();
+    for artifact in &archive.artifacts {
+        artifacts
+            .entry(artifact.evidence_id)
+            .or_default()
+            .push(artifact);
+    }
+    artifacts
 }
 
 fn reject_import_conflicts(tx: &Transaction<'_>, archive: &WorkRecordArchive) -> Result<()> {
@@ -1678,6 +1771,148 @@ fn upsert_evidence_tx(tx: &Transaction<'_>, blob_dir: &Path, evidence: &Evidence
     Ok(())
 }
 
+fn upsert_evidence_with_archive_artifacts_tx(
+    tx: &Transaction<'_>,
+    blob_dir: &Path,
+    evidence: &Evidence,
+    artifacts: &[&WorkRecordArchiveArtifact],
+) -> Result<()> {
+    let mut stdout = None;
+    let mut stderr = None;
+    let mut stdout_artifact_id = None;
+    let mut stderr_artifact_id = None;
+
+    for artifact in artifacts {
+        let artifact_id = store_archive_artifact_tx(tx, blob_dir, artifact)?;
+        match artifact.stream.as_str() {
+            "stdout" => {
+                stdout = Some(artifact.content.clone());
+                stdout_artifact_id = Some(artifact_id);
+            }
+            "stderr" => {
+                stderr = Some(artifact.content.clone());
+                stderr_artifact_id = Some(artifact_id);
+            }
+            _ => {}
+        }
+    }
+
+    let work_record_id = evidence
+        .record_id
+        .ok_or(StoreError::EvidenceMissingWorkRecord)?;
+    let started_at_ms = timestamp_ms(evidence.started_at);
+    let ended_at_ms = started_at_ms.saturating_add(evidence.duration_ms);
+    let status = evidence_status(evidence.exit_code);
+    let stdout = stdout.unwrap_or_else(|| evidence.stdout.clone());
+    let stderr = stderr.unwrap_or_else(|| evidence.stderr.clone());
+    let artifact_id = stdout_artifact_id
+        .as_deref()
+        .or(stderr_artifact_id.as_deref())
+        .map(str::to_owned);
+
+    tx.execute(
+        r#"
+        INSERT INTO evidence
+        (
+            id, work_record_id, record_id, kind, status, freshness,
+            command_run_id, artifact_id, started_at_ms, ended_at_ms,
+            created_at_ms, updated_at_ms, command, exit_code, stdout,
+            stderr, started_at, duration_ms
+        )
+        VALUES (?1, ?2, ?2, 'manual', ?3, 'unbound', NULL, ?4, ?5, ?6, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        ON CONFLICT(id) DO UPDATE SET
+            work_record_id = excluded.work_record_id,
+            record_id = excluded.record_id,
+            status = excluded.status,
+            artifact_id = excluded.artifact_id,
+            started_at_ms = excluded.started_at_ms,
+            ended_at_ms = excluded.ended_at_ms,
+            updated_at_ms = excluded.updated_at_ms,
+            command = excluded.command,
+            exit_code = excluded.exit_code,
+            stdout = excluded.stdout,
+            stderr = excluded.stderr,
+            started_at = excluded.started_at,
+            duration_ms = excluded.duration_ms
+        "#,
+        params![
+            evidence.id.to_string(),
+            work_record_id.to_string(),
+            status,
+            artifact_id,
+            started_at_ms,
+            ended_at_ms,
+            evidence.command,
+            evidence.exit_code,
+            output_preview(&stdout),
+            output_preview(&stderr),
+            evidence.started_at.to_rfc3339(),
+            evidence.duration_ms,
+        ],
+    )?;
+
+    replace_evidence_artifact_links_tx(
+        tx,
+        evidence.id,
+        stdout_artifact_id.as_deref(),
+        stderr_artifact_id.as_deref(),
+    )?;
+    Ok(())
+}
+
+fn store_archive_artifact_tx(
+    tx: &Transaction<'_>,
+    blob_dir: &Path,
+    artifact: &WorkRecordArchiveArtifact,
+) -> Result<String> {
+    let hash = sha256_hex(artifact.content.as_bytes());
+    if hash != artifact.blob_hash {
+        return Err(StoreError::ArchiveArtifactHashMismatch { id: artifact.id });
+    }
+    if artifact.content.len() as u64 != artifact.byte_size {
+        return Err(StoreError::ArchiveArtifactHashMismatch { id: artifact.id });
+    }
+
+    let shard = &hash[..2];
+    let relative_path = format!("blobs/{shard}/{hash}");
+    let absolute_dir = blob_dir.join(shard);
+    fs::create_dir_all(&absolute_dir)?;
+    let absolute_path = absolute_dir.join(&hash);
+    if !absolute_path.exists() {
+        fs::write(&absolute_path, artifact.content.as_bytes())?;
+    }
+
+    let now = timestamp_ms(Utc::now());
+    tx.execute(
+        r#"
+        INSERT OR IGNORE INTO artifacts
+        (
+            id, kind, blob_hash, blob_path, byte_size, media_type,
+            preview_text, redaction_state, created_at_ms, updated_at_ms,
+            visibility, fidelity, sync_state
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'safe_preview', ?8, ?8, 'local_only', 'full', 'local_only')
+        "#,
+        params![
+            artifact.id.to_string(),
+            artifact.kind.as_str(),
+            hash,
+            relative_path,
+            artifact.content.len() as i64,
+            artifact.media_type.as_deref(),
+            Some(output_preview(&artifact.content)),
+            now,
+        ],
+    )?;
+
+    let artifact_id = tx.query_row(
+        "SELECT id FROM artifacts WHERE blob_hash = ?1 AND kind = ?2",
+        params![hash, artifact.kind.as_str()],
+        |row| row.get::<_, String>(0),
+    )?;
+    Ok(artifact_id)
+}
+
 fn store_output_artifact_tx(
     tx: &Transaction<'_>,
     blob_dir: &Path,
@@ -1827,6 +2062,16 @@ fn parse_uuid(value: String) -> rusqlite::Result<Uuid> {
 fn parse_time(value: String) -> rusqlite::Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(&value)
         .map(|value| value.with_timezone(&Utc))
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
+}
+
+fn parse_text_enum<T>(value: String) -> rusqlite::Result<T>
+where
+    T: FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    value
+        .parse()
         .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
 }
 
@@ -2204,7 +2449,7 @@ mod tests {
             Some(record.id),
             "cargo test",
             0,
-            "ok".into(),
+            "ok token=secret".into(),
             String::new(),
             Utc::now(),
             12,
@@ -2220,6 +2465,10 @@ mod tests {
         let archive = store.export_archive().unwrap();
         assert_eq!(archive.schema_version, 1);
         assert_eq!(archive.version, 1);
+        assert_eq!(archive.artifacts.len(), 1);
+        assert_eq!(archive.artifacts[0].evidence_id, evidence.id);
+        assert_eq!(archive.artifacts[0].stream, "stdout");
+        assert_eq!(archive.artifacts[0].content, "ok token=secret");
         let mut second = Store::open(temp.path().join("second.sqlite")).unwrap();
         second.import_archive(&archive, false).unwrap();
         assert_eq!(second.get_record(record.id).unwrap().title, "Ship importer");
@@ -2230,6 +2479,25 @@ mod tests {
             })
             .unwrap();
         assert_eq!(imported_artifact_count, 1);
+        let (imported_preview, imported_blob_path): (String, String) = second
+            .conn
+            .query_row(
+                r#"
+                SELECT e.stdout, a.blob_path
+                FROM evidence e
+                JOIN evidence_artifacts ea ON ea.evidence_id = e.id
+                JOIN artifacts a ON a.id = ea.artifact_id
+                WHERE e.id = ?1 AND ea.stream = 'stdout'
+                "#,
+                params![evidence.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(imported_preview, "ok [redacted]");
+        assert_eq!(
+            fs::read_to_string(temp.path().join(imported_blob_path)).unwrap(),
+            "ok token=secret"
+        );
         assert!(second.validate().unwrap().is_empty());
     }
 
@@ -2242,6 +2510,7 @@ mod tests {
             version: 2,
             records: Vec::new(),
             evidence: Vec::new(),
+            artifacts: Vec::new(),
         };
 
         assert!(matches!(
@@ -2263,6 +2532,7 @@ mod tests {
             version: 1,
             records: vec![record.clone()],
             evidence: Vec::new(),
+            artifacts: Vec::new(),
         };
 
         assert!(matches!(
@@ -2294,6 +2564,7 @@ mod tests {
             version: 1,
             records: vec![record.clone()],
             evidence: vec![evidence],
+            artifacts: Vec::new(),
         };
 
         assert!(store.import_archive(&archive, false).is_err());

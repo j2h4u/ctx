@@ -1,6 +1,6 @@
 # Work Recorder Productization Implementation Status
 
-Updated: 2026-06-22T19:04:58-05:00
+Updated: 2026-06-22T19:17:18-05:00
 
 Task: `feb64c1c-e58c-40f8-b1e9-1094dca0646e`
 
@@ -181,6 +181,24 @@ Integrated implementation work after the second architecture/data model review:
 - Archive import preflights evidence references, remains DB-atomic, and imports
   evidence through the artifact-backed transactional path.
 
+## Foundation Third Re-Review Fixes
+
+Integrated implementation work after the third architecture/data model review:
+
+- `WorkRecordArchive` now includes a backward-compatible `artifacts` payload
+  array carrying evidence stream artifact metadata and content-addressed output
+  payloads.
+- Export reads local blob files for evidence artifact links and writes the full
+  payload content into the archive, while evidence stdout/stderr fields remain
+  safe previews.
+- Import validates artifact payload hashes and byte sizes, writes local blob
+  files through canonical content-addressed paths, inserts artifact rows, and
+  links stdout/stderr artifacts to evidence inside the same DB transaction.
+- Legacy archives without `artifacts` still import through the older evidence
+  preview path.
+- Privacy and CLI docs now state that full evidence output is stored in
+  local-only blob files and included in JSON archives.
+
 ## Validation
 
 - `./scripts/check.sh` in the public `work-record-product` worktree: PASS at
@@ -226,6 +244,14 @@ Integrated implementation work after the second architecture/data model review:
   installed.
 - `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 ./scripts/release-dry-run.sh && git diff --check`:
   PASS after foundation re-review fixes.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo test -p ctx -p work-record-core -p work-record-store -- --test-threads 1`:
+  PASS after archive payload fixes. Covered 11 CLI integration tests, 4 core
+  unit tests, 9 store unit tests, and doc-tests for core/store.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 BAZEL_JOBS=2 ./scripts/check.sh all`:
+  PASS after archive payload fixes. Covered fmt, check, clippy, and tests; Bazel
+  lane recorded `skipped` because neither `bazel` nor `bazelisk` is installed.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 ./scripts/release-dry-run.sh && git diff --check`:
+  PASS after archive payload fixes.
 
 ## Reviewer Status
 
@@ -242,6 +268,11 @@ stdout/stderr from the in-memory object, evidence attached only one stream
 artifact, and import/migration paths could bypass artifact-backed output. The
 foundation re-review fixes above are integrated locally and awaiting re-review
 after commit.
+
+Architecture/data model reviewer returned FAIL on head `77d227f` because JSON
+archive export/import preserved only evidence safe previews, not the full
+artifact-backed stdout/stderr blob content. The archive payload fixes above are
+integrated locally and awaiting re-review after commit.
 
 ## Blockers
 

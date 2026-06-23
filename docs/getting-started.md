@@ -65,7 +65,9 @@ Run commands through ctx when their output should become evidence:
 ctx evidence run --record <record-id> cargo test -p checkout
 ```
 
-The command is executed normally. ctx stores the command string, exit code, stdout, stderr, start time, and duration.
+The command is executed normally. ctx stores the command string, exit code,
+safe stdout/stderr previews, start time, and duration in SQLite, with full
+stdout/stderr saved as local-only blob artifacts.
 
 ## Link review state
 
@@ -91,8 +93,9 @@ ctx import --input work-records.json
 ctx validate
 ```
 
-`ctx import` imports ctx JSON archives. It is not a provider-history
-importer for existing local Codex, Claude, Cursor, or other agent sessions.
+`ctx import` imports ctx JSON archives, including evidence output payloads
+exported by `ctx export`. It is not a provider-history importer for existing
+local Codex, Claude, Cursor, or other agent sessions.
 
 ## Remove local product data
 

@@ -1,6 +1,6 @@
 # Work Recorder Productization Decision Log
 
-Updated: 2026-06-22T19:04:58-05:00
+Updated: 2026-06-22T19:17:18-05:00
 
 ## Decisions
 
@@ -38,6 +38,10 @@ Updated: 2026-06-22T19:04:58-05:00
 - Archive import preflights evidence references and then imports records,
   evidence rows, artifact rows, and evidence/artifact links in one DB
   transaction.
+- Public JSON archives include evidence artifact payloads so local-only full
+  stdout/stderr content can survive export/import. This is explicit portability
+  behavior, not a default report/share surface; exported archives must be
+  reviewed before leaving the machine.
 
 ## Pending Decisions
 

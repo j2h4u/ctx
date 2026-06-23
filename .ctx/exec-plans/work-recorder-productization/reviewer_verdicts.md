@@ -1,6 +1,6 @@
 # Work Recorder Productization Reviewer Verdicts
 
-Updated: 2026-06-22T19:04:58-05:00
+Updated: 2026-06-22T19:17:18-05:00
 
 ## Read-Only Mapper Results
 
@@ -63,6 +63,15 @@ No milestone reviewer verdicts have passed yet.
     - legacy migration and archive import could bypass artifact-backed output.
   - Resolution status:
     - targeted fixes are implemented locally;
+    - focused/full/release dry-run checks passed;
+    - fixes committed at `77d227f`.
+- Architecture/data model reviewer on head `77d227f`: FAIL.
+  - Blocking issue:
+    - JSON archives exported evidence safe previews but did not include artifact
+      rows, blob payloads, or evidence/artifact link data, so export/import
+      could not preserve full artifact-backed stdout/stderr content.
+  - Resolution status:
+    - targeted archive payload fixes are implemented locally;
     - focused/full/release dry-run checks passed;
     - re-review is required after the fix commit.
 

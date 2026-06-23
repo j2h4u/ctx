@@ -67,7 +67,10 @@ ctx evidence run cargo test
 ctx evidence run --record <record-id> cargo test -p checkout
 ```
 
-`evidence run` executes the command and stores its command string, exit code, stdout, stderr, start time, and duration. Use `--record <record-id>` to attach the evidence to a specific record.
+`evidence run` executes the command and stores its command string, exit code,
+safe stdout/stderr previews, start time, and duration in SQLite. Full
+stdout/stderr content is stored as local-only blob artifacts. Use
+`--record <record-id>` to attach the evidence to a specific record.
 
 ## Pull requests
 
@@ -89,7 +92,8 @@ cat work-records.json | ctx import
 ctx validate
 ```
 
-- `export` writes a JSON archive to stdout or `--output`.
+- `export` writes a JSON archive to stdout or `--output`, including local blob
+  payloads needed to preserve evidence output.
 - `import` reads a JSON archive from `--input` or stdin.
 - `import` handles ctx JSON archives only; it does not import local agent
   provider history.

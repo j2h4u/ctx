@@ -11,13 +11,18 @@ The recorder stores structured metadata in SQLite:
 - record timestamps
 - tags, kinds, and optional workspace paths
 - command evidence metadata
-- command stdout and stderr captured by `ctx evidence run`
+- safe previews of command stdout and stderr captured by `ctx evidence run`
 - pull request URLs attached by `ctx link-pr`
 
-The current implementation stores records and command evidence in the local SQLite database. Export and import use JSON archives.
+The current implementation stores records and command evidence metadata in the
+local SQLite database. Full command stdout and stderr are stored as
+content-addressed local-only blob files under the Work Recorder data directory,
+with SQLite rows pointing at those artifacts. Export and import use JSON
+archives that include the blob payloads needed to preserve recorded evidence on
+another machine.
 
 The current implementation does not store passive provider transcripts, shim
-events, dashboard state, hosted sync state, or blob files.
+events, dashboard state, or hosted sync state.
 
 ## What may be sensitive
 
@@ -36,7 +41,8 @@ Treat the ctx data directory like source code. Do not publish it unless the reco
 
 The local recorder is useful without network sync. This branch does not include
 hosted sync, account login, or pull request comment publishing. Exported JSON
-archives should be reviewed before they leave your machine.
+archives can include full command output payloads and should be reviewed before
+they leave your machine.
 
 Agent providers, package managers, GitHub, and other tools you run during the
 task may still use the network according to their own configuration. ctx stores
