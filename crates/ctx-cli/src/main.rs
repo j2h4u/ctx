@@ -12,8 +12,8 @@ use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 use work_record_capture::{
-    import_spool, inbox_dir as capture_inbox_dir, spool_counts, write_fixture, write_shim_command,
-    FixtureOptions, ShimCommandOptions,
+    import_spool, inbox_dir as capture_inbox_dir, retry_failed_spool_files, spool_counts,
+    write_fixture, write_shim_command, FixtureOptions, ShimCommandOptions,
 };
 use work_record_core::{
     blob_dir, database_path, default_data_root, device_path, inbox_dir, work_record_dir,
@@ -86,6 +86,10 @@ enum CommandRoot {
     Import(ImportArgs),
     #[command(about = "Validate local Work Recorder storage")]
     Validate,
+    #[command(about = "Check local Work Recorder health")]
+    Doctor,
+    #[command(about = "Retry failed local capture imports")]
+    Repair(RepairArgs),
     #[command(hide = true, about = "Compatibility alias for setup/status/uninstall")]
     Workspace(WorkspaceCommand),
     #[command(
@@ -146,6 +150,10 @@ enum WorkSubcommand {
     Import(ImportArgs),
     #[command(about = "Validate local Work Recorder storage")]
     Validate,
+    #[command(about = "Check local Work Recorder health")]
+    Doctor,
+    #[command(about = "Retry failed local capture imports")]
+    Repair(RepairArgs),
 }
 
 #[derive(Debug, Args)]
@@ -431,6 +439,12 @@ struct ImportArgs {
     overwrite: bool,
 }
 
+#[derive(Debug, Args)]
+struct RepairArgs {
+    #[arg(long)]
+    json: bool,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let data_root = cli
@@ -465,6 +479,8 @@ fn main() -> Result<()> {
         CommandRoot::Export(args) => run_work_subcommand(WorkSubcommand::Export(args), data_root),
         CommandRoot::Import(args) => run_work_subcommand(WorkSubcommand::Import(args), data_root),
         CommandRoot::Validate => run_work_subcommand(WorkSubcommand::Validate, data_root),
+        CommandRoot::Doctor => run_work_subcommand(WorkSubcommand::Doctor, data_root),
+        CommandRoot::Repair(args) => run_work_subcommand(WorkSubcommand::Repair(args), data_root),
         CommandRoot::Workspace(command) => run_workspace(command, data_root),
         CommandRoot::Work(command) => run_work(command, data_root),
     }
@@ -605,6 +621,7 @@ fn run_work(command: WorkCommand, data_root: PathBuf) -> Result<()> {
 
 fn run_work_subcommand(command: WorkSubcommand, data_root: PathBuf) -> Result<()> {
     let mut store = Store::open(database_path(data_root.clone()))?;
+    auto_import_pending_spool(&data_root, &mut store)?;
     match command {
         WorkSubcommand::Schema => println!("{}", store.schema()?),
         WorkSubcommand::Record(args) => {
@@ -691,29 +708,10 @@ fn run_work_subcommand(command: WorkSubcommand, data_root: PathBuf) -> Result<()
             store.import_archive(&archive, args.overwrite)?;
             println!("imported {record_count} records and {evidence_count} evidence items");
         }
-        WorkSubcommand::Validate => {
-            let mut findings = store.validate()?;
-            let counts = spool_counts(capture_inbox_dir(&data_root))?;
-            if counts.failed > 0 {
-                findings.push(format!(
-                    "{} failed capture spool file(s) need retry or inspection",
-                    counts.failed
-                ));
-            }
-            if counts.processing > 0 {
-                findings.push(format!(
-                    "{} capture spool file(s) are still marked processing",
-                    counts.processing
-                ));
-            }
-            if findings.is_empty() {
-                println!("valid");
-            } else {
-                for finding in findings {
-                    println!("{finding}");
-                }
-            }
+        WorkSubcommand::Validate | WorkSubcommand::Doctor => {
+            print_doctor_findings(&store, &data_root)?
         }
+        WorkSubcommand::Repair(args) => run_repair(args, &mut store, &data_root)?,
     }
     Ok(())
 }
@@ -721,7 +719,8 @@ fn run_work_subcommand(command: WorkSubcommand, data_root: PathBuf) -> Result<()
 fn run_dashboard(command: DashboardCommand, data_root: PathBuf) -> Result<()> {
     match command.command {
         DashboardSubcommand::Export(args) => {
-            let store = Store::open(database_path(data_root))?;
+            let mut store = Store::open(database_path(data_root.clone()))?;
+            auto_import_pending_spool(&data_root, &mut store)?;
             let records = store.list_records(args.limit)?;
             let evidence = store.recent_evidence(args.limit)?;
             let html = work_record_report::render_dashboard_html(&records, &evidence);
@@ -730,6 +729,77 @@ fn run_dashboard(command: DashboardCommand, data_root: PathBuf) -> Result<()> {
             fs::write(&index, html)?;
             println!("dashboard: {}", index.display());
         }
+    }
+    Ok(())
+}
+
+fn auto_import_pending_spool(data_root: &Path, store: &mut Store) -> Result<()> {
+    let inbox = capture_inbox_dir(data_root);
+    let counts = spool_counts(&inbox)?;
+    if counts.pending == 0 {
+        return Ok(());
+    }
+
+    let summary = import_spool(&inbox, store)?;
+    if summary.failed_files > 0 {
+        eprintln!(
+            "ctx: failed to import {} capture spool file(s); run `ctx doctor` or `ctx repair`",
+            summary.failed_files
+        );
+    }
+    Ok(())
+}
+
+fn print_doctor_findings(store: &Store, data_root: &Path) -> Result<()> {
+    let mut findings = store.validate()?;
+    let counts = spool_counts(capture_inbox_dir(data_root))?;
+    if counts.failed > 0 {
+        findings.push(format!(
+            "{} failed capture spool file(s) need retry or inspection",
+            counts.failed
+        ));
+    }
+    if counts.processing > 0 {
+        findings.push(format!(
+            "{} capture spool file(s) are still marked processing",
+            counts.processing
+        ));
+    }
+    if findings.is_empty() {
+        println!("valid");
+    } else {
+        for finding in findings {
+            println!("{finding}");
+        }
+    }
+    Ok(())
+}
+
+fn run_repair(args: RepairArgs, store: &mut Store, data_root: &Path) -> Result<()> {
+    let inbox = capture_inbox_dir(data_root);
+    let repair = retry_failed_spool_files(&inbox)?;
+    let import = import_spool(&inbox, store)?;
+    if args.json {
+        print_json(serde_json::json!({
+            "schema_version": 1,
+            "repair": repair,
+            "import": import,
+        }))?;
+    } else {
+        println!(
+            "retried {} failed capture spool file(s)",
+            repair.retried_files
+        );
+        println!(
+            "imported {} records and {} evidence items from {} spool files",
+            import.imported_records, import.imported_evidence, import.processed_files
+        );
+    }
+    if import.failed_files > 0 {
+        return Err(anyhow!(
+            "failed to import {} capture spool file(s)",
+            import.failed_files
+        ));
     }
     Ok(())
 }

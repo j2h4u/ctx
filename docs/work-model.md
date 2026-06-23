@@ -43,7 +43,9 @@ scripts.
 
 The capture spool is a local JSONL inbox for integrations that already know how
 to emit ctx capture envelopes. `ctx capture import` turns pending envelopes into
-records and evidence in the local store.
+records and evidence in the local store. Normal Work Recorder commands also
+import pending envelopes before serving results, so wrapper captures become
+visible without a daemon.
 
 The importer is intentionally narrower than passive history import:
 
@@ -51,6 +53,9 @@ The importer is intentionally narrower than passive history import:
 - it uses stable ids derived from envelope dedupe keys when ids are omitted;
 - it moves successful files to `.done`;
 - it moves failed files to `.failed` and writes an error sidecar.
+
+`ctx doctor` reports failed or stuck spool files. `ctx repair` retries failed
+spool files after inspection.
 
 Local Git/jj/gh wrapper shims are the first implemented capture writer for this
 spool. Provider-native hooks, shell hooks, and transcript importers remain

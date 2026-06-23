@@ -1,6 +1,6 @@
 # Work Recorder Productization Decision Log
 
-Updated: 2026-06-22T19:46:46-05:00
+Updated: 2026-06-22T19:53:06-05:00
 
 ## Decisions
 
@@ -49,6 +49,9 @@ Updated: 2026-06-22T19:46:46-05:00
   shims as implemented local features, while keeping provider-native history
   import, shell/provider hooks, hosted sync, PR comment publishing, installer
   URLs, and `ctx publish` marked as not shipped.
+- Normal Work Recorder commands import pending capture spool files on demand
+  rather than requiring a daemon. Failed files remain local and inspectable, and
+  `ctx repair` is the explicit retry path.
 
 ## Pending Decisions
 

@@ -159,12 +159,15 @@ Run:
 
 ```bash
 ctx capture import --json
+ctx doctor
+ctx repair
 ```
 
 Successful files move to `.done`; failed files move to `.failed` with an
-`.error.json` sidecar. `ctx status` reports pending, temporary, processing,
-done, and failed spool counts. `ctx validate` reports failed or stuck capture
-spool files.
+`.error.json` sidecar. Normal Work Recorder commands import pending capture
+files before serving results. `ctx status` reports pending, temporary,
+processing, done, and failed spool counts. `ctx doctor` reports failed or stuck
+capture spool files. `ctx repair` retries failed files.
 
 This is local integration plumbing, not a provider-history importer. The branch
 includes opt-in local Git/jj/gh wrapper shims, but does not install Codex,

@@ -157,6 +157,9 @@ ctx export --output work-records.json
 ctx import --input work-records.json
 cat work-records.json | ctx import
 ctx validate
+ctx doctor
+ctx repair
+ctx repair --json
 ```
 
 - `export` writes a JSON archive to stdout or `--output`, including local blob
@@ -165,6 +168,13 @@ ctx validate
 - `import` handles ctx JSON archives only; it does not import local agent
   provider history.
 - `validate` checks local Work Recorder storage and prints `valid` when no findings are found.
+- `doctor` runs the same local health checks using the product-facing command
+  name.
+- `repair` retries failed capture spool files and imports anything that succeeds.
+
+Normal Work Recorder commands import pending capture spool files before serving
+results. Failed imports are retained as `.failed` files for inspection and
+retry.
 
 ## Not yet implemented
 

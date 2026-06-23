@@ -1,6 +1,6 @@
 # Work Recorder Productization Validation Log
 
-Updated: 2026-06-22T19:46:46-05:00
+Updated: 2026-06-22T19:53:06-05:00
 
 ## 2026-06-22 Baseline Public Branch Check
 
@@ -110,6 +110,40 @@ Updated: 2026-06-22T19:46:46-05:00
   - `cargo clippy --workspace --all-targets --locked -- -D warnings`;
   - `cargo test --workspace --all-targets --locked -- --test-threads 1`;
   - 24 CLI integration tests, 3 capture unit tests, 4 core unit tests, 2 report
+    unit tests, 2 search unit tests, 9 store unit tests, and 7 VCS unit tests
+    passed;
+  - `scripts/check-docs.sh` passed;
+  - `git diff --check` passed;
+  - Bazel lane recorded `skipped` because neither `bazel` nor `bazelisk` is
+    installed.
+
+## 2026-06-22 Capture Auto-Import, Doctor, And Repair Checks
+
+- Command:
+  `cargo fmt --all && TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo test -p work-record-capture -p ctx -- --test-threads=1`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted auto-import/doctor/repair changes on `be4268e`
+- Outcome: PASS
+- Coverage:
+  - 26 CLI integration tests passed, including normal command auto-import,
+    `ctx doctor`, and `ctx repair --json`.
+  - 3 capture unit tests passed.
+
+- Command:
+  `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 BAZEL_JOBS=2 ./scripts/check.sh all && ./scripts/check-docs.sh && git diff --check`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / uncommitted auto-import/doctor/repair changes on `be4268e`
+- Outcome: PASS
+- Coverage:
+  - `cargo fmt --all -- --check`;
+  - `cargo check --workspace --all-targets --locked`;
+  - `cargo clippy --workspace --all-targets --locked -- -D warnings`;
+  - `cargo test --workspace --all-targets --locked -- --test-threads 1`;
+  - 26 CLI integration tests, 3 capture unit tests, 4 core unit tests, 2 report
     unit tests, 2 search unit tests, 9 store unit tests, and 7 VCS unit tests
     passed;
   - `scripts/check-docs.sh` passed;

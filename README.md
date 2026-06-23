@@ -26,8 +26,10 @@ Implemented in this branch:
 - export a static local HTML dashboard;
 - export/import ctx JSON archives;
 - import pending local capture spool JSONL files;
+- automatically import pending capture spool files before normal work views;
 - inspect Git/jj workspace metadata and parse GitHub/GitLab pull request URLs;
-- validate and remove the local Work Recorder data store.
+- validate, repair failed capture imports, and remove the local Work Recorder
+  data store.
 
 Not implemented yet:
 
@@ -190,6 +192,8 @@ ctx link-pr <record-id> <pull-request-url>
 ctx export [--output work-records.json]
 ctx import [--input work-records.json] [--overwrite]
 ctx validate
+ctx doctor
+ctx repair [--json]
 ```
 
 See [docs/cli-reference.md](docs/cli-reference.md) for the detailed current

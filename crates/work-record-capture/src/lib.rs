@@ -170,6 +170,11 @@ pub struct SpoolImportSummary {
     pub failures: Vec<SpoolImportFailure>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpoolRepairSummary {
+    pub retried_files: usize,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct ArchiveCounts {
     records: usize,
@@ -396,6 +401,39 @@ pub fn spool_counts(inbox: impl AsRef<Path>) -> Result<SpoolCounts> {
     }
 
     Ok(counts)
+}
+
+pub fn retry_failed_spool_files(inbox: impl AsRef<Path>) -> Result<SpoolRepairSummary> {
+    let inbox = inbox.as_ref();
+    fs::create_dir_all(inbox)?;
+    let mut summary = SpoolRepairSummary::default();
+
+    for entry in fs::read_dir(inbox)? {
+        let entry = entry?;
+        let failed_path = entry.path();
+        let file_name = failed_path
+            .file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_default();
+        let Some(pending_name) = file_name.strip_suffix(".failed") else {
+            continue;
+        };
+        if !pending_name.ends_with(".jsonl") {
+            continue;
+        }
+        let pending_path = failed_path.with_file_name(pending_name);
+        if pending_path.exists() {
+            return Err(CaptureError::InvalidPath(pending_path));
+        }
+        let sidecar = append_suffix(&failed_path, ".error.json")?;
+        fs::rename(&failed_path, &pending_path)?;
+        if sidecar.exists() {
+            fs::remove_file(sidecar)?;
+        }
+        summary.retried_files += 1;
+    }
+
+    Ok(summary)
 }
 
 pub fn archive_from_envelopes(envelopes: &[CaptureEnvelope]) -> Result<WorkRecordArchive> {

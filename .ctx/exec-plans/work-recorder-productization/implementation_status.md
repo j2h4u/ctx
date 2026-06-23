@@ -1,6 +1,6 @@
 # Work Recorder Productization Implementation Status
 
-Updated: 2026-06-22T19:46:46-05:00
+Updated: 2026-06-22T19:53:06-05:00
 
 Task: `feb64c1c-e58c-40f8-b1e9-1094dca0646e`
 
@@ -289,6 +289,22 @@ Integrated implementation work:
   imports it, searches it, and validates storage.
 - Added `scripts/check-docs.sh` for doc/example syntax and product-claim checks.
 
+## Capture Auto-Import, Doctor, And Repair
+
+Integrated implementation work:
+
+- Normal Work Recorder commands now import pending capture spool `.jsonl` files
+  before serving results, so shim captures become visible without a daemon.
+- Auto-import failures are retained as `.failed` files and reported to stderr
+  with a `ctx doctor` / `ctx repair` pointer instead of being silently ignored.
+- Added root `ctx doctor` as the product-facing local health check command while
+  preserving `ctx validate`.
+- Added `ctx repair [--json]` to retry failed capture spool files and import
+  anything that succeeds.
+- Added tests proving normal commands auto-import pending captures and
+  `doctor`/`repair` can retry a failed capture file into the record store.
+- README and docs now describe auto-import, `doctor`, and `repair`.
+
 ## Validation
 
 - `./scripts/check.sh` in the public `work-record-product` worktree: PASS at
@@ -398,6 +414,13 @@ Integrated implementation work:
   clippy, workspace tests, docs/example syntax/product-claim checks, and
   `git diff --check`; Bazel lane recorded `skipped` because neither `bazel` nor
   `bazelisk` is installed.
+- `cargo fmt --all && TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo test -p work-record-capture -p ctx -- --test-threads=1`:
+  PASS after capture auto-import/doctor/repair integration. Covered 26 CLI
+  integration tests and 3 capture unit tests.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 BAZEL_JOBS=2 ./scripts/check.sh all && ./scripts/check-docs.sh && git diff --check`:
+  PASS after capture auto-import/doctor/repair integration. Covered fmt, check,
+  clippy, workspace tests, docs checks, and `git diff --check`; Bazel lane
+  recorded `skipped` because neither `bazel` nor `bazelisk` is installed.
 
 ## Reviewer Status
 

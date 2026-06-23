@@ -5,7 +5,10 @@ use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::time::Duration;
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use tempfile::{Builder, TempDir};
 use uuid::Uuid;
 
@@ -55,6 +58,19 @@ fn write_json(temp: &TempDir, name: &str, value: &Value) -> String {
     let path = temp.path().join(name);
     fs::write(&path, serde_json::to_string_pretty(value).unwrap()).unwrap();
     path.to_str().unwrap().to_string()
+}
+
+fn inbox_file_with_suffix(temp: &TempDir, suffix: &str) -> PathBuf {
+    let inbox = temp.path().join("work-record").join("inbox");
+    fs::read_dir(&inbox)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().ends_with(suffix))
+                .unwrap_or(false)
+        })
+        .unwrap_or_else(|| panic!("missing inbox file ending with {suffix}"))
 }
 
 #[cfg(unix)]
@@ -341,6 +357,92 @@ fn capture_write_fixture_is_quiet_and_imports_from_spool() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Spooled fixture"));
+}
+
+#[test]
+fn normal_work_commands_auto_import_pending_capture_spool() {
+    let temp = tempdir();
+    ctx(&temp)
+        .args([
+            "capture",
+            "write-fixture",
+            "--title",
+            "Auto imported fixture",
+            "--body",
+            "normal work commands should import pending captures",
+            "--dedupe-key",
+            "auto-import-fixture",
+        ])
+        .assert()
+        .success();
+
+    ctx(&temp)
+        .args(["list"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains("Auto imported fixture"));
+
+    ctx(&temp)
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("spool_pending: 0"))
+        .stdout(predicate::str::contains("spool_done: 1"));
+}
+
+#[test]
+fn doctor_and_repair_retry_failed_capture_spool_files() {
+    let temp = tempdir();
+    ctx(&temp)
+        .args([
+            "capture",
+            "write-fixture",
+            "--title",
+            "Repairable fixture",
+            "--body",
+            "failed capture can be retried",
+            "--dedupe-key",
+            "repairable-fixture",
+        ])
+        .assert()
+        .success();
+
+    let pending = inbox_file_with_suffix(&temp, ".jsonl");
+    let failed = pending.with_file_name(format!(
+        "{}.failed",
+        pending.file_name().unwrap().to_string_lossy()
+    ));
+    fs::rename(&pending, &failed).unwrap();
+    fs::write(
+        failed.with_file_name(format!(
+            "{}.error.json",
+            failed.file_name().unwrap().to_string_lossy()
+        )),
+        "{}\n",
+    )
+    .unwrap();
+
+    ctx(&temp)
+        .args(["doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "1 failed capture spool file(s) need retry or inspection",
+        ));
+
+    ctx(&temp)
+        .args(["repair", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"retried_files\": 1"))
+        .stdout(predicate::str::contains("\"imported_records\": 1"));
+
+    ctx(&temp)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Repairable fixture"));
 }
 
 #[test]

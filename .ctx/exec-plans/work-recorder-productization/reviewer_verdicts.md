@@ -1,6 +1,6 @@
 # Work Recorder Productization Reviewer Verdicts
 
-Updated: 2026-06-22T19:46:46-05:00
+Updated: 2026-06-22T19:53:06-05:00
 
 ## Read-Only Mapper Results
 
@@ -60,6 +60,10 @@ No milestone reviewer verdicts have passed yet.
   `scripts/check-docs.sh`, and two local dogfood examples; integrated into the
   manager branch after reconciling dashboard/shim wording with the current
   shipped surface, then validated with docs checks and example runs.
+- Capture auto-import/doctor/repair slice: complete. Added on-demand spool import
+  for normal Work Recorder commands, `ctx doctor`, `ctx repair`, docs updates,
+  and focused tests; validated with focused CLI/capture tests and full capped
+  local check. Awaiting adversarial local product/security review.
 
 ## Milestone Review Results
 
