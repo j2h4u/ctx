@@ -1,6 +1,6 @@
 # Work Recorder Productization Implementation Status
 
-Updated: 2026-06-22T19:53:06-05:00
+Updated: 2026-06-22T20:02:05-05:00
 
 Task: `feb64c1c-e58c-40f8-b1e9-1094dca0646e`
 
@@ -34,7 +34,8 @@ work into bounded slices with separate reviewers.
 - Local data model, capture, search, and dashboard: pending mapper output.
 - Hosted/private staging implementation: pending private worktree setup and
   private repo instruction review.
-- Buildkite/release/platform verification: pending CI mapper output.
+- Buildkite/release/platform verification: public matrix wiring present; live
+  Buildkite runner evidence pending.
 - Dogfood, screenshots, and final review: pending product implementation.
 
 ## Mapping Results
@@ -104,6 +105,47 @@ Integrated implementation work:
   - added `scripts/release-dry-run.sh`;
   - added an initial `.buildkite/pipeline.yml` for sequential Linux-style
     lanes and local artifact collection.
+
+## CI/Release Matrix Worker Slice
+
+Integrated implementation work on child branch `ctx/work-record-ci-matrix` in
+`/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-ci-matrix`:
+
+- Expanded `.buildkite/pipeline.yml` into an explicit public CI/release matrix:
+  - Linux x86_64 sequential lanes for pipeline contract, fmt, docs, cargo
+    check, clippy, cargo test, examples, Bazel, and release dry-run;
+  - macOS arm64 and macOS x86_64 host release dry-runs on the known
+    `ctx-mac-gui-shared-arm64` and `ctx-mac-gui-shared-x64` queues with
+    serialized concurrency groups;
+  - Windows x86_64 host release dry-run on the known `windows-x64` queue using
+    Bash and the `x86_64-pc-windows-msvc` host-triple contract;
+  - FreeBSD x86_64 blocker artifact lane because no `queue=freebsd-x64` runner
+    is documented in the known Buildkite queue inventory.
+- Added `scripts/check-buildkite-pipeline.sh` so the public pipeline shape can
+  be validated locally without Buildkite credentials.
+- Added `scripts/release-platform-blocker.sh` to emit machine-readable and
+  Markdown blocker evidence for required platforms that lack native runners.
+- Extended `scripts/check.sh` with `docs` and `examples` modes. The examples
+  mode builds `ctx` once and runs checked-in examples against a temporary local
+  data root through `CTX_BIN`.
+- Extended `scripts/release-dry-run.sh` so each host lane records
+  `platform`, `target_triple`, and `expected_host_triple`, and fails closed if
+  the actual Rust host triple does not match `CTX_EXPECT_HOST_TRIPLE`.
+
+Known remaining CI/release blockers:
+
+- Live Buildkite credentials/runners were not exercised from this local worker,
+  so there is no Buildkite URL or green hosted evidence yet.
+- The public pipeline assumes these external queues exist and are attached to
+  the public `ctxrs/ctx` Buildkite pipeline: `main-linux`,
+  `release-linux-managed` with `ctx-runner-class=release-linux-x64-stage`,
+  `ctx-mac-gui-shared-arm64`, `ctx-mac-gui-shared-x64`, and `windows-x64`.
+- The Windows lane additionally requires Git Bash in `PATH`, Rust stable, Cargo,
+  and an MSVC host toolchain so `rustc -vV` reports
+  `host: x86_64-pc-windows-msvc`.
+- FreeBSD native release artifacts are blocked until a native
+  `queue=freebsd-x64` Buildkite agent pool exists, or until a separate
+  cross-build lane proves the FreeBSD linker/toolchain contract.
 
 ## Second Integrated Slice
 

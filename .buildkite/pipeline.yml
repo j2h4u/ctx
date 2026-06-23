@@ -1,12 +1,21 @@
-# Initial slim Work Recorder pipeline. It is intentionally sequential so cargo,
-# Bazel, and release builds do not overlap on small runners.
+# Slim Work Recorder CI/release matrix.
 #
-# This file does not claim full release matrix coverage. Missing external runner
-# wiring before a release gate can pass:
-# - macOS arm64 runner label and signing/notarization lane.
-# - macOS x86_64 runner label, or documented unavailability plus cross-build plan.
-# - Windows x86_64 runner label with Bash-capable Rust toolchain.
-# - FreeBSD x86_64 runner label, or documented unavailability plus cross-build plan.
+# Linux verification is intentionally sequential so Cargo, Bazel, examples, and
+# release builds do not overlap on small runners. Host release dry-runs are
+# non-publishing and fail closed if Buildkite routes them to the wrong host
+# triple.
+#
+# Known external runner queues are taken from the ctx-private Buildkite queue
+# inventory:
+# - main-linux
+# - release-linux-managed
+# - ctx-mac-gui-shared-arm64
+# - ctx-mac-gui-shared-x64
+# - windows-x64
+#
+# No FreeBSD runner queue is documented there yet. This pipeline records a
+# blocker artifact for x86_64-unknown-freebsd until a native queue exists or a
+# separately proven cross-build lane is added.
 
 env:
   CARGO_TERM_COLOR: "always"
@@ -17,16 +26,50 @@ env:
   BAZEL_LOCAL_RAM_RESOURCES: "2048"
 
 steps:
+  - label: ":buildkite: pipeline contract"
+    key: "pipeline-contract"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/pipeline-contract ./scripts/check-buildkite-pipeline.sh"
+    agents:
+      queue: "main-linux"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 5
+    artifact_paths:
+      - "artifacts/buildkite/pipeline-contract/**/*"
+
   - label: ":rust: fmt"
     key: "fmt"
+    depends_on: "pipeline-contract"
     command: "CTX_ARTIFACT_DIR=artifacts/buildkite/fmt ./scripts/check.sh fmt"
+    agents:
+      queue: "main-linux"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 10
     artifact_paths:
       - "artifacts/buildkite/fmt/**/*"
 
+  - label: ":memo: docs"
+    key: "docs"
+    depends_on: "fmt"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/docs ./scripts/check.sh docs"
+    agents:
+      queue: "main-linux"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 10
+    artifact_paths:
+      - "artifacts/buildkite/docs/**/*"
+
   - label: ":rust: check"
     key: "cargo-check"
-    depends_on: "fmt"
+    depends_on: "docs"
     command: "CTX_ARTIFACT_DIR=artifacts/buildkite/check ./scripts/check.sh check"
+    agents:
+      queue: "main-linux"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 30
     artifact_paths:
       - "artifacts/buildkite/check/**/*"
 
@@ -34,6 +77,11 @@ steps:
     key: "clippy"
     depends_on: "cargo-check"
     command: "CTX_ARTIFACT_DIR=artifacts/buildkite/clippy ./scripts/check.sh clippy"
+    agents:
+      queue: "main-linux"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 30
     artifact_paths:
       - "artifacts/buildkite/clippy/**/*"
 
@@ -41,20 +89,121 @@ steps:
     key: "cargo-test"
     depends_on: "clippy"
     command: "CTX_ARTIFACT_DIR=artifacts/buildkite/test ./scripts/check.sh test"
+    agents:
+      queue: "main-linux"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 45
     artifact_paths:
       - "artifacts/buildkite/test/**/*"
 
+  - label: ":test_tube: examples"
+    key: "examples"
+    depends_on: "cargo-test"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/examples ./scripts/check.sh examples"
+    agents:
+      queue: "main-linux"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 30
+    artifact_paths:
+      - "artifacts/buildkite/examples/**/*"
+
   - label: ":bazel: bazel"
     key: "bazel"
-    depends_on: "cargo-test"
+    depends_on: "examples"
     command: "CTX_ARTIFACT_DIR=artifacts/buildkite/bazel ./scripts/check.sh bazel"
+    agents:
+      queue: "main-linux"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 45
     artifact_paths:
       - "artifacts/buildkite/bazel/**/*"
 
-  - label: ":package: release dry-run"
-    key: "release-dry-run"
+  - label: ":linux: release dry-run linux-x64"
+    key: "release-dry-run-linux-x64"
     depends_on: "bazel"
-    # CI artifact collection is evidence only; the script does not publish release assets.
-    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/release-dry-run ./scripts/release-dry-run.sh"
+    command: "./scripts/release-dry-run.sh"
+    env:
+      CTX_ARTIFACT_DIR: "artifacts/buildkite/release-dry-run/linux-x64"
+      CTX_RELEASE_PLATFORM: "linux-x64"
+      CTX_RELEASE_TARGET_TRIPLE: "x86_64-unknown-linux-gnu"
+      CTX_EXPECT_HOST_TRIPLE: "x86_64-unknown-linux-gnu"
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 60
     artifact_paths:
-      - "artifacts/buildkite/release-dry-run/**/*"
+      - "artifacts/buildkite/release-dry-run/linux-x64/**/*"
+
+  - label: ":mac: release dry-run macos-arm64"
+    key: "release-dry-run-macos-arm64"
+    depends_on: "bazel"
+    command: "./scripts/release-dry-run.sh"
+    env:
+      CTX_ARTIFACT_DIR: "artifacts/buildkite/release-dry-run/macos-arm64"
+      CTX_RELEASE_PLATFORM: "macos-arm64"
+      CTX_RELEASE_TARGET_TRIPLE: "aarch64-apple-darwin"
+      CTX_EXPECT_HOST_TRIPLE: "aarch64-apple-darwin"
+    agents:
+      queue: "ctx-mac-gui-shared-arm64"
+      arch: "arm64"
+    concurrency: 1
+    concurrency_group: "ctx-mac-gui-shared-arm64"
+    concurrency_method: "eager"
+    priority: 60
+    timeout_in_minutes: 60
+    artifact_paths:
+      - "artifacts/buildkite/release-dry-run/macos-arm64/**/*"
+
+  - label: ":mac: release dry-run macos-x64"
+    key: "release-dry-run-macos-x64"
+    depends_on: "bazel"
+    command: "./scripts/release-dry-run.sh"
+    env:
+      CTX_ARTIFACT_DIR: "artifacts/buildkite/release-dry-run/macos-x64"
+      CTX_RELEASE_PLATFORM: "macos-x64"
+      CTX_RELEASE_TARGET_TRIPLE: "x86_64-apple-darwin"
+      CTX_EXPECT_HOST_TRIPLE: "x86_64-apple-darwin"
+    agents:
+      queue: "ctx-mac-gui-shared-x64"
+      arch: "x86_64"
+    concurrency: 1
+    concurrency_group: "ctx-mac-gui-shared-x64"
+    concurrency_method: "eager"
+    priority: 50
+    timeout_in_minutes: 60
+    artifact_paths:
+      - "artifacts/buildkite/release-dry-run/macos-x64/**/*"
+
+  - label: ":windows: release dry-run windows-x64"
+    key: "release-dry-run-windows-x64"
+    depends_on: "bazel"
+    command: "bash ./scripts/release-dry-run.sh"
+    env:
+      CTX_ARTIFACT_DIR: "artifacts/buildkite/release-dry-run/windows-x64"
+      CTX_RELEASE_PLATFORM: "windows-x64"
+      CTX_RELEASE_TARGET_TRIPLE: "x86_64-pc-windows-msvc"
+      CTX_EXPECT_HOST_TRIPLE: "x86_64-pc-windows-msvc"
+    agents:
+      queue: "windows-x64"
+      os: "windows"
+      arch: "x86_64"
+    timeout_in_minutes: 60
+    artifact_paths:
+      - "artifacts/buildkite/release-dry-run/windows-x64/**/*"
+
+  - label: ":freebsd: release blocker freebsd-x64"
+    key: "freebsd-x64-blocker"
+    depends_on: "bazel"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/release-blockers/freebsd-x64 ./scripts/release-platform-blocker.sh freebsd-x64"
+    agents:
+      queue: "main-linux"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 5
+    artifact_paths:
+      - "artifacts/buildkite/release-blockers/freebsd-x64/**/*"

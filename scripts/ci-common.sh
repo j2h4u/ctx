@@ -87,6 +87,36 @@ ctx_detect_memory_gb() {
   printf '4\n'
 }
 
+ctx_host_exe_suffix() {
+  case "${OS:-$(uname -s 2>/dev/null || printf unknown)}" in
+    Windows_NT|MINGW*|MSYS*|CYGWIN*)
+      printf '.exe'
+      ;;
+    *)
+      printf ''
+      ;;
+  esac
+}
+
+ctx_detect_host_triple() {
+  rustc -vV | awk '/^host:/ { print $2; exit }'
+}
+
+ctx_require_host_triple() {
+  local expected="$1"
+  local actual
+
+  if [[ -z "${expected}" ]]; then
+    return 0
+  fi
+
+  actual="$(ctx_detect_host_triple)"
+  if [[ "${actual}" != "${expected}" ]]; then
+    printf 'host triple mismatch: expected %s, got %s\n' "${expected}" "${actual}" >&2
+    return 1
+  fi
+}
+
 ctx_init_resource_env() {
   local cpu_count memory_gb memory_jobs default_jobs bazel_ram_mb
 

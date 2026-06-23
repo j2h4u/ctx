@@ -1,6 +1,6 @@
 # Work Recorder Productization Decision Log
 
-Updated: 2026-06-22T19:53:06-05:00
+Updated: 2026-06-22T20:02:05-05:00
 
 ## Decisions
 
@@ -52,6 +52,18 @@ Updated: 2026-06-22T19:53:06-05:00
 - Normal Work Recorder commands import pending capture spool files on demand
   rather than requiring a daemon. Failed files remain local and inspectable, and
   `ctx repair` is the explicit retry path.
+- Public Buildkite matrix wiring uses the known private queue inventory where
+  appropriate: `main-linux`, `release-linux-managed`,
+  `ctx-mac-gui-shared-arm64`, `ctx-mac-gui-shared-x64`, and `windows-x64`.
+- Public release dry-runs are host-native and non-publishing. Each native lane
+  sets `CTX_EXPECT_HOST_TRIPLE` and fails before artifact creation if Buildkite
+  routes the job to the wrong Rust host triple.
+- FreeBSD x86_64 is tracked as a documented release blocker instead of a weak
+  cross-build claim because no native `queue=freebsd-x64` runner is documented
+  yet and no FreeBSD linker/toolchain cross-build contract has been proven.
+- The public pipeline owns a local `scripts/check-buildkite-pipeline.sh`
+  contract check so required step keys, queues, host triples, and dry-run flags
+  can be validated without Buildkite credentials.
 
 ## Pending Decisions
 
@@ -60,6 +72,7 @@ Updated: 2026-06-22T19:53:06-05:00
   branch.
 - Hosted staging environment choice and whether credentials allow deployment
   from this machine.
-- Buildkite runner/platform availability and any required queue/pool changes.
+- Live Buildkite runner/platform availability and any required queue/pool
+  changes after the public pipeline is attached to real runners.
 - Whether legacy unattached evidence rows from pre-productization stores should
   be migrated into synthetic Work Records or only tolerated as legacy read data.

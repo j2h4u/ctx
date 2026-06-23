@@ -7,7 +7,7 @@ source "${script_dir}/ci-common.sh"
 
 usage() {
   cat <<'USAGE'
-usage: scripts/check.sh [all|fmt|check|clippy|test|bazel]...
+usage: scripts/check.sh [all|fmt|docs|check|clippy|test|examples|bazel]...
 
 Runs resource-capped local checks sequentially. Defaults to "all".
 Environment overrides:
@@ -32,6 +32,10 @@ run_fmt() {
   cargo fmt --all -- --check
 }
 
+run_docs() {
+  bash scripts/check-docs.sh
+}
+
 run_check() {
   cargo check --workspace --all-targets "${cargo_locked_args[@]}"
 }
@@ -46,6 +50,27 @@ run_clippy() {
 
 run_test() {
   cargo test --workspace --all-targets "${cargo_locked_args[@]}" -- --test-threads "${RUST_TEST_THREADS}"
+}
+
+run_examples() {
+  local suffix example example_name example_bin
+
+  ctx_run_timed "examples-build" cargo build -p ctx --bins "${cargo_locked_args[@]}"
+
+  suffix="$(ctx_host_exe_suffix)"
+  example_bin="${CTX_REPO_ROOT}/target/debug/ctx${suffix}"
+  if [[ ! -f "${example_bin}" ]]; then
+    printf 'expected example binary missing: %s\n' "${example_bin}" >&2
+    return 1
+  fi
+
+  for example in examples/*.sh; do
+    example_name="$(basename "${example}" .sh)"
+    ctx_run_timed "example-${example_name}" env \
+      CTX_BIN="${example_bin}" \
+      CTX_EXAMPLE_TMPDIR="${TMPDIR}" \
+      bash "${example}"
+  done
 }
 
 run_bazel() {
@@ -66,6 +91,9 @@ run_mode() {
     fmt)
       ctx_run_timed "cargo-fmt" run_fmt
       ;;
+    docs)
+      ctx_run_timed "docs" run_docs
+      ;;
     check)
       ctx_run_timed "cargo-check" run_check
       ;;
@@ -79,6 +107,9 @@ run_mode() {
     test)
       ctx_run_timed "cargo-test" run_test
       ;;
+    examples)
+      run_examples
+      ;;
     bazel)
       if [[ ! -f BUILD.bazel && ! -f MODULE.bazel && ! -f WORKSPACE && ! -f WORKSPACE.bazel ]]; then
         ctx_record_skip "bazel-test" "no Bazel workspace files found"
@@ -90,9 +121,11 @@ run_mode() {
       ;;
     all)
       run_mode fmt
+      run_mode docs
       run_mode check
       run_mode clippy
       run_mode test
+      run_mode examples
       run_mode bazel
       ;;
     -h|--help|help)

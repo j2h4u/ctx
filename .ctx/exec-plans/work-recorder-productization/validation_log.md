@@ -1,6 +1,6 @@
 # Work Recorder Productization Validation Log
 
-Updated: 2026-06-22T19:53:06-05:00
+Updated: 2026-06-22T20:02:05-05:00
 
 ## 2026-06-22 Baseline Public Branch Check
 
@@ -119,6 +119,84 @@ Updated: 2026-06-22T19:53:06-05:00
   - `target/ctx-artifacts/release-dry-run/manifest.json`;
   - `target/ctx-artifacts/release-dry-run/checksums.sha256`;
   - `target/ctx-artifacts/release-dry-run/timings.json`.
+
+## 2026-06-22 CI/Release Matrix Contract Checks
+
+- Command:
+  `bash -n scripts/ci-common.sh scripts/check.sh scripts/check-docs.sh scripts/check-buildkite-pipeline.sh scripts/release-dry-run.sh scripts/release-platform-blocker.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-ci-matrix`
+- Branch/head:
+  `ctx/work-record-ci-matrix` / uncommitted changes on `83611d2`
+- Outcome: PASS
+- Notes: verified shell syntax for the changed CI/release scripts.
+
+- Command: `./scripts/check-buildkite-pipeline.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-ci-matrix`
+- Branch/head:
+  `ctx/work-record-ci-matrix` / uncommitted changes on `83611d2`
+- Outcome: PASS
+- Coverage:
+  - Buildkite agent dry-run parser accepted `.buildkite/pipeline.yml` with
+    `--dry-run --no-interpolation`;
+  - required public pipeline step keys for Linux checks/docs/examples/Bazel,
+    Linux/macOS/Windows release dry-runs, and FreeBSD blocker were present;
+  - known queue labels and runner tags were present;
+  - release dry-run host-triple guards were present;
+  - release dry-run script retained `dry_run: true` and `upload: false`;
+  - FreeBSD blocker script retained `publishing: false`.
+- Artifacts:
+  - `target/ctx-artifacts/buildkite-contract/pipeline-dry-run.json`;
+  - `target/ctx-artifacts/buildkite-contract/pipeline-contract.txt`;
+  - `target/ctx-artifacts/buildkite-contract/timings.json`.
+
+- Command: `./scripts/check-docs.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-ci-matrix`
+- Branch/head:
+  `ctx/work-record-ci-matrix` / uncommitted changes on `83611d2`
+- Outcome: PASS
+
+- Command: `./scripts/check.sh docs`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-ci-matrix`
+- Branch/head:
+  `ctx/work-record-ci-matrix` / uncommitted changes on `83611d2`
+- Outcome: PASS
+- Notes: verified the docs mode is wired through the shared check entrypoint.
+
+- Command:
+  `CTX_ARTIFACT_DIR=target/ctx-artifacts/release-platform-blocker ./scripts/release-platform-blocker.sh freebsd-x64`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-ci-matrix`
+- Branch/head:
+  `ctx/work-record-ci-matrix` / uncommitted changes on `83611d2`
+- Outcome: PASS
+- Artifacts:
+  - `target/ctx-artifacts/release-platform-blocker/freebsd-x64-blocker.md`;
+  - `target/ctx-artifacts/release-platform-blocker/freebsd-x64-blocker.json`;
+  - `target/ctx-artifacts/release-platform-blocker/timings.json`.
+
+- Command:
+  `bash -c 'if CTX_ARTIFACT_DIR=target/ctx-artifacts/release-dry-run-host-guard CTX_EXPECT_HOST_TRIPLE=not-a-real-triple ./scripts/release-dry-run.sh; then printf "host guard unexpectedly passed\n" >&2; exit 1; else printf "host guard rejected mismatched triple\n"; fi'`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-ci-matrix`
+- Branch/head:
+  `ctx/work-record-ci-matrix` / uncommitted changes on `83611d2`
+- Outcome: PASS
+- Notes: verified the host-triple guard rejects mismatched runners before Cargo
+  compilation begins.
+
+- Command: `git diff --check`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-ci-matrix`
+- Branch/head:
+  `ctx/work-record-ci-matrix` / uncommitted changes on `83611d2`
+- Outcome: PASS
+
+- Broad tests not run in this worker. The task requested lightweight validation
+  and warned not to run broad tests concurrently with the manager.
 
 ## 2026-06-22 Local Shims And Docs/Examples Checks
 

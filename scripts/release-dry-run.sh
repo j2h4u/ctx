@@ -22,19 +22,10 @@ sha256_file() {
   return 1
 }
 
-host_exe_suffix() {
-  case "${OS:-$(uname -s 2>/dev/null || printf unknown)}" in
-    Windows_NT|MINGW*|MSYS*|CYGWIN*)
-      printf '.exe'
-      ;;
-    *)
-      printf ''
-      ;;
-  esac
-}
-
 build_host_release() {
   local cargo_locked_args=()
+
+  ctx_require_host_triple "${CTX_EXPECT_HOST_TRIPLE:-}" || return $?
 
   if [[ "${CTX_CARGO_LOCKED:-1}" != "0" && -f Cargo.lock ]]; then
     cargo_locked_args+=(--locked)
@@ -45,13 +36,16 @@ build_host_release() {
 
 write_manifest() {
   local out_dir="$1"
-  local version host_triple commit branch suffix source_bin artifact artifact_rel checksum bytes manifest checksum_file generated_at
+  local version platform target_triple expected_host_triple host_triple commit branch suffix source_bin artifact artifact_rel checksum bytes manifest checksum_file generated_at
 
   version="$(awk -F '"' '/^version[[:space:]]*=/ { print $2; exit }' crates/ctx-cli/Cargo.toml)"
-  host_triple="$(rustc -vV | awk '/^host:/ { print $2; exit }')"
+  host_triple="$(ctx_detect_host_triple)"
+  expected_host_triple="${CTX_EXPECT_HOST_TRIPLE:-}"
+  target_triple="${CTX_RELEASE_TARGET_TRIPLE:-${host_triple}}"
+  platform="${CTX_RELEASE_PLATFORM:-host-${host_triple}}"
   commit="$(git rev-parse HEAD)"
   branch="$(git branch --show-current)"
-  suffix="$(host_exe_suffix)"
+  suffix="$(ctx_host_exe_suffix)"
   source_bin="target/release/ctx${suffix}"
 
   if [[ ! -f "${source_bin}" ]]; then
@@ -59,7 +53,7 @@ write_manifest() {
     return 1
   fi
 
-  artifact="ctx-${version}-${host_triple}${suffix}"
+  artifact="ctx-${version}-${target_triple}${suffix}"
   artifact_rel="${out_dir}/${artifact}"
   cp "${source_bin}" "${artifact_rel}"
   chmod 0755 "${artifact_rel}" 2>/dev/null || true
@@ -79,7 +73,10 @@ write_manifest() {
   "upload": false,
   "package": "ctx",
   "version": "$(ctx_json_escape "${version}")",
+  "platform": "$(ctx_json_escape "${platform}")",
+  "target_triple": "$(ctx_json_escape "${target_triple}")",
   "host_triple": "$(ctx_json_escape "${host_triple}")",
+  "expected_host_triple": "$(ctx_json_escape "${expected_host_triple}")",
   "git_commit": "$(ctx_json_escape "${commit}")",
   "git_branch": "$(ctx_json_escape "${branch}")",
   "generated_at_unix_s": ${generated_at},
