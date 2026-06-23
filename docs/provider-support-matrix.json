@@ -73,7 +73,19 @@
       "fixture_paths": [
         "tests/fixtures/provider/codex.jsonl",
         "tests/fixtures/provider-history/codex-history.jsonl"
-      ]
+      ],
+      "metadata": {
+        "live_e2e": {
+          "lane_status": "blocker_artifact_only",
+          "global_enable_env": "CTX_LIVE_PROVIDER_E2E=1",
+          "provider_enable_env": "CTX_LIVE_PROVIDER_CODEX=1",
+          "blocker_accept_env": "CTX_LIVE_PROVIDER_E2E_ACCEPT_BLOCKERS=1",
+          "candidate_source_env": "CTX_LIVE_PROVIDER_CODEX_HISTORY_JSONL",
+          "candidate_source_format": "codex_history_jsonl",
+          "supported_live_claim": false,
+          "blocker": "Codex native prompt-history import can be smoke-tested from an explicit JSONL path, but no Codex command runner or passive live capture hook is implemented."
+        }
+      }
     },
     {
       "id": "claude_code",
@@ -133,7 +145,19 @@
       ],
       "fixture_paths": [
         "tests/fixtures/provider/claude.jsonl"
-      ]
+      ],
+      "metadata": {
+        "live_e2e": {
+          "lane_status": "blocker_artifact_only",
+          "global_enable_env": "CTX_LIVE_PROVIDER_E2E=1",
+          "provider_enable_env": "CTX_LIVE_PROVIDER_CLAUDE_CODE=1",
+          "blocker_accept_env": "CTX_LIVE_PROVIDER_E2E_ACCEPT_BLOCKERS=1",
+          "candidate_source_env": null,
+          "candidate_source_format": null,
+          "supported_live_claim": false,
+          "blocker": "No Claude Code native transcript parser, hook adapter, or live command runner is implemented."
+        }
+      }
     },
     {
       "id": "claude_cli_crp",
@@ -223,7 +247,19 @@
       "fixture_paths": [
         "tests/fixtures/provider/pi.jsonl",
         "tests/fixtures/provider-history/pi-session.jsonl"
-      ]
+      ],
+      "metadata": {
+        "live_e2e": {
+          "lane_status": "blocker_artifact_only",
+          "global_enable_env": "CTX_LIVE_PROVIDER_E2E=1",
+          "provider_enable_env": "CTX_LIVE_PROVIDER_PI=1",
+          "blocker_accept_env": "CTX_LIVE_PROVIDER_E2E_ACCEPT_BLOCKERS=1",
+          "candidate_source_env": "CTX_LIVE_PROVIDER_PI_SESSION_JSONL",
+          "candidate_source_format": "pi_session_jsonl",
+          "supported_live_claim": false,
+          "blocker": "Pi native session JSONL import can be smoke-tested from an explicit JSONL path, but no Pi command runner, session-edge expansion, image artifact import, or passive live capture hook is implemented."
+        }
+      }
     },
     {
       "id": "open_code",
@@ -262,7 +298,19 @@
       ],
       "fixture_paths": [
         "tests/fixtures/provider/opencode.jsonl"
-      ]
+      ],
+      "metadata": {
+        "live_e2e": {
+          "lane_status": "blocker_artifact_only",
+          "global_enable_env": "CTX_LIVE_PROVIDER_E2E=1",
+          "provider_enable_env": "CTX_LIVE_PROVIDER_OPEN_CODE=1",
+          "blocker_accept_env": "CTX_LIVE_PROVIDER_E2E_ACCEPT_BLOCKERS=1",
+          "candidate_source_env": null,
+          "candidate_source_format": null,
+          "supported_live_claim": false,
+          "blocker": "No OpenCode native DB/export parser, plugin adapter, or live command runner is implemented."
+        }
+      }
     },
     {
       "id": "cursor",
@@ -300,7 +348,19 @@
       ],
       "fixture_paths": [
         "tests/fixtures/provider/cursor.jsonl"
-      ]
+      ],
+      "metadata": {
+        "live_e2e": {
+          "lane_status": "blocker_artifact_only",
+          "global_enable_env": "CTX_LIVE_PROVIDER_E2E=1",
+          "provider_enable_env": "CTX_LIVE_PROVIDER_CURSOR=1",
+          "blocker_accept_env": "CTX_LIVE_PROVIDER_E2E_ACCEPT_BLOCKERS=1",
+          "candidate_source_env": null,
+          "candidate_source_format": null,
+          "supported_live_claim": false,
+          "blocker": "No Cursor CLI/editor transcript parser, hook adapter, or live command runner is implemented."
+        }
+      }
     },
     {
       "id": "antigravity_cli",
@@ -339,7 +399,19 @@
       ],
       "fixture_paths": [
         "tests/fixtures/provider/antigravity.jsonl"
-      ]
+      ],
+      "metadata": {
+        "live_e2e": {
+          "lane_status": "blocker_artifact_only",
+          "global_enable_env": "CTX_LIVE_PROVIDER_E2E=1",
+          "provider_enable_env": "CTX_LIVE_PROVIDER_ANTIGRAVITY_CLI=1",
+          "blocker_accept_env": "CTX_LIVE_PROVIDER_E2E_ACCEPT_BLOCKERS=1",
+          "candidate_source_env": null,
+          "candidate_source_format": null,
+          "supported_live_claim": false,
+          "blocker": "No stable Antigravity CLI local transcript schema, hook adapter, or live command runner is proven."
+        }
+      }
     },
     {
       "id": "gemini_cli",
@@ -377,7 +449,19 @@
       ],
       "fixture_paths": [
         "tests/fixtures/provider/gemini.jsonl"
-      ]
+      ],
+      "metadata": {
+        "live_e2e": {
+          "lane_status": "blocker_artifact_only",
+          "global_enable_env": "CTX_LIVE_PROVIDER_E2E=1",
+          "provider_enable_env": "CTX_LIVE_PROVIDER_GEMINI_CLI=1",
+          "blocker_accept_env": "CTX_LIVE_PROVIDER_E2E_ACCEPT_BLOCKERS=1",
+          "candidate_source_env": null,
+          "candidate_source_format": null,
+          "supported_live_claim": false,
+          "blocker": "No Gemini CLI session/telemetry importer, hook adapter, or live command runner is implemented."
+        }
+      }
     },
     {
       "id": "gemini",

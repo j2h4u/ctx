@@ -152,6 +152,45 @@ provider-specific imported-session adapter added on top of that contract.
 
 ## Local E2E Evidence and Blockers
 
+The Buildkite gated live-provider lane is not provider proof in this branch.
+As of Buildkite #74 on 2026-06-23, the `:satellite: gated live provider E2E`
+job was broken while running:
+
+```bash
+CTX_ARTIFACT_DIR=artifacts/buildkite/provider-live-e2e \
+  ./scripts/release-provider-live-e2e-lanes.sh run-selected
+```
+
+Provider-side recommendation:
+
+- If `CTX_LIVE_PROVIDER_E2E=1` is set but no provider-specific
+  `CTX_LIVE_PROVIDER_<PROVIDER>=1` variable is selected, the lane should be a
+  non-blocking skip/blocker artifact, not a provider failure.
+- If a provider-specific variable is selected, the current provider result
+  should remain blocked unless a deterministic provider runner exists and
+  produces a live artifact with import/capture assertions, dashboard export,
+  search/context checks, and redaction scan.
+- If Buildkite marks the gated job `broken` before the script can run, that is
+  a release-pipeline or worker-queue remediation item for the release lane, not
+  evidence that any provider is supported-live.
+
+Current P0 live lane env vars and provider-side status:
+
+| Provider | Enable env | Current live status | Support status |
+| --- | --- | --- | --- |
+| Codex | `CTX_LIVE_PROVIDER_CODEX=1` | blocker artifact only; no Codex command runner or passive hook | `supported-import` |
+| Claude Code | `CTX_LIVE_PROVIDER_CLAUDE_CODE=1` | blocker artifact only; no transcript parser, hook adapter, or runner | `fixture-only` |
+| Pi | `CTX_LIVE_PROVIDER_PI=1` | blocker artifact only; no Pi command runner or passive hook | `supported-import` |
+| OpenCode | `CTX_LIVE_PROVIDER_OPEN_CODE=1` | blocker artifact only; no DB/export parser, plugin adapter, or runner | `fixture-only` |
+| Antigravity CLI | `CTX_LIVE_PROVIDER_ANTIGRAVITY_CLI=1` | blocker artifact only; no proven transcript/hook contract or runner | `fixture-only` |
+| Gemini CLI | `CTX_LIVE_PROVIDER_GEMINI_CLI=1` | blocker artifact only; no session/telemetry importer, hook adapter, or runner | `fixture-only` |
+| Cursor | `CTX_LIVE_PROVIDER_CURSOR=1` | blocker artifact only; no CLI/editor transcript parser, hook adapter, or runner | `fixture-only` |
+
+The release script also recognizes
+`CTX_LIVE_PROVIDER_E2E_ACCEPT_BLOCKERS=1` for exploratory runs that should
+write blocker artifacts without failing. That variable does not upgrade a
+provider support claim.
+
 Local provider inventory on 2026-06-23:
 
 - Codex: `/home/daddy/.codex/history.jsonl` exists and contains prompt-history

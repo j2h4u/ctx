@@ -360,7 +360,9 @@ pub const fn provider_support_matrix_schema_version() -> u32 {
 mod tests {
     use std::{collections::BTreeSet, fs, path::PathBuf};
 
-    use super::{ProviderCaptureEnvelope, ProviderId, ProviderSupportMatrixDocument};
+    use super::{
+        ProviderCaptureEnvelope, ProviderId, ProviderSupportMatrixDocument, ProviderSupportStatus,
+    };
 
     fn workspace_file(path: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -383,6 +385,85 @@ mod tests {
 
         assert_eq!(parsed.schema_version, 1);
         assert_eq!(ids, expected);
+    }
+
+    #[test]
+    fn provider_support_matrix_records_p0_live_blockers_without_supported_live_claims() {
+        let matrix = fs::read_to_string(workspace_file("docs/provider-support-matrix.json"))
+            .expect("provider support matrix scaffold should exist");
+        let parsed: ProviderSupportMatrixDocument =
+            serde_json::from_str(&matrix).expect("matrix scaffold should parse");
+
+        assert!(
+            parsed
+                .providers
+                .iter()
+                .all(|entry| entry.status != ProviderSupportStatus::SupportedLive),
+            "no provider may be supported_live without a real gated live artifact"
+        );
+
+        for (id, status, env_name) in [
+            (
+                ProviderId::Codex,
+                ProviderSupportStatus::SupportedImport,
+                "CTX_LIVE_PROVIDER_CODEX=1",
+            ),
+            (
+                ProviderId::ClaudeCode,
+                ProviderSupportStatus::FixtureOnly,
+                "CTX_LIVE_PROVIDER_CLAUDE_CODE=1",
+            ),
+            (
+                ProviderId::Pi,
+                ProviderSupportStatus::SupportedImport,
+                "CTX_LIVE_PROVIDER_PI=1",
+            ),
+            (
+                ProviderId::OpenCode,
+                ProviderSupportStatus::FixtureOnly,
+                "CTX_LIVE_PROVIDER_OPEN_CODE=1",
+            ),
+            (
+                ProviderId::AntigravityCli,
+                ProviderSupportStatus::FixtureOnly,
+                "CTX_LIVE_PROVIDER_ANTIGRAVITY_CLI=1",
+            ),
+            (
+                ProviderId::GeminiCli,
+                ProviderSupportStatus::FixtureOnly,
+                "CTX_LIVE_PROVIDER_GEMINI_CLI=1",
+            ),
+            (
+                ProviderId::Cursor,
+                ProviderSupportStatus::FixtureOnly,
+                "CTX_LIVE_PROVIDER_CURSOR=1",
+            ),
+        ] {
+            let entry = parsed
+                .providers
+                .iter()
+                .find(|entry| entry.id == id)
+                .unwrap_or_else(|| panic!("missing provider row for {id:?}"));
+            assert_eq!(entry.status, status, "{id:?} support status changed");
+            let live = &entry.metadata["live_e2e"];
+            assert_eq!(
+                live["lane_status"], "blocker_artifact_only",
+                "{id:?} must keep live lane blocker-only until a real runner lands"
+            );
+            assert_eq!(live["global_enable_env"], "CTX_LIVE_PROVIDER_E2E=1");
+            assert_eq!(live["provider_enable_env"], env_name);
+            assert_eq!(
+                live["blocker_accept_env"],
+                "CTX_LIVE_PROVIDER_E2E_ACCEPT_BLOCKERS=1"
+            );
+            assert_eq!(live["supported_live_claim"], false);
+            assert!(
+                live["blocker"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty()),
+                "{id:?} live blocker text is required"
+            );
+        }
     }
 
     #[test]
