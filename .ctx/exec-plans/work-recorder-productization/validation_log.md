@@ -1626,6 +1626,38 @@ Future entries must include:
   - `pwsh` is unavailable on this Linux host, so PowerShell execution remains
     validated by the next Windows Buildkite lane.
 
+## 2026-06-22 Build 41 Follow-Up
+
+- Remote Buildkite evidence:
+  - build 41 ran `3da27084eae98d84bea392a4b46121cd319302d7`;
+  - PASS: pipeline upload, pipeline contract, fmt, docs, cargo check, clippy,
+    cargo test, examples, Bazel, and FreeBSD blocker artifact;
+  - FAIL: Linux smoke exited 141 from `rustc -vV | awk` host-triple parsing
+    under `pipefail`;
+  - FAIL: macOS custom checkout reached the correct commit, but the external
+    macOS pre-command hook looked for
+    `$BUILDKITE_BUILD_CHECKOUT_PATH/scripts/buildkite/macos_agent_pre_command.sh`
+    and the previous custom checkout left `$BUILDKITE_BUILD_CHECKOUT_PATH` on
+    the stale shared directory;
+  - FAIL: Windows smoke still ran bare `cargo`, now traced to use of a
+    PowerShell parameter named `Args`.
+- Remediation:
+  - `scripts/ci-common.sh` now captures `rustc -vV` output before `awk`
+    parsing;
+  - macOS Buildkite lanes now set `BUILDKITE_BUILD_CHECKOUT_PATH` to isolated
+    `/tmp/ctx-buildkite-*-${BUILDKITE_BUILD_NUMBER}` paths and let
+    `custom-checkout#v1.8.0` populate those paths directly;
+  - `scripts/ci-windows.ps1` now uses `CargoArgs` and `CtxArgs` parameter names
+    and calls `Run-Cargo -CargoArgs ...`.
+- Local validation:
+  - `./scripts/check-buildkite-pipeline.sh`: PASS;
+  - `./scripts/check-docs.sh`: PASS;
+  - `bash -n scripts/check.sh scripts/ci-common.sh scripts/release-dry-run.sh scripts/check-buildkite-pipeline.sh`:
+    PASS;
+  - `git diff --check`: PASS;
+  - `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 CTX_ARTIFACT_DIR=target/ctx-artifacts/platform-smoke-local ./scripts/check.sh platform-smoke`:
+    PASS.
+
 - Command:
   `./scripts/check-buildkite-pipeline.sh`
 - Repo/worktree:

@@ -950,6 +950,32 @@ None accepted yet.
     plugin with `skip_checkout: true` and per-build checkout subdirectories, so
     default checkout cleanup does not touch the stale shared-agent directory.
 
+## 2026-06-22 Buildkite 41 Follow-Up
+
+- Build 41:
+  <https://buildkite.com/luca-king/ctx-public-release-verification/builds/41>
+- Branch/head:
+  `work-record` / `3da27084eae98d84bea392a4b46121cd319302d7`
+- Outcome:
+  - pipeline contract, fmt, docs, cargo check, clippy, cargo test, examples,
+    Bazel, and the FreeBSD blocker artifact passed;
+  - Linux smoke still failed with exit 141, now traced to
+    `rustc -vV | awk` host-triple parsing under `set -o pipefail`;
+  - macOS custom checkout succeeded and checked out the right commit, but the
+    macOS agent pre-command hook expected
+    `$BUILDKITE_BUILD_CHECKOUT_PATH/scripts/buildkite/macos_agent_pre_command.sh`;
+    because the repo was cloned below the default checkout path, the hook failed
+    before the command ran;
+  - Windows smoke still invoked bare `cargo`; using a PowerShell parameter named
+    `Args` continued to collide with automatic argument handling.
+- Remediation in progress:
+  - make `ctx_detect_host_triple` capture `rustc -vV` before parsing;
+  - set macOS `$BUILDKITE_BUILD_CHECKOUT_PATH` itself to an isolated `/tmp`
+    per-build path, while keeping `custom-checkout#v1.8.0` and
+    `delete_checkout: true`;
+  - rename PowerShell wrapper parameters to `CargoArgs`/`CtxArgs` and call
+    `Run-Cargo -CargoArgs ...`.
+
 ## 2026-06-22 Buildkite Bad-SHA Checkout Follow-Up
 
 - Build 39:

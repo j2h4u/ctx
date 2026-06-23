@@ -99,7 +99,10 @@ ctx_host_exe_suffix() {
 }
 
 ctx_detect_host_triple() {
-  rustc -vV | awk '/^host:/ { print $2; exit }'
+  local rustc_info
+
+  rustc_info="$(rustc -vV)"
+  awk '/^host:/ { print $2; exit }' <<<"${rustc_info}"
 }
 
 ctx_require_host_triple() {

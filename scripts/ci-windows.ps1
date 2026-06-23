@@ -195,18 +195,18 @@ function Print-Resource-Env {
 }
 
 function Run-Cargo {
-  param([string[]]$Args)
-  & cargo @Args
+  param([string[]]$CargoArgs)
+  & cargo @CargoArgs
   if ($LASTEXITCODE -ne 0) {
-    throw "cargo $($Args -join ' ') failed with exit code $LASTEXITCODE"
+    throw "cargo $($CargoArgs -join ' ') failed with exit code $LASTEXITCODE"
   }
 }
 
 function Run-Ctx {
-  param([string]$Binary, [string[]]$Args)
-  & $Binary @Args
+  param([string]$Binary, [string[]]$CtxArgs)
+  & $Binary @CtxArgs
   if ($LASTEXITCODE -ne 0) {
-    throw "$Binary $($Args -join ' ') failed with exit code $LASTEXITCODE"
+    throw "$Binary $($CtxArgs -join ' ') failed with exit code $LASTEXITCODE"
   }
 }
 
@@ -214,7 +214,7 @@ function Run-Platform-Smoke {
   Require-Host-Triple $env:CTX_EXPECT_HOST_TRIPLE
   Ensure-Rust-Toolchain
   $locked = Cargo-Locked-Args
-  Run-Cargo -Args (@("build", "-p", "ctx", "--bin", "ctx") + $locked)
+  Run-Cargo -CargoArgs (@("build", "-p", "ctx", "--bin", "ctx") + $locked)
 
   $bin = Join-PathSafe $script:RepoRoot "target\debug\ctx.exe"
   if (-not (Test-Path $bin)) {
@@ -263,7 +263,7 @@ function Run-Release-Dry-Run {
   Require-Host-Triple $env:CTX_EXPECT_HOST_TRIPLE
   Ensure-Rust-Toolchain
   $locked = Cargo-Locked-Args
-  Run-Cargo -Args (@("build", "--workspace", "--release", "--bins") + $locked)
+  Run-Cargo -CargoArgs (@("build", "--workspace", "--release", "--bins") + $locked)
 
   $version = Cargo-Version
   $hostTriple = Host-Triple

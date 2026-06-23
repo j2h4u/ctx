@@ -147,20 +147,21 @@ steps:
   - label: ":mac: smoke macos-arm64"
     key: "platform-smoke-macos-arm64"
     depends_on: "bazel"
-    command: "cd \"ctx-macos-arm64-smoke-${BUILDKITE_BUILD_NUMBER}\" && ./scripts/check.sh platform-smoke"
+    command: "./scripts/check.sh platform-smoke"
     plugins:
       - custom-checkout#v1.8.0:
           skip_checkout: true
+          delete_checkout: true
           repos:
             - url: "https://github.com/ctxrs/ctx.git"
               ref: "${BUILDKITE_COMMIT}"
-              checkout_path: "ctx-macos-arm64-smoke-${BUILDKITE_BUILD_NUMBER}"
               fetch: true
               fetch_flags:
                 - "--depth=1"
                 - "--no-tags"
                 - "--filter=blob:none"
     env:
+      BUILDKITE_BUILD_CHECKOUT_PATH: "/tmp/ctx-buildkite-macos-arm64-smoke-${BUILDKITE_BUILD_NUMBER}"
       CTX_ARTIFACT_DIR: "artifacts/buildkite/platform-smoke/macos-arm64"
       CTX_EXPECT_HOST_TRIPLE: "aarch64-apple-darwin"
     agents:
@@ -172,25 +173,26 @@ steps:
     priority: 60
     timeout_in_minutes: 30
     artifact_paths:
-      - "ctx-macos-arm64-smoke-${BUILDKITE_BUILD_NUMBER}/artifacts/buildkite/platform-smoke/macos-arm64/**/*"
+      - "artifacts/buildkite/platform-smoke/macos-arm64/**/*"
 
   - label: ":mac: smoke macos-x64"
     key: "platform-smoke-macos-x64"
     depends_on: "bazel"
-    command: "cd \"ctx-macos-x64-smoke-${BUILDKITE_BUILD_NUMBER}\" && ./scripts/check.sh platform-smoke"
+    command: "./scripts/check.sh platform-smoke"
     plugins:
       - custom-checkout#v1.8.0:
           skip_checkout: true
+          delete_checkout: true
           repos:
             - url: "https://github.com/ctxrs/ctx.git"
               ref: "${BUILDKITE_COMMIT}"
-              checkout_path: "ctx-macos-x64-smoke-${BUILDKITE_BUILD_NUMBER}"
               fetch: true
               fetch_flags:
                 - "--depth=1"
                 - "--no-tags"
                 - "--filter=blob:none"
     env:
+      BUILDKITE_BUILD_CHECKOUT_PATH: "/tmp/ctx-buildkite-macos-x64-smoke-${BUILDKITE_BUILD_NUMBER}"
       CTX_ARTIFACT_DIR: "artifacts/buildkite/platform-smoke/macos-x64"
       CTX_EXPECT_HOST_TRIPLE: "x86_64-apple-darwin"
     agents:
@@ -202,7 +204,7 @@ steps:
     priority: 50
     timeout_in_minutes: 30
     artifact_paths:
-      - "ctx-macos-x64-smoke-${BUILDKITE_BUILD_NUMBER}/artifacts/buildkite/platform-smoke/macos-x64/**/*"
+      - "artifacts/buildkite/platform-smoke/macos-x64/**/*"
 
   - label: ":windows: smoke windows-x64"
     key: "platform-smoke-windows-x64"
@@ -240,20 +242,21 @@ steps:
   - label: ":mac: release dry-run macos-arm64"
     key: "release-dry-run-macos-arm64"
     depends_on: "platform-smoke-macos-arm64"
-    command: "cd \"ctx-macos-arm64-release-${BUILDKITE_BUILD_NUMBER}\" && ./scripts/release-dry-run.sh"
+    command: "./scripts/release-dry-run.sh"
     plugins:
       - custom-checkout#v1.8.0:
           skip_checkout: true
+          delete_checkout: true
           repos:
             - url: "https://github.com/ctxrs/ctx.git"
               ref: "${BUILDKITE_COMMIT}"
-              checkout_path: "ctx-macos-arm64-release-${BUILDKITE_BUILD_NUMBER}"
               fetch: true
               fetch_flags:
                 - "--depth=1"
                 - "--no-tags"
                 - "--filter=blob:none"
     env:
+      BUILDKITE_BUILD_CHECKOUT_PATH: "/tmp/ctx-buildkite-macos-arm64-release-${BUILDKITE_BUILD_NUMBER}"
       CTX_ARTIFACT_DIR: "artifacts/buildkite/release-dry-run/macos-arm64"
       CTX_RELEASE_PLATFORM: "macos-arm64"
       CTX_RELEASE_TARGET_TRIPLE: "aarch64-apple-darwin"
@@ -267,25 +270,26 @@ steps:
     priority: 60
     timeout_in_minutes: 60
     artifact_paths:
-      - "ctx-macos-arm64-release-${BUILDKITE_BUILD_NUMBER}/artifacts/buildkite/release-dry-run/macos-arm64/**/*"
+      - "artifacts/buildkite/release-dry-run/macos-arm64/**/*"
 
   - label: ":mac: release dry-run macos-x64"
     key: "release-dry-run-macos-x64"
     depends_on: "platform-smoke-macos-x64"
-    command: "cd \"ctx-macos-x64-release-${BUILDKITE_BUILD_NUMBER}\" && ./scripts/release-dry-run.sh"
+    command: "./scripts/release-dry-run.sh"
     plugins:
       - custom-checkout#v1.8.0:
           skip_checkout: true
+          delete_checkout: true
           repos:
             - url: "https://github.com/ctxrs/ctx.git"
               ref: "${BUILDKITE_COMMIT}"
-              checkout_path: "ctx-macos-x64-release-${BUILDKITE_BUILD_NUMBER}"
               fetch: true
               fetch_flags:
                 - "--depth=1"
                 - "--no-tags"
                 - "--filter=blob:none"
     env:
+      BUILDKITE_BUILD_CHECKOUT_PATH: "/tmp/ctx-buildkite-macos-x64-release-${BUILDKITE_BUILD_NUMBER}"
       CTX_ARTIFACT_DIR: "artifacts/buildkite/release-dry-run/macos-x64"
       CTX_RELEASE_PLATFORM: "macos-x64"
       CTX_RELEASE_TARGET_TRIPLE: "x86_64-apple-darwin"
@@ -299,7 +303,7 @@ steps:
     priority: 50
     timeout_in_minutes: 60
     artifact_paths:
-      - "ctx-macos-x64-release-${BUILDKITE_BUILD_NUMBER}/artifacts/buildkite/release-dry-run/macos-x64/**/*"
+      - "artifacts/buildkite/release-dry-run/macos-x64/**/*"
 
   - label: ":windows: release dry-run windows-x64"
     key: "release-dry-run-windows-x64"
