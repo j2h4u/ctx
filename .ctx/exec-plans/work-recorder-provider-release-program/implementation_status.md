@@ -1,6 +1,6 @@
 # Work Recorder Provider Release Implementation Status
 
-Last updated: 2026-06-23T21:27:41Z.
+Last updated: 2026-06-23T21:30:24Z.
 
 ## Current Integration Branch
 
@@ -143,6 +143,24 @@ ADE desktop release, `ade.ctx.rs` migration, production hosted launch, and
     panels.
   - Mobile boundaries/install preview fits without text overflow and keeps the
     Work Recorder-only scope explicit.
+- Integrated long-tail provider classifications:
+  `48b7b23 Integrate long-tail provider classifications`.
+- Manager follow-up fix:
+  - Updated `work-record-report`'s embedded dashboard asset list to match the
+    generated Vite dashboard bundle after the docs-site preview split. The
+    stale embedded `index-*` asset names caused CLI tests that compile
+    `work-record-report` to fail before test execution.
+- Long-tail focused validations run serially under `/usr/local/bin/cargo-lowio`
+  with `TMPDIR=$PWD/target/tmp`:
+  - `cargo-lowio test -p work-record-core
+    provider_support_matrix_scaffold_parses_and_covers_all_provider_ids --
+    --test-threads 1` passed.
+  - `cargo-lowio test -p ctx --test cli
+    import_local_providers_reports_longtail_detected_unsupported_rows --
+    --test-threads 1` passed after the dashboard asset embed fix.
+  - `cargo-lowio test -p ctx --test cli
+    import_local_providers_imports_codex_history_and_reports_unsupported_native_hooks
+    -- --test-threads 1` passed.
 
 Concurrent worker Cargo/rustc processes were stopped by the manager after they
 violated the host-level resource-safety rule. Remaining validation should be
