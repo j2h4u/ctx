@@ -1,6 +1,6 @@
 # Work Recorder Provider Release Implementation Status
 
-Last updated: 2026-06-23T20:58:28Z.
+Last updated: 2026-06-23T20:59:42Z.
 
 ## Current Integration Branch
 
@@ -79,6 +79,14 @@ ADE desktop release, `ade.ctx.rs` migration, production hosted launch, and
   - `cargo-lowio test -p work-record-store
     sync_cursor_roundtrips_source_position_metadata -- --test-threads 1`
     passed.
+- Integrated dashboard/CLI polish:
+  `ce832d5 Polish work recorder CLI JSON and dashboard provider views`.
+- Additional focused validations:
+  - `cargo-lowio test -p ctx --test cli
+    root_setup_status_schema_and_validate_work -- --nocapture --test-threads 1`
+    passed.
+  - `npm run build` in `apps/work-recorder-dashboard` passed with Vite's
+    existing chunk-size warning.
 
 Concurrent worker Cargo/rustc processes were stopped by the manager after they
 violated the host-level resource-safety rule. Remaining validation should be
