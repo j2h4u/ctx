@@ -1,6 +1,6 @@
 # Work Recorder Provider Release Implementation Status
 
-Last updated: 2026-06-23T21:02:34Z.
+Last updated: 2026-06-23T21:11:45Z.
 
 ## Current Integration Branch
 
@@ -117,6 +117,26 @@ ADE desktop release, `ade.ctx.rs` migration, production hosted launch, and
 Concurrent worker Cargo/rustc processes were stopped by the manager after they
 violated the host-level resource-safety rule. Remaining validation should be
 run by the manager, one command at a time, under the global Cargo lock.
+
+## Orchestration Correction
+
+The manager started manually porting the Antigravity/Gemini/Cursor provider
+branch after stopping unsafe concurrent worker validation. That was corrected:
+
+- The partial manual provider-port patch was stashed locally as
+  `partial p0 provider manual port before subagent handoff`.
+- The public integration branch was returned to a clean state at pushed head
+  `515b069`.
+- Fresh integration worktrees were created from `origin/work-record`:
+  - `ctx/wr-integrate-p0-providers`
+  - `ctx/wr-integrate-longtail-matrix`
+  - `ctx/wr-integrate-docs-site`
+  - `ctx/wr-release-010-active2`
+- Fresh private integration worktree:
+  - `ctx-private` branch `ctx/wr-hosted-contract-integrate`
+- New workers own those branches and were instructed not to run Cargo/npm/
+  Playwright validation. The manager will merge reviewed commits one at a time
+  and run serial validation only.
 
 ## Open Coordination Items
 
