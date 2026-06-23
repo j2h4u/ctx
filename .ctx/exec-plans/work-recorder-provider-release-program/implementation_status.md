@@ -1,6 +1,6 @@
 # Work Recorder Provider Release Implementation Status
 
-Last updated: 2026-06-23T21:41:18Z.
+Last updated: 2026-06-23T21:45:54Z.
 
 ## Current Integration Branch
 
@@ -248,11 +248,24 @@ branch after stopping unsafe concurrent worker validation. That was corrected:
   non-service `ctx setup`, localhost dashboard process model, opt-in service,
   uninstall semantics, and public naming cleanup.
 - Use the new parallel worker branches:
-  - `ctx/wr-root-layout-migration`
-  - `ctx/wr-spool-shim-fallback`
-  - `ctx/wr-setup-dashboard-service-ux`
-  - `ctx/wr-docs-site-naming`
-  - `ctx/wr-release-ci-product-decisions`
+  - `ctx/wr-root-layout-migration` at
+    `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/wr-root-layout-migration`;
+    worker `Ptolemy` (`019ef672-334c-7713-9458-a5eeee966cea`).
+  - `ctx/wr-spool-shim-fallback` at
+    `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/wr-spool-shim-fallback`;
+    worker `Ramanujan` (`019ef672-2fe6-7001-bd47-7cc6a02889ec`).
+  - `ctx/wr-setup-dashboard-service-ux` at
+    `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/wr-setup-dashboard-service-ux`;
+    worker `Godel` (`019ef672-36a8-7072-bba9-657d081ed16a`).
+  - `ctx/wr-docs-site-naming` at
+    `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/wr-docs-site-naming`;
+    worker `Boole` (`019ef672-3a22-7551-9d9d-c20318351f7d`).
+  - `ctx/wr-release-ci-product-decisions` at
+    `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/wr-release-ci-product-decisions`;
+    worker `Lovelace` (`019ef672-3deb-7953-ba87-c64bbe1b7dbf`).
+- Workers were instructed not to run broad Cargo/npm/Playwright jobs. Manager
+  validation remains serial under `/usr/local/bin/cargo-lowio` after commits
+  are merged.
 - Keep provider support claims aligned with the support taxonomy in
   `exec_plan.md`.
 - Record Buildkite, R2, Hetzner, provider live E2E, docs preview, product
