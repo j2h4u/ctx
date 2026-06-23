@@ -189,8 +189,8 @@ Follow-ups:
 ### Dashboard and Report
 
 `ctx report`, `ctx context`, and `ctx dashboard export` create local review
-artifacts. The dashboard is static local HTML with no hosted sync, JavaScript,
-tracking, or remote assets.
+artifacts. The dashboard is a local React/Vite export with bundled local assets
+and no hosted sync, tracking, or remote assets.
 
 Risks:
 

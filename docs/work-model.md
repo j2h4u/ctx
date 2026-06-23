@@ -77,9 +77,9 @@ publishing is outside the current local-first implementation.
 
 `ctx context [query]` renders matching records and evidence as work context.
 `ctx report` summarizes recent recorded work in text or JSON. `ctx dashboard
-export` writes a static local HTML dashboard for visual review. These review
-surfaces redact secret-like values and local paths by default; archive export is
-the private full-fidelity data path.
+export` writes a local React/Vite dashboard for visual review, using bundled
+local assets only. These review surfaces redact secret-like values and local
+paths by default; archive export is the private full-fidelity data path.
 
 Use these commands before review, handoff, or resuming a paused task. They turn the local record store into a concise packet of what happened.
 

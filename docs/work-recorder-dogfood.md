@@ -47,8 +47,8 @@ scripts/dashboard-review-dogfood.sh --skip-screenshots
 
 ## Reviewer Checks
 
-Open `dashboard/index.html` directly in a browser. The export is static local
-HTML with no JavaScript or remote assets.
+Open `dashboard/index.html` directly in a browser. The export is a local
+React/Vite dashboard with bundled local JavaScript and no remote assets.
 
 Inspect these populated areas:
 

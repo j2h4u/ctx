@@ -64,10 +64,11 @@ ctx dashboard export --output ./work-record-dashboard
 - `context` renders records and evidence for a query as Markdown by default.
 - `report` summarizes recent records and evidence as share-safe text or JSON.
   Summary tags and report records are redacted by default.
-- `dashboard export` writes a static local HTML report to `index.html` in the
-  output directory. It includes summary metrics, recent records, PR links,
-  evidence previews, tags, and capture/search cues. The file has no hosted
-  sync, tracking, JavaScript, or remote assets; review it before sharing.
+- `dashboard export` writes a local React/Vite dashboard to `index.html` in the
+  output directory, with bundled local assets. It includes summary metrics,
+  recent records, PR links, evidence previews, tags, and capture/search cues.
+  The export has no hosted sync, tracking, or remote assets; review it before
+  sharing.
 
 ## Evidence
 

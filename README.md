@@ -24,7 +24,7 @@ Implemented in this branch:
 - link one pull request URL to a record with `ctx link-pr`;
 - list, show, search, and render context for local records;
 - generate text or JSON reports from recent records and evidence;
-- export a static local HTML dashboard;
+- export a static local React/Vite dashboard with local assets only;
 - export/import ctx JSON archives;
 - import pending local capture spool JSONL files;
 - import normalized Codex, Claude, and Pi provider fixture JSONL into local
