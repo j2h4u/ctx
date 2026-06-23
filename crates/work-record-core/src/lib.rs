@@ -1421,19 +1421,39 @@ pub fn default_data_root() -> Result<PathBuf> {
 }
 
 pub fn work_record_dir(root: PathBuf) -> PathBuf {
-    root.join("work-record")
+    root
 }
 
 pub fn database_path(root: PathBuf) -> PathBuf {
     work_record_dir(root).join("work.sqlite")
 }
 
+pub fn object_dir(root: PathBuf) -> PathBuf {
+    work_record_dir(root).join("objects")
+}
+
 pub fn blob_dir(root: PathBuf) -> PathBuf {
-    work_record_dir(root).join("blobs")
+    object_dir(root)
+}
+
+pub fn spool_dir(root: PathBuf) -> PathBuf {
+    work_record_dir(root).join("spool")
 }
 
 pub fn inbox_dir(root: PathBuf) -> PathBuf {
-    work_record_dir(root).join("inbox")
+    spool_dir(root)
+}
+
+pub fn shim_dir(root: PathBuf) -> PathBuf {
+    work_record_dir(root).join("shims")
+}
+
+pub fn config_path(root: PathBuf) -> PathBuf {
+    work_record_dir(root).join("config.toml")
+}
+
+pub fn logs_dir(root: PathBuf) -> PathBuf {
+    work_record_dir(root).join("logs")
 }
 
 pub fn device_path(root: PathBuf) -> PathBuf {
@@ -1772,24 +1792,75 @@ mod tests {
 
         assert_eq!(record.id.get_version_num(), 7);
         assert_eq!(evidence.id.get_version_num(), 7);
+    }
 
+    #[test]
+    fn local_layout_paths_are_flat_under_data_root() {
         let root = PathBuf::from("/tmp/ctx-root");
         assert_eq!(
+            work_record_dir(root.clone()),
+            PathBuf::from("/tmp/ctx-root")
+        );
+        assert_eq!(
             database_path(root.clone()),
-            PathBuf::from("/tmp/ctx-root/work-record/work.sqlite")
+            PathBuf::from("/tmp/ctx-root/work.sqlite")
+        );
+        assert_eq!(
+            object_dir(root.clone()),
+            PathBuf::from("/tmp/ctx-root/objects")
         );
         assert_eq!(
             blob_dir(root.clone()),
-            PathBuf::from("/tmp/ctx-root/work-record/blobs")
+            PathBuf::from("/tmp/ctx-root/objects")
+        );
+        assert_eq!(
+            spool_dir(root.clone()),
+            PathBuf::from("/tmp/ctx-root/spool")
         );
         assert_eq!(
             inbox_dir(root.clone()),
-            PathBuf::from("/tmp/ctx-root/work-record/inbox")
+            PathBuf::from("/tmp/ctx-root/spool")
         );
+        assert_eq!(shim_dir(root.clone()), PathBuf::from("/tmp/ctx-root/shims"));
+        assert_eq!(
+            config_path(root.clone()),
+            PathBuf::from("/tmp/ctx-root/config.toml")
+        );
+        assert_eq!(logs_dir(root.clone()), PathBuf::from("/tmp/ctx-root/logs"));
         assert_eq!(
             device_path(root),
-            PathBuf::from("/tmp/ctx-root/work-record/device.json")
+            PathBuf::from("/tmp/ctx-root/device.json")
         );
+    }
+
+    #[test]
+    fn ctx_data_root_env_is_the_ctx_root_itself() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous = env::var_os("CTX_DATA_ROOT");
+        env::remove_var("CTX_DATA_ROOT");
+
+        let default_root = default_data_root().unwrap();
+        assert!(default_root.ends_with(".ctx"));
+        assert!(!default_root.ends_with("work-record"));
+
+        env::set_var("CTX_DATA_ROOT", "/tmp/custom-ctx-root");
+
+        assert_eq!(
+            default_data_root().unwrap(),
+            PathBuf::from("/tmp/custom-ctx-root")
+        );
+        assert_eq!(
+            database_path(default_data_root().unwrap()),
+            PathBuf::from("/tmp/custom-ctx-root/work.sqlite")
+        );
+
+        if let Some(previous) = previous {
+            env::set_var("CTX_DATA_ROOT", previous);
+        } else {
+            env::remove_var("CTX_DATA_ROOT");
+        }
     }
 
     #[test]

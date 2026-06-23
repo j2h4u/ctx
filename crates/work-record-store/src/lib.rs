@@ -102,6 +102,11 @@ pub fn classify_evidence_freshness(
 
 const SCHEMA_VERSION: i64 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_millis(5_000);
+const OBJECTS_DIR: &str = "objects";
+const SPOOL_DIR: &str = "spool";
+const LEGACY_WORK_RECORD_DIR: &str = "work-record";
+const LEGACY_BLOBS_DIR: &str = "blobs";
+const LEGACY_INBOX_DIR: &str = "inbox";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalDeviceIdentity {
@@ -857,42 +862,41 @@ DROP TABLE IF EXISTS artifact_search;
 
 pub struct Store {
     path: PathBuf,
-    blob_dir: PathBuf,
+    object_dir: PathBuf,
     conn: Connection,
 }
 
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
+        let mut migrated_legacy_layout = false;
         if let Some(parent) = path.parent() {
-            if parent.file_name().and_then(|name| name.to_str()) == Some("work-record") {
-                if let Some(data_root) = parent.parent() {
-                    fs::create_dir_all(data_root)?;
-                    restrict_private_dir(data_root)?;
-                }
-            }
+            migrated_legacy_layout = migrate_legacy_work_record_layout(parent)?;
             fs::create_dir_all(parent)?;
             restrict_private_dir(parent)?;
         }
-        let blob_dir = path
+        let object_dir = path
             .parent()
-            .map(|parent| parent.join("blobs"))
-            .unwrap_or_else(|| PathBuf::from("blobs"));
-        fs::create_dir_all(&blob_dir)?;
-        restrict_private_dir(&blob_dir)?;
-        if let Some(inbox_dir) = path.parent().map(|parent| parent.join("inbox")) {
-            fs::create_dir_all(&inbox_dir)?;
-            restrict_private_dir(&inbox_dir)?;
+            .map(|parent| parent.join(OBJECTS_DIR))
+            .unwrap_or_else(|| PathBuf::from(OBJECTS_DIR));
+        fs::create_dir_all(&object_dir)?;
+        restrict_private_dir(&object_dir)?;
+        if let Some(spool_dir) = path.parent().map(|parent| parent.join(SPOOL_DIR)) {
+            fs::create_dir_all(&spool_dir)?;
+            restrict_private_dir(&spool_dir)?;
         }
         let conn = Connection::open(&path)?;
         restrict_private_file(&path)?;
         configure_connection(&conn)?;
         let store = Self {
             path,
-            blob_dir,
+            object_dir,
             conn,
         };
         store.migrate()?;
+        if migrated_legacy_layout {
+            store.normalize_legacy_blob_paths()?;
+        }
         store.backfill_evidence_artifacts()?;
         store.rebuild_search_projection()?;
         Ok(store)
@@ -2360,8 +2364,8 @@ impl Store {
 
         let hash = sha256_hex(content.as_bytes());
         let shard = &hash[..2];
-        let relative_path = format!("blobs/{shard}/{hash}");
-        let absolute_dir = self.blob_dir.join(shard);
+        let relative_path = object_relative_path(&hash);
+        let absolute_dir = self.object_dir.join(shard);
         fs::create_dir_all(&absolute_dir)?;
         restrict_private_dir(&absolute_dir)?;
         let absolute_path = absolute_dir.join(&hash);
@@ -2665,7 +2669,7 @@ impl Store {
         reject_archive_event_internal_conflicts(archive)?;
         validate_import_evidence_references(&self.conn, archive)?;
         let archive_artifacts = archive_artifacts_by_evidence(archive);
-        let blob_dir = self.blob_dir.clone();
+        let blob_dir = self.object_dir.clone();
         let tx = self.conn.transaction()?;
         reject_import_invariant_conflicts(&tx, archive)?;
         if !overwrite {
@@ -2712,7 +2716,7 @@ impl Store {
         reject_archive_event_internal_conflicts(archive)?;
         validate_import_evidence_references(&self.conn, archive)?;
         let archive_artifacts = archive_artifacts_by_evidence(archive);
-        let blob_dir = self.blob_dir.clone();
+        let blob_dir = self.object_dir.clone();
         let tx = self.conn.transaction()?;
         reject_import_invariant_conflicts(&tx, archive)?;
         if !overwrite {
@@ -2836,7 +2840,10 @@ impl Store {
     }
 
     fn absolute_blob_path(&self, blob_path: &str) -> Result<PathBuf> {
-        let relative_path = blob_path.strip_prefix("blobs/").unwrap_or(blob_path);
+        let relative_path = blob_path
+            .strip_prefix("objects/")
+            .or_else(|| blob_path.strip_prefix("blobs/"))
+            .unwrap_or(blob_path);
         let path = Path::new(relative_path);
         if path.is_absolute()
             || path
@@ -2845,11 +2852,19 @@ impl Store {
         {
             return Err(StoreError::UnsafeBlobPath(blob_path.to_owned()));
         }
-        Ok(self.blob_dir.join(path))
+        Ok(self.object_dir.join(path))
     }
 
     fn rebuild_search_projection(&self) -> Result<()> {
         rebuild_search_projection(&self.conn)
+    }
+
+    fn normalize_legacy_blob_paths(&self) -> Result<()> {
+        self.conn.execute(
+            "UPDATE artifacts SET blob_path = 'objects/' || substr(blob_path, 7) WHERE blob_path LIKE 'blobs/%'",
+            [],
+        )?;
+        Ok(())
     }
 }
 
@@ -2862,6 +2877,98 @@ fn configure_connection(conn: &Connection) -> Result<()> {
         "#,
     )?;
     Ok(())
+}
+
+fn migrate_legacy_work_record_layout(data_root: &Path) -> Result<bool> {
+    let legacy_dir = data_root.join(LEGACY_WORK_RECORD_DIR);
+    if !legacy_dir.is_dir() {
+        return Ok(false);
+    }
+
+    let mut moves = Vec::new();
+    push_legacy_move(
+        &mut moves,
+        legacy_dir.join("work.sqlite"),
+        data_root.join("work.sqlite"),
+    );
+    push_legacy_move(
+        &mut moves,
+        legacy_dir.join("config.toml"),
+        data_root.join("config.toml"),
+    );
+    push_legacy_move(
+        &mut moves,
+        legacy_dir.join("shims"),
+        data_root.join("shims"),
+    );
+    push_legacy_move(&mut moves, legacy_dir.join("logs"), data_root.join("logs"));
+    push_legacy_move(
+        &mut moves,
+        legacy_dir.join("device.json"),
+        data_root.join("device.json"),
+    );
+
+    let object_candidates = [
+        legacy_dir.join(OBJECTS_DIR),
+        legacy_dir.join(LEGACY_BLOBS_DIR),
+    ];
+    let spool_candidates = [
+        legacy_dir.join(SPOOL_DIR),
+        legacy_dir.join(LEGACY_INBOX_DIR),
+    ];
+    if multiple_existing_paths(&object_candidates) || multiple_existing_paths(&spool_candidates) {
+        return Ok(false);
+    }
+
+    if let Some(object_source) = unique_existing_path(&object_candidates) {
+        push_legacy_move(&mut moves, object_source, data_root.join(OBJECTS_DIR));
+    }
+
+    if let Some(spool_source) = unique_existing_path(&spool_candidates) {
+        push_legacy_move(&mut moves, spool_source, data_root.join(SPOOL_DIR));
+    }
+
+    if moves.is_empty() || moves.iter().any(|(_, dest)| dest.exists()) {
+        return Ok(false);
+    }
+
+    for (source, dest) in moves {
+        fs::rename(source, dest)?;
+    }
+    let _ = fs::remove_dir(&legacy_dir);
+    Ok(true)
+}
+
+fn push_legacy_move(moves: &mut Vec<(PathBuf, PathBuf)>, source: PathBuf, dest: PathBuf) {
+    if source.exists() {
+        moves.push((source, dest));
+    }
+}
+
+fn unique_existing_path(paths: &[PathBuf]) -> Option<PathBuf> {
+    let mut existing = paths.iter().filter(|path| path.exists());
+    let first = existing.next()?.clone();
+    if existing.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+fn multiple_existing_paths(paths: &[PathBuf]) -> bool {
+    paths.iter().filter(|path| path.exists()).take(2).count() > 1
+}
+
+fn object_relative_path(hash: &str) -> String {
+    let shard = &hash[..2];
+    format!("{OBJECTS_DIR}/{shard}/{hash}")
+}
+
+fn expected_object_or_legacy_blob_path(hash: &str) -> (String, String) {
+    let shard = &hash[..2];
+    (
+        format!("{OBJECTS_DIR}/{shard}/{hash}"),
+        format!("{LEGACY_BLOBS_DIR}/{shard}/{hash}"),
+    )
 }
 
 fn rebuild_search_projection(conn: &Connection) -> Result<()> {
@@ -4059,9 +4166,8 @@ fn reject_archive_artifact_conflict(
     if artifact.content.len() as u64 != artifact.byte_size {
         return Err(StoreError::ArchiveArtifactSizeMismatch { id: artifact.id });
     }
-    let shard = &hash[..2];
-    let relative_path = format!("blobs/{shard}/{hash}");
-    if artifact.blob_path != relative_path {
+    let (relative_path, legacy_relative_path) = expected_object_or_legacy_blob_path(&hash);
+    if artifact.blob_path != relative_path && artifact.blob_path != legacy_relative_path {
         return Err(StoreError::ArchiveArtifactPathMismatch { id: artifact.id });
     }
 
@@ -4088,10 +4194,10 @@ fn reject_archive_artifact_conflict(
 }
 
 fn expected_archive_blob_path(id: Uuid, blob_hash: &str) -> Result<String> {
-    let Some(shard) = blob_hash.get(..2) else {
+    if blob_hash.get(..2).is_none() {
         return Err(StoreError::ArchiveArtifactPathMismatch { id });
-    };
-    Ok(format!("blobs/{shard}/{blob_hash}"))
+    }
+    Ok(object_relative_path(blob_hash))
 }
 
 fn validate_archive_artifact_record_blobs(
@@ -4110,7 +4216,11 @@ fn validate_archive_artifact_record_blob(
     artifact: &Artifact,
 ) -> Result<()> {
     let expected_path = expected_archive_blob_path(artifact.id, &artifact.blob_hash)?;
-    if artifact.blob_path != expected_path {
+    let legacy_path = {
+        let shard = &artifact.blob_hash[..2];
+        format!("{LEGACY_BLOBS_DIR}/{shard}/{}", artifact.blob_hash)
+    };
+    if artifact.blob_path != expected_path && artifact.blob_path != legacy_path {
         return Err(StoreError::ArchiveArtifactPathMismatch { id: artifact.id });
     }
 
@@ -5123,8 +5233,9 @@ fn store_archive_artifact_tx(
     }
 
     let shard = &hash[..2];
-    let relative_path = format!("blobs/{shard}/{hash}");
-    if artifact.blob_path != relative_path {
+    let relative_path = object_relative_path(&hash);
+    let legacy_relative_path = format!("{LEGACY_BLOBS_DIR}/{shard}/{hash}");
+    if artifact.blob_path != relative_path && artifact.blob_path != legacy_relative_path {
         return Err(StoreError::ArchiveArtifactPathMismatch { id: artifact.id });
     }
     let absolute_dir = blob_dir.join(shard);
@@ -5184,7 +5295,7 @@ fn store_output_artifact_tx(
 
     let hash = sha256_hex(content.as_bytes());
     let shard = &hash[..2];
-    let relative_path = format!("blobs/{shard}/{hash}");
+    let relative_path = object_relative_path(&hash);
     let absolute_dir = blob_dir.join(shard);
     fs::create_dir_all(&absolute_dir)?;
     restrict_private_dir(&absolute_dir)?;
@@ -5870,6 +5981,133 @@ mod tests {
         (temp, store)
     }
 
+    #[test]
+    fn store_open_creates_flat_objects_and_spool_layout() {
+        let temp = tempdir();
+        let db_path = temp.path().join("work.sqlite");
+        let store = Store::open(&db_path).unwrap();
+
+        assert_eq!(store.path(), db_path.as_path());
+        assert!(temp.path().join(OBJECTS_DIR).is_dir());
+        assert!(temp.path().join(SPOOL_DIR).is_dir());
+        assert!(!temp.path().join(LEGACY_WORK_RECORD_DIR).exists());
+    }
+
+    #[test]
+    fn store_open_migrates_old_work_record_layout_to_flat_root() {
+        let temp = tempdir();
+        let legacy = temp.path().join(LEGACY_WORK_RECORD_DIR);
+        fs::create_dir_all(&legacy).unwrap();
+
+        let legacy_store = Store::open(legacy.join("work.sqlite")).unwrap();
+        let record = WorkRecord::new("Legacy", "body", Vec::new(), "task", None);
+        legacy_store.insert_record(&record).unwrap();
+        let stdout = "legacy object content";
+        let evidence = Evidence::new(
+            Some(record.id),
+            "cargo test",
+            0,
+            stdout.into(),
+            String::new(),
+            fixed_time(),
+            1,
+        );
+        legacy_store.insert_evidence(&evidence).unwrap();
+        let old_object_path: String = legacy_store
+            .conn
+            .query_row("SELECT blob_path FROM artifacts LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let old_blob_path = old_object_path.replacen("objects/", "blobs/", 1);
+        legacy_store
+            .conn
+            .execute(
+                "UPDATE artifacts SET blob_path = ?1",
+                params![old_blob_path],
+            )
+            .unwrap();
+        drop(legacy_store);
+
+        fs::rename(legacy.join(OBJECTS_DIR), legacy.join(LEGACY_BLOBS_DIR)).unwrap();
+        fs::rename(legacy.join(SPOOL_DIR), legacy.join(LEGACY_INBOX_DIR)).unwrap();
+        fs::write(
+            legacy.join(LEGACY_INBOX_DIR).join("capture-old.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+
+        assert!(temp.path().join("work.sqlite").is_file());
+        assert!(temp.path().join(OBJECTS_DIR).is_dir());
+        assert!(temp.path().join(SPOOL_DIR).is_dir());
+        assert!(temp
+            .path()
+            .join(SPOOL_DIR)
+            .join("capture-old.jsonl")
+            .is_file());
+        assert!(!legacy.exists());
+
+        let migrated_blob_path: String = store
+            .conn
+            .query_row("SELECT blob_path FROM artifacts LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(migrated_blob_path.starts_with("objects/"));
+        assert_eq!(
+            fs::read_to_string(temp.path().join(&migrated_blob_path)).unwrap(),
+            "legacy object content"
+        );
+
+        let archive = store.export_archive().unwrap();
+        assert!(archive
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.content == "legacy object content"
+                && artifact.blob_path.starts_with("objects/")));
+    }
+
+    #[test]
+    fn store_open_leaves_old_layout_when_flat_destination_exists() {
+        let temp = tempdir();
+        let legacy = temp.path().join(LEGACY_WORK_RECORD_DIR);
+        fs::create_dir_all(legacy.join(LEGACY_BLOBS_DIR)).unwrap();
+        Connection::open(legacy.join("work.sqlite")).unwrap();
+        Connection::open(temp.path().join("work.sqlite")).unwrap();
+
+        let _store = Store::open(temp.path().join("work.sqlite")).unwrap();
+
+        assert!(legacy.join("work.sqlite").is_file());
+        assert!(legacy.join(LEGACY_BLOBS_DIR).is_dir());
+        assert!(temp.path().join(OBJECTS_DIR).is_dir());
+        assert!(temp.path().join(SPOOL_DIR).is_dir());
+    }
+
+    #[test]
+    fn old_ade_state_dirs_are_ignored_by_flat_layout_open() {
+        let temp = tempdir();
+        for name in ["agents", "sessions", "tasks", "runs"] {
+            let dir = temp.path().join(name);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("ade-state.txt"), name).unwrap();
+        }
+
+        let _store = Store::open(temp.path().join("work.sqlite")).unwrap();
+
+        assert!(temp.path().join("work.sqlite").is_file());
+        assert!(temp.path().join(OBJECTS_DIR).is_dir());
+        assert!(temp.path().join(SPOOL_DIR).is_dir());
+        assert!(!temp.path().join(LEGACY_WORK_RECORD_DIR).exists());
+        for name in ["agents", "sessions", "tasks", "runs"] {
+            assert_eq!(
+                fs::read_to_string(temp.path().join(name).join("ade-state.txt")).unwrap(),
+                name
+            );
+        }
+    }
+
     fn test_record() -> WorkRecord {
         WorkRecord::new(
             "Fresh evidence",
@@ -5892,7 +6130,7 @@ mod tests {
             1,
         );
         let hash = sha256_hex(content.as_bytes());
-        let blob_path = format!("blobs/{}/{}", &hash[..2], hash);
+        let blob_path = object_relative_path(&hash);
         let artifact = WorkRecordArchiveArtifact {
             id: Uuid::parse_str("018f45d0-0000-7000-8000-00000000a001").unwrap(),
             evidence_id: evidence.id,
@@ -6366,7 +6604,7 @@ mod tests {
         let stdout = "preexisting symlink blob content";
         let hash = sha256_hex(stdout.as_bytes());
         let shard = &hash[..2];
-        let blob_dir = temp.path().join("blobs").join(shard);
+        let blob_dir = temp.path().join(OBJECTS_DIR).join(shard);
         fs::create_dir_all(&blob_dir).unwrap();
         let target = temp.path().join("dangling-outside-target");
         std::os::unix::fs::symlink(&target, blob_dir.join(&hash)).unwrap();
@@ -7922,7 +8160,7 @@ mod tests {
         let record_id = archive.records[0].id;
         let artifact_id = archive.artifacts[0].id;
         let mut artifact_record = artifact_record_from_archive_artifact(&archive.artifacts[0]);
-        artifact_record.blob_path = "blobs/ff/not-the-hash".into();
+        artifact_record.blob_path = "objects/ff/not-the-hash".into();
         archive.artifact_records.push(artifact_record);
 
         assert!(matches!(
@@ -7964,7 +8202,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let temp = tempdir();
-        let path = temp.path().join("work-record").join("work.sqlite");
+        let path = temp.path().join("work.sqlite");
         let store = Store::open(&path).unwrap();
         let record = WorkRecord::new("Private", "body", Vec::new(), "task", None);
         store.insert_record(&record).unwrap();
@@ -7987,11 +8225,10 @@ mod tests {
             .unwrap();
         for (path, mode) in [
             (temp.path().to_path_buf(), 0o700),
-            (temp.path().join("work-record"), 0o700),
-            (temp.path().join("work-record").join("inbox"), 0o700),
-            (temp.path().join("work-record").join("blobs"), 0o700),
-            (temp.path().join("work-record").join(&blob_path[..8]), 0o700),
-            (temp.path().join("work-record").join(blob_path), 0o600),
+            (temp.path().join(SPOOL_DIR), 0o700),
+            (temp.path().join(OBJECTS_DIR), 0o700),
+            (temp.path().join(&blob_path[..10]), 0o700),
+            (temp.path().join(blob_path), 0o600),
             (path, 0o600),
         ] {
             let actual = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
