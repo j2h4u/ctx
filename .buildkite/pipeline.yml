@@ -128,6 +128,97 @@ steps:
     artifact_paths:
       - "artifacts/buildkite/bazel/**/*"
 
+  - label: ":inbox_tray: provider fixture import"
+    key: "provider-fixtures"
+    depends_on: "bazel"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/finished-product/provider-fixtures ./scripts/check.sh provider-fixtures"
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 20
+    artifact_paths:
+      - "artifacts/buildkite/finished-product/provider-fixtures/**/*"
+
+  - label: ":mag: rich search/context"
+    key: "rich-search-context"
+    depends_on: "provider-fixtures"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/finished-product/rich-search-context ./scripts/check.sh rich-search-context"
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 20
+    artifact_paths:
+      - "artifacts/buildkite/finished-product/rich-search-context/**/*"
+
+  - label: ":bar_chart: dashboard/report artifact review"
+    key: "dashboard-report-artifact-review"
+    depends_on: "rich-search-context"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/finished-product/dashboard-report-artifact-review ./scripts/check.sh dashboard-report-artifact-review"
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 20
+    artifact_paths:
+      - "artifacts/buildkite/finished-product/dashboard-report-artifact-review/**/*"
+
+  - label: ":github: PR publish dry-run"
+    key: "pr-publish-dry-run"
+    depends_on: "dashboard-report-artifact-review"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/finished-product/pr-publish-dry-run ./scripts/check.sh pr-publish-dry-run"
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 20
+    artifact_paths:
+      - "artifacts/buildkite/finished-product/pr-publish-dry-run/**/*"
+
+  - label: ":lock: security archive fixtures"
+    key: "security-archive-fixtures"
+    depends_on: "pr-publish-dry-run"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/finished-product/security-archive-fixtures ./scripts/check.sh security-archive-fixtures"
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 10
+    artifact_paths:
+      - "artifacts/buildkite/finished-product/security-archive-fixtures/**/*"
+
+  - label: ":twisted_rightwards_arrows: jj e2e blocker status"
+    key: "jj-e2e-blocker-status"
+    depends_on: "security-archive-fixtures"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/finished-product/jj-e2e-blocker-status ./scripts/check.sh jj-e2e-blocker-status"
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 20
+    artifact_paths:
+      - "artifacts/buildkite/finished-product/jj-e2e-blocker-status/**/*"
+
+  - label: ":package: installer dry-run smoke"
+    key: "installer-dry-run-smoke"
+    depends_on: "jj-e2e-blocker-status"
+    command: "CTX_ARTIFACT_DIR=artifacts/buildkite/finished-product/installer-dry-run-smoke ./scripts/check.sh installer-dry-run-smoke"
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 10
+    artifact_paths:
+      - "artifacts/buildkite/finished-product/installer-dry-run-smoke/**/*"
+
   - label: ":linux: smoke linux-x64"
     key: "platform-smoke-linux-x64"
     depends_on: "bazel"
@@ -343,6 +434,13 @@ steps:
       - "release-dry-run-macos-x64"
       - "release-dry-run-windows-x64"
       - "freebsd-x64-blocker"
+      - "provider-fixtures"
+      - "rich-search-context"
+      - "dashboard-report-artifact-review"
+      - "pr-publish-dry-run"
+      - "security-archive-fixtures"
+      - "jj-e2e-blocker-status"
+      - "installer-dry-run-smoke"
     command: "CTX_ARTIFACT_DIR=artifacts/buildkite/completion-certificate ./scripts/release-completion-certificate.sh"
     agents:
       queue: "release-linux-managed"

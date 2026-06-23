@@ -37,12 +37,20 @@ write_certificate() {
 - macOS x64 release dry-run manifest: \`artifacts/buildkite/release-dry-run/macos-x64/manifest.json\`
 - Windows x64 release dry-run manifest: \`artifacts/buildkite/release-dry-run/windows-x64/manifest.json\`
 - FreeBSD x64 blocker artifact: \`artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json\`
+- Provider fixture import artifact: \`artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json\`
+- Rich search/context artifact: \`artifacts/buildkite/finished-product/rich-search-context/rich-context.json\`
+- Dashboard/report artifact review: \`artifacts/buildkite/finished-product/dashboard-report-artifact-review/report.json\`
+- PR publish dry-run artifact: \`artifacts/buildkite/finished-product/pr-publish-dry-run/pr-comment-dry-run.md\`
+- Security/malicious archive fixture artifact: \`artifacts/buildkite/finished-product/security-archive-fixtures/security-archive-fixtures.md\`
+- jj e2e blocker status artifact: \`artifacts/buildkite/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.txt\`
+- Installer dry-run smoke artifact: \`artifacts/buildkite/finished-product/installer-dry-run-smoke/install-dry-run.txt\`
 - Release install documentation: \`docs/release-install.md\`
 - Release supply-chain documentation: \`docs/release-supply-chain.md\`
 
 ## External Release Blockers
 
 - FreeBSD native release lane requires a documented native \`freebsd-x64\` Buildkite queue or a separately proven cross-build lane.
+- Full jj e2e validation requires a runner image with \`jj\` installed; the CI lane records availability and blocker status without installing external tools.
 - Production release publication requires final release metadata with non-placeholder SHA-256 checksums for every published artifact.
 - Signing, notarization, SBOM publication, and provenance publication require configured external credentials and policy approval.
 EOF
@@ -65,11 +73,19 @@ EOF
     "release_dry_run_macos_x64": "artifacts/buildkite/release-dry-run/macos-x64/manifest.json",
     "release_dry_run_windows_x64": "artifacts/buildkite/release-dry-run/windows-x64/manifest.json",
     "freebsd_x64_blocker": "artifacts/buildkite/release-blockers/freebsd-x64/freebsd-x64-blocker.json",
+    "provider_fixture_import": "artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json",
+    "rich_search_context": "artifacts/buildkite/finished-product/rich-search-context/rich-context.json",
+    "dashboard_report_artifact_review": "artifacts/buildkite/finished-product/dashboard-report-artifact-review/report.json",
+    "pr_publish_dry_run": "artifacts/buildkite/finished-product/pr-publish-dry-run/pr-comment-dry-run.md",
+    "security_archive_fixtures": "artifacts/buildkite/finished-product/security-archive-fixtures/security-archive-fixtures.md",
+    "jj_e2e_blocker_status": "artifacts/buildkite/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.txt",
+    "installer_dry_run_smoke": "artifacts/buildkite/finished-product/installer-dry-run-smoke/install-dry-run.txt",
     "release_install_docs": "docs/release-install.md",
     "release_supply_chain_docs": "docs/release-supply-chain.md"
   },
   "external_release_blockers": [
     "FreeBSD native release lane requires a documented native freebsd-x64 Buildkite queue or a separately proven cross-build lane.",
+    "Full jj e2e validation requires a runner image with jj installed; the CI lane records availability and blocker status without installing external tools.",
     "Production release publication requires final release metadata with non-placeholder SHA-256 checksums for every published artifact.",
     "Signing, notarization, SBOM publication, and provenance publication require configured external credentials and policy approval."
   ]
