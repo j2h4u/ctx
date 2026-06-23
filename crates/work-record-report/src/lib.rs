@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use serde::Serialize;
+use serde_json::{json, Value};
 use work_record_core::{
     redact_share_safe_markers, Artifact, Event, EventType, Evidence, EvidenceMetadata, FileTouched,
     PullRequest, RedactionState, Run, Session, Summary, VcsChange, VcsWorkspace, WorkContext,
@@ -116,6 +117,51 @@ pub struct SafePullRequest {
     pub base_ref: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DashboardExportData {
+    pub schema_version: u32,
+    pub product: &'static str,
+    pub share_safe: bool,
+    pub summary: ReportSummary,
+    pub privacy: PrivacySummary,
+    pub views: Vec<&'static str>,
+    pub records: Vec<DashboardRecord>,
+    pub commands: Vec<EvidenceCommandReport>,
+    pub sessions: Vec<Value>,
+    pub runs: Vec<Value>,
+    pub events: Vec<Value>,
+    pub vcs_workspaces: Vec<Value>,
+    pub vcs_changes: Vec<Value>,
+    pub pull_requests: Vec<SafePullRequest>,
+    pub artifacts: Vec<Value>,
+    pub evidence_metadata: Vec<Value>,
+    pub files_touched: Vec<Value>,
+    pub summaries: Vec<Value>,
+    pub status: DashboardStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DashboardRecord {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub tags: Vec<String>,
+    pub kind: String,
+    pub workspace: Option<String>,
+    pub pr_url: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DashboardStatus {
+    pub export_mode: &'static str,
+    pub local_only: bool,
+    pub javascript_app: &'static str,
+    pub data_contract: &'static str,
+    pub search_command: &'static str,
+}
+
 pub fn summarize(records: &[WorkRecord], evidence: &[Evidence]) -> ReportSummary {
     let mut tag_counts = std::collections::BTreeMap::<String, usize>::new();
     for record in records {
@@ -169,98 +215,244 @@ pub fn render_dashboard_html_archive(archive: &WorkRecordArchive) -> String {
 }
 
 pub fn render_dashboard_html_report(report: &DashboardReport<'_>) -> String {
-    let summary = summarize(report.records, report.evidence);
-    let failing_evidence_count = report
-        .evidence
-        .iter()
-        .filter(|item| item.exit_code != 0)
-        .count();
-    let recent_records = report.records.iter().take(25).collect::<Vec<_>>();
-    let recent_evidence = report.evidence.iter().take(25).collect::<Vec<_>>();
-    let privacy = privacy_summary(report);
+    render_dashboard_spa_html(report)
+}
 
-    let mut out = String::new();
-    out.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n");
-    out.push_str("<meta charset=\"utf-8\">\n");
-    out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
-    out.push_str("<title>ctx Work Records</title>\n");
-    out.push_str("<style>\n");
-    out.push_str(
-        r#":root{color-scheme:light;--bg:#f7f8fa;--ink:#18202b;--muted:#647084;--line:#d9dee7;--panel:#ffffff;--accent:#1f6feb;--ok:#0f7b45;--warn:#b42318;--note:#72560a}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1180px;margin:0 auto;padding:32px 20px 48px}.top{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:20px}.eyebrow{margin:0 0 8px;color:var(--muted);font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}h1{margin:0;font-size:34px;line-height:1.1;letter-spacing:0}h2{margin:0 0 14px;font-size:18px;letter-spacing:0}h3{margin:0 0 6px;font-size:16px}.privacy{max-width:440px;background:#eef6ff;border:1px solid #c8dcf8;border-radius:8px;padding:12px 14px;color:#234466}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:24px 0}.metric{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}.metric strong{display:block;font-size:28px;line-height:1}.metric span{display:block;margin-top:6px;color:var(--muted)}section{margin-top:28px}.layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);gap:18px}.record,.evidence,.cue,.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:12px}.meta{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;color:var(--muted);font-size:12px}.pill{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px 8px;background:#fbfcfe;color:#354052}.body{white-space:pre-wrap;overflow-wrap:anywhere;color:#2f3a4a}.pr{color:var(--accent);overflow-wrap:anywhere}.empty{color:var(--muted);border:1px dashed var(--line);border-radius:8px;padding:16px;background:#fff}.evidence code,.cue code,.panel code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}.status-ok{color:var(--ok);font-weight:700}.status-fail{color:var(--warn);font-weight:700}.status-note{color:var(--note);font-weight:700}.preview{margin-top:8px;background:#111827;color:#f9fafb;border-radius:6px;padding:10px;max-height:180px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}.timeline{border-left:2px solid var(--line);padding-left:14px}.timeline-item{position:relative;margin:0 0 12px}.timeline-item:before{content:"";position:absolute;left:-20px;top:5px;width:10px;height:10px;border-radius:50%;background:var(--accent)}.table{width:100%;border-collapse:collapse}.table th,.table td{text-align:left;border-bottom:1px solid var(--line);padding:7px 6px;vertical-align:top}.table th{color:var(--muted);font-size:12px}.tag{display:flex;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding:7px 0}.footer{margin-top:32px;color:var(--muted);font-size:12px}@media (max-width:760px){main{padding:22px 14px 36px}.top,.layout{display:block}.privacy{margin-top:16px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}h1{font-size:28px}.table{display:block;overflow:auto}}"#,
-    );
-    out.push_str("\n</style>\n</head>\n<body>\n<main>\n");
+pub fn dashboard_static_assets() -> Vec<(&'static str, &'static [u8])> {
+    vec![
+        (
+            "assets/index-BZjtJJ8j.js",
+            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/index-BZjtJJ8j.js"),
+        ),
+        (
+            "assets/index-vA4JKuue.css",
+            include_bytes!("../../../apps/work-recorder-dashboard/dist/assets/index-vA4JKuue.css"),
+        ),
+    ]
+}
 
-    out.push_str("<div class=\"top\"><div><p class=\"eyebrow\">Local Work Recorder</p><h1>Work Records</h1></div>");
-    out.push_str("<div class=\"privacy\">Static local export. No hosted sync, tracking, JavaScript, or remote assets are included. Review this file before sharing because records and evidence may contain private code, paths, command output, or PR links.</div></div>\n");
-
-    out.push_str("<div class=\"grid\">");
-    metric(&mut out, summary.record_count, "records");
-    metric(&mut out, summary.evidence_count, "evidence items");
-    metric(
-        &mut out,
-        summary.linked_pr_count + report.pull_requests.len(),
-        "PR links",
-    );
-    metric(&mut out, failing_evidence_count, "failed evidence");
-    out.push_str("</div>\n");
-
-    render_publish_preview(&mut out, report, &privacy);
-
-    out.push_str("<div class=\"layout\"><div>");
-    render_summaries(&mut out, report);
-    out.push_str("<section><h2>Recent Records</h2>\n");
-    if recent_records.is_empty() {
-        out.push_str("<div class=\"empty\">No Work Records found in the local store.</div>\n");
-    } else {
-        for record in recent_records {
-            render_record(&mut out, record);
-        }
+pub fn dashboard_export_data(report: &DashboardReport<'_>) -> DashboardExportData {
+    DashboardExportData {
+        schema_version: 1,
+        product: "ctx Work Recorder",
+        share_safe: true,
+        summary: summarize(report.records, report.evidence),
+        privacy: privacy_summary(report),
+        views: vec![
+            "Overview",
+            "Workspace / Repo",
+            "Session Detail",
+            "PR / Evidence",
+            "Search / Explore",
+            "Settings / Status",
+            "Transcript, Messages, and Tool Calls",
+            "Artifacts",
+        ],
+        records: report
+            .records
+            .iter()
+            .map(|record| DashboardRecord {
+                id: record.id.to_string(),
+                title: redact_share_safe_markers(&record.title),
+                body: redact_share_safe_markers(&record.body),
+                tags: record
+                    .tags
+                    .iter()
+                    .map(|tag| redact_share_safe_markers(tag))
+                    .collect(),
+                kind: redact_share_safe_markers(&record.kind),
+                workspace: record
+                    .workspace
+                    .as_deref()
+                    .map(safe_workspace_label),
+                pr_url: record.pr_url.as_deref().and_then(safe_external_url),
+                created_at: record.created_at.to_rfc3339(),
+                updated_at: record.updated_at.to_rfc3339(),
+            })
+            .collect(),
+        commands: evidence_report(report).commands,
+        sessions: report
+            .sessions
+            .iter()
+            .map(|session| {
+                json!({
+                    "id": session.id.to_string(),
+                    "work_record_id": session.work_record_id.map(|id| id.to_string()),
+                    "parent_session_id": session.parent_session_id.map(|id| id.to_string()),
+                    "root_session_id": session.root_session_id.map(|id| id.to_string()),
+                    "provider": session.provider.as_str(),
+                    "external_session_id": session.external_session_id.as_deref().map(redact_share_safe_markers),
+                    "external_agent_id": session.external_agent_id.as_deref().map(redact_share_safe_markers),
+                    "agent_type": session.agent_type.as_str(),
+                    "role_hint": session.role_hint.as_deref().map(redact_share_safe_markers),
+                    "is_primary": session.is_primary,
+                    "status": session.status.as_str(),
+                    "fidelity": session.sync.fidelity.as_str(),
+                    "transcript_blob_id": session.transcript_blob_id.map(|id| id.to_string()),
+                    "started_at": session.started_at.to_rfc3339(),
+                    "ended_at": session.ended_at.map(|time| time.to_rfc3339()),
+                })
+            })
+            .collect(),
+        runs: report
+            .runs
+            .iter()
+            .map(|run| {
+                json!({
+                    "id": run.id.to_string(),
+                    "work_record_id": run.work_record_id.map(|id| id.to_string()),
+                    "session_id": run.session_id.map(|id| id.to_string()),
+                    "run_type": run.run_type.as_str(),
+                    "status": run.status.as_str(),
+                    "started_at": run.started_at.to_rfc3339(),
+                    "ended_at": run.ended_at.map(|time| time.to_rfc3339()),
+                    "exit_code": run.exit_code,
+                    "cwd": run.cwd.as_deref().map(safe_workspace_label),
+                    "command_preview": run.command_preview.as_deref().map(redact_share_safe_markers),
+                })
+            })
+            .collect(),
+        events: report
+            .events
+            .iter()
+            .map(|event| {
+                json!({
+                    "id": event.id.to_string(),
+                    "seq": event.seq,
+                    "work_record_id": event.work_record_id.map(|id| id.to_string()),
+                    "session_id": event.session_id.map(|id| id.to_string()),
+                    "run_id": event.run_id.map(|id| id.to_string()),
+                    "event_type": event.event_type.as_str(),
+                    "role": event.role.map(|role| role.as_str()),
+                    "occurred_at": event.occurred_at.to_rfc3339(),
+                    "preview": event_preview(event),
+                    "payload_blob_id": event.payload_blob_id.map(|id| id.to_string()),
+                    "redaction_state": event.redaction_state.as_str(),
+                    "fidelity": event.sync.fidelity.as_str(),
+                })
+            })
+            .collect(),
+        vcs_workspaces: report
+            .vcs_workspaces
+            .iter()
+            .map(|workspace| {
+                json!({
+                    "id": workspace.id.to_string(),
+                    "kind": workspace.kind.as_str(),
+                    "repo": safe_repo_label(workspace),
+                    "root": safe_workspace_label(&workspace.root_path),
+                    "host": workspace.host.as_str(),
+                    "owner": workspace.owner.as_deref().map(redact_share_safe_markers),
+                    "name": workspace.name.as_deref().map(redact_share_safe_markers),
+                    "monorepo_subpath": workspace.monorepo_subpath.as_deref().map(redact_share_safe_markers),
+                })
+            })
+            .collect(),
+        vcs_changes: report
+            .vcs_changes
+            .iter()
+            .map(|change| {
+                json!({
+                    "id": change.id.to_string(),
+                    "vcs_workspace_id": change.vcs_workspace_id.to_string(),
+                    "kind": change.kind.as_str(),
+                    "change_id": redact_share_safe_markers(&change.change_id),
+                    "branch_or_bookmark": change.branch_or_bookmark.as_deref().map(redact_share_safe_markers),
+                    "tree_hash": change.tree_hash.as_deref().map(redact_share_safe_markers),
+                    "author_time": change.author_time.map(|time| time.to_rfc3339()),
+                })
+            })
+            .collect(),
+        pull_requests: evidence_report(report).pull_requests,
+        artifacts: report
+            .artifacts
+            .iter()
+            .map(|artifact| {
+                json!({
+                    "id": artifact.id.to_string(),
+                    "kind": artifact.kind.as_str(),
+                    "byte_size": artifact.byte_size,
+                    "media_type": artifact.media_type.as_deref().map(redact_share_safe_markers),
+                    "redaction_state": artifact.redaction_state.as_str(),
+                    "preview": safe_artifact_preview(artifact.redaction_state, artifact.preview_text.as_deref()),
+                })
+            })
+            .chain(report.archive_artifacts.iter().map(|artifact| {
+                json!({
+                    "id": artifact.id.to_string(),
+                    "evidence_id": artifact.evidence_id.to_string(),
+                    "kind": artifact.kind.as_str(),
+                    "byte_size": artifact.byte_size,
+                    "media_type": artifact.media_type.as_deref().map(redact_share_safe_markers),
+                    "redaction_state": artifact.redaction_state.as_str(),
+                    "preview": safe_artifact_preview(artifact.redaction_state, artifact.preview_text.as_deref()),
+                })
+            }))
+            .collect(),
+        evidence_metadata: report
+            .evidence_metadata
+            .iter()
+            .map(|evidence| {
+                json!({
+                    "id": evidence.id.to_string(),
+                    "work_record_id": evidence.work_record_id.to_string(),
+                    "kind": evidence.kind.as_str(),
+                    "status": evidence.status.as_str(),
+                    "freshness": evidence.freshness.as_str(),
+                    "stale_reason": evidence.stale_reason.as_deref().map(redact_share_safe_markers),
+                    "observed_tree_hash": evidence.observed_tree_hash.as_deref().map(redact_share_safe_markers),
+                    "observed_head_sha": evidence.observed_head_sha.as_deref().map(redact_share_safe_markers),
+                })
+            })
+            .collect(),
+        files_touched: report
+            .files_touched
+            .iter()
+            .map(|file| {
+                json!({
+                    "id": file.id.to_string(),
+                    "work_record_id": file.work_record_id.map(|id| id.to_string()),
+                    "path": share_safe_relative_path(&file.path),
+                    "change_kind": file.change_kind.map(|kind| kind.as_str()),
+                    "old_path": file.old_path.as_deref().map(share_safe_relative_path),
+                    "line_count_delta": file.line_count_delta,
+                    "confidence": file.confidence.as_str(),
+                })
+            })
+            .collect(),
+        summaries: report
+            .summaries
+            .iter()
+            .map(|summary| {
+                json!({
+                    "id": summary.id.to_string(),
+                    "work_record_id": summary.work_record_id.map(|id| id.to_string()),
+                    "session_id": summary.session_id.map(|id| id.to_string()),
+                    "kind": summary.kind.as_str(),
+                    "model_or_source": summary.model_or_source.as_deref().map(redact_share_safe_markers),
+                    "text": redact_share_safe_markers(&summary.text),
+                })
+            })
+            .collect(),
+        status: DashboardStatus {
+            export_mode: "Static local export",
+            local_only: true,
+            javascript_app: "React/Vite",
+            data_contract: "Work Recorder dashboard export v1",
+            search_command: "ctx search <query> --json",
+        },
     }
-    out.push_str("</section>\n</div><aside>");
+}
 
-    render_sessions_runs(&mut out, report);
-    render_timeline(&mut out, report);
-    render_transcript_views(&mut out, report);
-    out.push_str("<section><h2>Evidence Previews</h2>\n");
-    if recent_evidence.is_empty() {
-        out.push_str("<div class=\"empty\">No evidence has been captured yet.</div>\n");
-    } else {
-        for item in recent_evidence {
-            render_evidence(&mut out, item);
-        }
-    }
-    out.push_str("</section>\n");
-    render_evidence_metadata(&mut out, report);
-    render_files_touched(&mut out, report);
-    render_vcs(&mut out, report);
-    render_pr_links(&mut out, report);
-    render_artifacts(&mut out, report);
-    render_privacy(&mut out, &privacy);
-
-    out.push_str("<section><h2>Capture and Search Cues</h2><div class=\"cue\">");
-    out.push_str("Use <code>ctx search &lt;query&gt; --json</code> for exact matches, ");
-    out.push_str("<code>ctx context &lt;query&gt;</code> for handoff context, and ");
-    out.push_str(
-        "<code>ctx evidence run --record &lt;id&gt; ...</code> to attach fresh local evidence.",
-    );
-    out.push_str("</div></section>\n");
-
-    if !summary.tags.is_empty() {
-        out.push_str("<section><h2>Tags</h2><div class=\"record\">");
-        for tag in summary.tags {
-            out.push_str("<div class=\"tag\"><span>");
-            push_escaped(&mut out, &redact_share_safe_markers(&tag.tag));
-            out.push_str("</span><strong>");
-            out.push_str(&tag.count.to_string());
-            out.push_str("</strong></div>");
-        }
-        out.push_str("</div></section>\n");
-    }
-
-    out.push_str("</aside></div>");
-    out.push_str("<div class=\"footer\">Generated by <code>ctx dashboard export</code> from local Work Recorder data.</div>");
-    out.push_str("\n</main>\n</body>\n</html>\n");
-    out
+fn render_dashboard_spa_html(report: &DashboardReport<'_>) -> String {
+    let data = dashboard_export_data(report);
+    let data_json = serde_json::to_string(&data)
+        .expect("dashboard export data must serialize")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026");
+    include_str!("../../../apps/work-recorder-dashboard/dist/index.html")
+        .replace("__CTX_DASHBOARD_DATA__", &data_json)
 }
 
 pub fn render_evidence_report_json(report: &DashboardReport<'_>) -> serde_json::Result<String> {
@@ -357,6 +549,7 @@ pub fn archive_json(archive: &WorkRecordArchive) -> serde_json::Result<String> {
     serde_json::to_string_pretty(archive)
 }
 
+#[allow(dead_code)]
 fn metric(out: &mut String, value: usize, label: &str) {
     out.push_str("<div class=\"metric\"><strong>");
     out.push_str(&value.to_string());
@@ -365,6 +558,7 @@ fn metric(out: &mut String, value: usize, label: &str) {
     out.push_str("</span></div>");
 }
 
+#[allow(dead_code)]
 fn render_record(out: &mut String, record: &WorkRecord) {
     out.push_str("<article class=\"record\" id=\"record-");
     out.push_str(&record.id.to_string());
@@ -417,6 +611,7 @@ fn render_record(out: &mut String, record: &WorkRecord) {
     out.push_str("</article>\n");
 }
 
+#[allow(dead_code)]
 fn render_evidence(out: &mut String, evidence: &Evidence) {
     out.push_str("<article class=\"evidence\"><div><code>");
     push_escaped(out, &redact_share_safe_markers(&evidence.command));
@@ -441,6 +636,7 @@ fn render_evidence(out: &mut String, evidence: &Evidence) {
     out.push_str("</article>\n");
 }
 
+#[allow(dead_code)]
 fn render_sessions_runs(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("<section><h2>Sessions and Runs</h2>");
     if report.sessions.is_empty() && report.runs.is_empty() {
@@ -477,6 +673,7 @@ fn render_sessions_runs(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("</tbody></table></div></section>");
 }
 
+#[allow(dead_code)]
 fn render_summaries(out: &mut String, report: &DashboardReport<'_>) {
     if report.summaries.is_empty() {
         return;
@@ -498,6 +695,7 @@ fn render_summaries(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("</section>");
 }
 
+#[allow(dead_code)]
 fn render_timeline(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("<section><h2>Timeline</h2>");
     if report.events.is_empty() && report.runs.is_empty() {
@@ -540,6 +738,7 @@ fn render_timeline(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("</div></section>");
 }
 
+#[allow(dead_code)]
 fn render_transcript_views(out: &mut String, report: &DashboardReport<'_>) {
     let transcript_like = report
         .events
@@ -579,6 +778,7 @@ fn render_transcript_views(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("</section>");
 }
 
+#[allow(dead_code)]
 fn render_files_touched(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("<section><h2>Files Touched</h2>");
     if report.files_touched.is_empty() {
@@ -604,6 +804,7 @@ fn render_files_touched(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("</tbody></table></div></section>");
 }
 
+#[allow(dead_code)]
 fn render_evidence_metadata(out: &mut String, report: &DashboardReport<'_>) {
     if report.evidence_metadata.is_empty() {
         return;
@@ -621,6 +822,7 @@ fn render_evidence_metadata(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("</tbody></table></div></section>");
 }
 
+#[allow(dead_code)]
 fn render_vcs(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("<section><h2>Git and jj State</h2>");
     if report.vcs_workspaces.is_empty() && report.vcs_changes.is_empty() {
@@ -659,6 +861,7 @@ fn render_vcs(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("</div></section>");
 }
 
+#[allow(dead_code)]
 fn render_pr_links(out: &mut String, report: &DashboardReport<'_>) {
     let mut urls = BTreeSet::<String>::new();
     for record in report.records {
@@ -689,6 +892,7 @@ fn render_pr_links(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("</div></section>");
 }
 
+#[allow(dead_code)]
 fn render_artifacts(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("<section><h2>Artifacts</h2>");
     if report.artifacts.is_empty() && report.archive_artifacts.is_empty() {
@@ -734,6 +938,7 @@ fn render_artifacts(out: &mut String, report: &DashboardReport<'_>) {
     out.push_str("</section>");
 }
 
+#[allow(dead_code)]
 fn render_privacy(out: &mut String, privacy: &PrivacySummary) {
     out.push_str("<section><h2>Redaction and Privacy</h2><div class=\"panel\">");
     out.push_str(
@@ -748,6 +953,7 @@ fn render_privacy(out: &mut String, privacy: &PrivacySummary) {
     out.push_str("</strong></div></div></section>");
 }
 
+#[allow(dead_code)]
 fn render_publish_preview(
     out: &mut String,
     report: &DashboardReport<'_>,
@@ -942,6 +1148,19 @@ fn safe_workspace_label(value: &str) -> String {
     format!("workspace: {name}")
 }
 
+fn safe_repo_label(workspace: &VcsWorkspace) -> String {
+    match (&workspace.owner, &workspace.name) {
+        (Some(owner), Some(name)) => format!(
+            "{}/{}",
+            redact_share_safe_markers(owner),
+            redact_share_safe_markers(name)
+        ),
+        (_, Some(name)) => redact_share_safe_markers(name),
+        _ => safe_workspace_label(&workspace.root_path),
+    }
+}
+
+#[allow(dead_code)]
 fn push_escaped(out: &mut String, value: &str) {
     for ch in value.chars() {
         match ch {
@@ -955,6 +1174,7 @@ fn push_escaped(out: &mut String, value: &str) {
     }
 }
 
+#[allow(dead_code)]
 fn push_attr_escaped(out: &mut String, value: &str) {
     push_escaped(out, value);
 }
@@ -1020,26 +1240,26 @@ mod tests {
         );
 
         let html = render_dashboard_html(&[record], &[evidence]);
+        let data = dashboard_data_from_html(&html);
+        let rendered = data.to_string();
 
-        assert!(html.contains("Local Work Recorder"));
-        assert!(html.contains("ctx dashboard export"));
-        assert!(html.contains("Ship &lt;dashboard&gt; token=[REDACTED_SECRET]"));
-        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
-        assert!(html.contains("workspace: work"));
-        assert!(!html.contains("/tmp/work"));
-        assert!(!html.contains("hunter2"));
-        assert!(!html.contains("ghp_123456"));
-        assert!(!html.contains("secret=shhh"));
-        assert!(html.contains("password=[REDACTED_SECRET]"));
-        assert!(html.contains("[REDACTED_PATH]"));
-        assert!(html.contains("cargo test &lt;unsafe&gt; token=[REDACTED_SECRET]"));
-        assert!(!html.contains("token=secret"));
-        assert!(html.contains("password=[REDACTED_SECRET]"));
-        assert!(!html.contains("hunter2"));
+        assert!(html.contains("ctx-dashboard-data"));
+        assert_eq!(data["product"], "ctx Work Recorder");
+        assert_eq!(data["status"]["javascript_app"], "React/Vite");
+        assert!(rendered.contains("Ship <dashboard> token=[REDACTED_SECRET]"));
+        assert!(rendered.contains("<script>alert(1)</script>"));
+        assert!(rendered.contains("workspace: work"));
+        assert!(!rendered.contains("/tmp/work"));
+        assert!(!rendered.contains("hunter2"));
+        assert!(!rendered.contains("ghp_123456"));
+        assert!(!rendered.contains("secret=shhh"));
+        assert!(rendered.contains("password=[REDACTED_SECRET]"));
+        assert!(rendered.contains("[REDACTED_PATH]"));
+        assert!(rendered.contains("cargo test <unsafe> token=[REDACTED_SECRET]"));
+        assert!(!rendered.contains("token=secret"));
         assert!(!html.contains("<script>alert(1)</script>"));
         assert!(!html.contains("href=\"javascript:alert(1)\""));
-        assert!(!html.contains("https://token@example.test"));
-        assert!(html.contains("link withheld"));
+        assert!(!rendered.contains("https://token@example.test"));
     }
 
     #[test]
@@ -1085,37 +1305,38 @@ mod tests {
         assert_rich_fixture_not_sparse(&report);
 
         let html = render_dashboard_html_report(&report);
+        let data = dashboard_data_from_html(&html);
+        let rendered = data.to_string();
 
         for section in [
-            "Share and Publish Preview",
-            "Summaries",
-            "Sessions and Runs",
-            "Timeline",
+            "Overview",
+            "Workspace / Repo",
+            "Session Detail",
+            "PR / Evidence",
+            "Search / Explore",
+            "Settings / Status",
             "Transcript, Messages, and Tool Calls",
-            "Evidence Previews",
-            "Evidence Status",
-            "Files Touched",
-            "Git and jj State",
-            "PR Links",
             "Artifacts",
-            "Redaction and Privacy",
         ] {
-            assert!(html.contains(section), "missing section {section}");
+            assert!(rendered.contains(section), "missing section {section}");
         }
-        assert!(!html.contains("No session or run metadata"));
-        assert!(!html.contains("No timeline events"));
-        assert!(!html.contains("No file touch metadata"));
-        assert!(!html.contains("No Git or jj state"));
-        assert!(!html.contains("No artifacts"));
-        assert!(html.contains("raw artifact content withheld"));
-        assert!(html.contains("raw event payload withheld"));
-        assert!(html.contains("cargo test -p work-record-report token=[REDACTED_SECRET]"));
-        assert!(html.contains("password=[REDACTED_SECRET]"));
-        assert!(html.contains("[REDACTED_PATH]/lib.rs"));
-        assert!(!html.contains("ghp_123456"));
-        assert!(!html.contains("hunter2"));
-        assert!(!html.contains("/home/daddy/code/private"));
-        assert!(!html.contains("raw transcript secret"));
+        assert!(rendered.contains("raw artifact content withheld"));
+        assert!(rendered.contains("raw event payload withheld"));
+        assert!(rendered.contains("cargo test -p work-record-report token=[REDACTED_SECRET]"));
+        assert!(rendered.contains("password=[REDACTED_SECRET]"));
+        assert!(rendered.contains("[REDACTED_PATH]/lib.rs"));
+        assert!(!rendered.contains("ghp_123456"));
+        assert!(!rendered.contains("hunter2"));
+        assert!(!rendered.contains("/home/daddy/code/private"));
+        assert!(!rendered.contains("raw transcript secret"));
+    }
+
+    fn dashboard_data_from_html(html: &str) -> serde_json::Value {
+        let marker = "<script id=\"ctx-dashboard-data\" type=\"application/json\">";
+        let start = html.find(marker).expect("dashboard data script") + marker.len();
+        let tail = &html[start..];
+        let end = tail.find("</script>").expect("dashboard data script end");
+        serde_json::from_str(&tail[..end]).expect("dashboard data json")
     }
 
     #[test]

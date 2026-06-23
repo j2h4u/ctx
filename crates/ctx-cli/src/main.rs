@@ -244,6 +244,8 @@ struct DashboardCommand {
 enum DashboardSubcommand {
     #[command(about = "Export a static local HTML dashboard")]
     Export(DashboardExportArgs),
+    #[command(about = "Export and open the local Work Recorder dashboard")]
+    Open(DashboardOpenArgs),
 }
 
 #[derive(Debug, Args)]
@@ -252,6 +254,16 @@ struct DashboardExportArgs {
     output: PathBuf,
     #[arg(long, default_value_t = 1000)]
     limit: usize,
+}
+
+#[derive(Debug, Args)]
+struct DashboardOpenArgs {
+    #[arg(long)]
+    output: Option<PathBuf>,
+    #[arg(long, default_value_t = 1000)]
+    limit: usize,
+    #[arg(long)]
+    no_browser: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1022,17 +1034,65 @@ fn run_work_subcommand(command: WorkSubcommand, data_root: PathBuf) -> Result<()
 fn run_dashboard(command: DashboardCommand, data_root: PathBuf) -> Result<()> {
     match command.command {
         DashboardSubcommand::Export(args) => {
-            let mut store = Store::open(database_path(data_root.clone()))?;
-            auto_import_pending_spool(&data_root, &mut store)?;
-            let data = load_dashboard_data(&store, args.limit)?;
-            let report = data.report();
-            let html = work_record_report::render_dashboard_html_report(&report);
-            fs::create_dir_all(&args.output)?;
-            let index = args.output.join("index.html");
-            fs::write(&index, html)?;
+            let index = export_dashboard(&data_root, &args.output, args.limit)?;
             println!("dashboard: {}", index.display());
         }
+        DashboardSubcommand::Open(args) => {
+            let output = args
+                .output
+                .unwrap_or_else(|| work_record_dir(data_root.clone()).join("dashboard"));
+            let index = export_dashboard(&data_root, &output, args.limit)?;
+            println!("dashboard: {}", index.display());
+            if !args.no_browser {
+                open_dashboard_file(&index)?;
+            }
+        }
     }
+    Ok(())
+}
+
+fn export_dashboard(data_root: &Path, output: &Path, limit: usize) -> Result<PathBuf> {
+    let mut store = Store::open(database_path(data_root.to_path_buf()))?;
+    auto_import_pending_spool(data_root, &mut store)?;
+    let data = load_dashboard_data(&store, limit)?;
+    let report = data.report();
+    let html = work_record_report::render_dashboard_html_report(&report);
+    fs::create_dir_all(output)?;
+    let index = output.join("index.html");
+    fs::write(&index, html)?;
+    for (relative_path, contents) in work_record_report::dashboard_static_assets() {
+        let path = output.join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, contents)?;
+    }
+    Ok(index)
+}
+
+fn open_dashboard_file(index: &Path) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(index);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.arg("/C").arg("start").arg("").arg(index);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(index);
+        command
+    };
+
+    command
+        .spawn()
+        .with_context(|| format!("open dashboard {}", index.display()))?;
     Ok(())
 }
 

@@ -135,12 +135,28 @@ fn assert_no_corpus_sensitive_fragments(output: &str) {
     }
 }
 
-fn html_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+fn dashboard_data(output_dir: &Path) -> Value {
+    let html = fs::read_to_string(output_dir.join("index.html")).unwrap();
+    let marker = "<script id=\"ctx-dashboard-data\" type=\"application/json\">";
+    let start = html.find(marker).expect("dashboard data script") + marker.len();
+    let tail = &html[start..];
+    let end = tail.find("</script>").expect("dashboard data script end");
+    serde_json::from_str(&tail[..end]).unwrap()
+}
+
+fn assert_dashboard_assets(output_dir: &Path) {
+    let assets = output_dir.join("assets");
+    assert!(
+        assets.is_dir(),
+        "dashboard assets directory was not written"
+    );
+    assert!(
+        fs::read_dir(assets)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .any(|path| path.extension().and_then(|ext| ext.to_str()) == Some("js")),
+        "dashboard JavaScript asset was not written"
+    );
 }
 
 fn inbox_file_with_suffix(temp: &TempDir, suffix: &str) -> PathBuf {
@@ -966,40 +982,34 @@ fn dashboard_and_report_artifact_lane_is_rich_after_provider_import_evidence_and
         .assert()
         .success();
 
-    let html = fs::read_to_string(output_dir.join("index.html")).unwrap();
-    for section in [
-        "Summaries",
-        "Recent Records",
-        "Sessions and Runs",
-        "Timeline",
+    assert_dashboard_assets(&output_dir);
+    let data = dashboard_data(&output_dir);
+    let rendered = data.to_string();
+    for view in [
+        "Overview",
+        "Workspace / Repo",
+        "Session Detail",
+        "PR / Evidence",
+        "Search / Explore",
+        "Settings / Status",
         "Transcript, Messages, and Tool Calls",
-        "Evidence Previews",
-        "PR Links",
         "Artifacts",
-        "Redaction and Privacy",
-        "Capture and Search Cues",
     ] {
-        assert!(
-            html.contains(section),
-            "missing dashboard section {section}"
-        );
+        assert!(rendered.contains(view), "missing dashboard view {view}");
     }
-    assert!(html.contains("imported_provider_summary"));
-    assert!(html.contains("Provider fixture import for codex"));
-    assert!(html.contains("Provider fixture import for pi"));
-    assert!(html.contains("Provider fixture import for claude"));
-    assert!(html.contains("Implement provider import foundations."));
-    assert!(html.contains("Replay stores normalized events and cursor metadata."));
-    assert!(html.contains("https://github.com/ctxrs/ctx/pull/777"));
-    assert!(html.contains("password [REDACTED_SECRET]"));
-    assert!(html.contains("[REDACTED_PATH]"));
-    assert!(!html.contains("No session or run metadata is available"));
-    assert!(!html.contains("No timeline events are available"));
-    assert!(!html.contains("No redacted transcript events are available"));
-    assert!(!html.contains("No pull request links are available"));
-    assert!(!html.contains("fake-password-123"));
-    assert!(!html.contains("/home/alice/work"));
-    assert!(!html.contains("fixture-token-value"));
+    assert_eq!(data["status"]["javascript_app"], "React/Vite");
+    assert!(rendered.contains("imported_provider_summary"));
+    assert!(rendered.contains("Provider fixture import for codex"));
+    assert!(rendered.contains("Provider fixture import for pi"));
+    assert!(rendered.contains("Provider fixture import for claude"));
+    assert!(rendered.contains("Implement provider import foundations."));
+    assert!(rendered.contains("Replay stores normalized events and cursor metadata."));
+    assert!(rendered.contains("https://github.com/ctxrs/ctx/pull/777"));
+    assert!(rendered.contains("password [REDACTED_SECRET]"));
+    assert!(rendered.contains("[REDACTED_PATH]"));
+    assert!(!rendered.contains("fake-password-123"));
+    assert!(!rendered.contains("/home/alice/work"));
+    assert!(!rendered.contains("fixture-token-value"));
 }
 
 #[test]
@@ -1411,20 +1421,40 @@ fn dashboard_export_writes_static_local_html_report() {
         .success()
         .stdout(predicate::str::contains("index.html"));
 
-    let html = fs::read_to_string(output_dir.join("index.html")).unwrap();
-    assert!(html.contains("Work Records"));
-    assert!(html.contains("Static local export"));
-    assert!(html.contains("Render dashboard token=[REDACTED_SECRET]"));
-    assert!(html.contains("https://github.com/ctxrs/ctx/pull/77"));
-    assert!(html.contains("Evidence Previews"));
-    assert!(html.contains("ctx search &lt;query&gt; --json"));
-    assert!(html.contains("password=[REDACTED_SECRET]"));
-    assert!(html.contains("[REDACTED_PATH]"));
-    assert!(!html.contains("ghp_123456"));
-    assert!(!html.contains("hunter2"));
-    assert!(!html.contains("/tmp/work"));
-    assert!(!html.contains("secret=shhh"));
-    assert!(!html.contains("<script"));
+    assert_dashboard_assets(&output_dir);
+    let data = dashboard_data(&output_dir);
+    let rendered = data.to_string();
+    assert_eq!(data["product"], "ctx Work Recorder");
+    assert_eq!(data["status"]["export_mode"], "Static local export");
+    assert_eq!(
+        data["status"]["search_command"],
+        "ctx search <query> --json"
+    );
+    assert!(rendered.contains("Render dashboard token=[REDACTED_SECRET]"));
+    assert!(rendered.contains("https://github.com/ctxrs/ctx/pull/77"));
+    assert!(rendered.contains("password=[REDACTED_SECRET]"));
+    assert!(rendered.contains("[REDACTED_PATH]"));
+    assert!(!rendered.contains("ghp_123456"));
+    assert!(!rendered.contains("hunter2"));
+    assert!(!rendered.contains("/tmp/work"));
+    assert!(!rendered.contains("secret=shhh"));
+
+    let open_output_dir = temp.path().join("dashboard-open");
+    ctx(&temp)
+        .args([
+            "dashboard",
+            "open",
+            "--no-browser",
+            "--output",
+            open_output_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("index.html"));
+
+    assert_dashboard_assets(&open_output_dir);
+    let open_data = dashboard_data(&open_output_dir);
+    assert_eq!(open_data["status"]["javascript_app"], "React/Vite");
 }
 
 #[test]
@@ -1670,12 +1700,12 @@ fn redaction_corpus_drives_active_shareable_cli_surfaces() {
         ])
         .assert()
         .success();
-    let html = fs::read_to_string(output_dir.join("index.html")).unwrap();
+    let dashboard = dashboard_data(&output_dir).to_string();
     for row in &rows {
-        assert!(html.contains(&html_escape(row["expected_redacted"].as_str().unwrap())));
+        assert!(dashboard.contains(row["expected_redacted"].as_str().unwrap()));
     }
-    assert_no_corpus_raw_values(&html, &rows);
-    assert_no_corpus_sensitive_fragments(&html);
+    assert_no_corpus_raw_values(&dashboard, &rows);
+    assert_no_corpus_sensitive_fragments(&dashboard);
 
     for row in rows {
         let marker = format!("corpus-{}", row["id"].as_str().unwrap());
