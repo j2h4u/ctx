@@ -1,6 +1,6 @@
 # Work Recorder Productization Validation Log
 
-Updated: 2026-06-22T22:24:00-05:00
+Updated: 2026-06-22T22:28:37-05:00
 
 ## 2026-06-22 Baseline Public Branch Check
 
@@ -1448,3 +1448,37 @@ Future entries must include:
 - Blocker:
   - this Linux host has neither `pwsh` nor Windows PowerShell installed, so the
     PowerShell parser could not be exercised locally.
+
+## 2026-06-22 PowerShell Head Trigger Note
+
+- Remote Buildkite evidence:
+  - build 34 proved Linux fmt/docs/check/clippy/test/examples/Bazel and Linux
+    release dry-run;
+  - build 34 failed only on Windows smoke because Bash was unavailable;
+  - build 36 ran the intermediate `606fcb7` Git Bash wrapper commit and was
+    canceled;
+  - no Buildkite run started for latest head `1d2ed69`, which contains the
+    native PowerShell Windows remediation.
+- Command:
+  `./scripts/check-docs.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / docs-only trigger note on `1d2ed69`
+- Outcome: PASS.
+
+- Command:
+  `./scripts/check-buildkite-pipeline.sh`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / docs-only trigger note on `1d2ed69`
+- Outcome: PASS.
+
+- Command:
+  `git diff --check`
+- Repo/worktree:
+  `/home/daddy/code/ctx-multi-repo-workspace/worktrees/ctx/work-record-product`
+- Branch/head:
+  `work-record` / docs-only trigger note on `1d2ed69`
+- Outcome: PASS.

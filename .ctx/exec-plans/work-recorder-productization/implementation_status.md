@@ -1,6 +1,6 @@
 # Work Recorder Productization Implementation Status
 
-Updated: 2026-06-22T22:24:00-05:00
+Updated: 2026-06-22T22:28:37-05:00
 
 Task: `feb64c1c-e58c-40f8-b1e9-1094dca0646e`
 
@@ -884,3 +884,20 @@ None accepted yet.
   - commit and push the Windows PowerShell remediation;
   - trigger and observe a fresh public Buildkite build proving Windows smoke and
     Windows release dry-run.
+
+## 2026-06-22 Buildkite Head Trigger Follow-Up
+
+- Build 34 evidence:
+  - Linux fmt, docs, check, clippy, test, examples, Bazel, and Linux release
+    dry-run passed;
+  - the only reported failure was Windows smoke trying to run Bash on a runner
+    where `bash` was unavailable.
+- Branch evidence:
+  - latest published remediation head `1d2ed69` switches Windows smoke and
+    Windows release dry-run to native PowerShell via `scripts/ci-windows.ps1`;
+  - Buildkite did not start a run for `1d2ed69`;
+  - build 36 only ran the intermediate `606fcb7` Git Bash wrapper commit and
+    was canceled.
+- Remaining external evidence gap:
+  - push a new docs-only head on `origin/work-record` to trigger a fresh
+    Buildkite webhook run for the PowerShell remediation.
