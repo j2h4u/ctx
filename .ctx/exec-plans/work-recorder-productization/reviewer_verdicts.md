@@ -1,6 +1,6 @@
 # Work Recorder Productization Reviewer Verdicts
 
-Updated: 2026-06-22T19:17:18-05:00
+Updated: 2026-06-22T19:21:30-05:00
 
 ## Read-Only Mapper Results
 
@@ -73,7 +73,19 @@ No milestone reviewer verdicts have passed yet.
   - Resolution status:
     - targeted archive payload fixes are implemented locally;
     - focused/full/release dry-run checks passed;
-    - re-review is required after the fix commit.
+    - fixes committed at `6c33fb1`.
+- Architecture/data model reviewer on head `6c33fb1`: PASS.
+  - No blockers found.
+  - Confirmed archive export/import now carries full stdout/stderr payloads via
+    artifact records while persisted evidence rows keep safe previews.
+  - Follow-up concerns:
+    - archive artifact `content` is string-only and not sufficient for future
+      binary artifact kinds;
+    - add an explicit archive round-trip test with both stdout and stderr
+      payloads.
+  - Resolution status:
+    - both-stream archive round-trip test added locally and validated;
+    - binary archive payload support remains future work for non-text artifacts.
 
 Required reviewer categories from the plan:
 

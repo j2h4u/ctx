@@ -1,6 +1,6 @@
 # Work Recorder Productization Implementation Status
 
-Updated: 2026-06-22T19:17:18-05:00
+Updated: 2026-06-22T19:21:30-05:00
 
 Task: `feb64c1c-e58c-40f8-b1e9-1094dca0646e`
 
@@ -198,6 +198,9 @@ Integrated implementation work after the third architecture/data model review:
   preview path.
 - Privacy and CLI docs now state that full evidence output is stored in
   local-only blob files and included in JSON archives.
+- Added explicit archive round-trip coverage for both stdout and stderr payloads
+  after the architecture/data reviewer PASS noted it as useful follow-up
+  coverage.
 
 ## Validation
 
@@ -252,6 +255,10 @@ Integrated implementation work after the third architecture/data model review:
   lane recorded `skipped` because neither `bazel` nor `bazelisk` is installed.
 - `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 ./scripts/release-dry-run.sh && git diff --check`:
   PASS after archive payload fixes.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo test -p work-record-store --lib -- --test-threads 1`:
+  PASS after adding both-stream archive round-trip coverage.
+- `TMPDIR=/var/tmp/ctxwr CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo test -p ctx -p work-record-core -p work-record-store -- --test-threads 1`:
+  PASS after adding both-stream archive round-trip coverage.
 
 ## Reviewer Status
 
@@ -272,7 +279,12 @@ after commit.
 Architecture/data model reviewer returned FAIL on head `77d227f` because JSON
 archive export/import preserved only evidence safe previews, not the full
 artifact-backed stdout/stderr blob content. The archive payload fixes above are
-integrated locally and awaiting re-review after commit.
+committed at `6c33fb1`.
+
+Architecture/data model reviewer returned PASS on head `6c33fb1`. Follow-up
+concerns were limited to future binary artifact support and an optional
+both-stream archive round-trip test; the test has been added locally and is
+awaiting commit.
 
 ## Blockers
 

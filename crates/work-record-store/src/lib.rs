@@ -2450,7 +2450,7 @@ mod tests {
             "cargo test",
             0,
             "ok token=secret".into(),
-            String::new(),
+            "warn ghp_secret".into(),
             Utc::now(),
             12,
         );
@@ -2465,10 +2465,21 @@ mod tests {
         let archive = store.export_archive().unwrap();
         assert_eq!(archive.schema_version, 1);
         assert_eq!(archive.version, 1);
-        assert_eq!(archive.artifacts.len(), 1);
-        assert_eq!(archive.artifacts[0].evidence_id, evidence.id);
-        assert_eq!(archive.artifacts[0].stream, "stdout");
-        assert_eq!(archive.artifacts[0].content, "ok token=secret");
+        assert_eq!(archive.artifacts.len(), 2);
+        let archived_stdout = archive
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.stream == "stdout")
+            .unwrap();
+        let archived_stderr = archive
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.stream == "stderr")
+            .unwrap();
+        assert_eq!(archived_stdout.evidence_id, evidence.id);
+        assert_eq!(archived_stdout.content, "ok token=secret");
+        assert_eq!(archived_stderr.evidence_id, evidence.id);
+        assert_eq!(archived_stderr.content, "warn ghp_secret");
         let mut second = Store::open(temp.path().join("second.sqlite")).unwrap();
         second.import_archive(&archive, false).unwrap();
         assert_eq!(second.get_record(record.id).unwrap().title, "Ship importer");
@@ -2478,8 +2489,8 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(imported_artifact_count, 1);
-        let (imported_preview, imported_blob_path): (String, String) = second
+        assert_eq!(imported_artifact_count, 2);
+        let (imported_stdout_preview, imported_stdout_blob_path): (String, String) = second
             .conn
             .query_row(
                 r#"
@@ -2493,10 +2504,29 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(imported_preview, "ok [redacted]");
+        assert_eq!(imported_stdout_preview, "ok [redacted]");
         assert_eq!(
-            fs::read_to_string(temp.path().join(imported_blob_path)).unwrap(),
+            fs::read_to_string(temp.path().join(imported_stdout_blob_path)).unwrap(),
             "ok token=secret"
+        );
+        let (imported_stderr_preview, imported_stderr_blob_path): (String, String) = second
+            .conn
+            .query_row(
+                r#"
+                SELECT e.stderr, a.blob_path
+                FROM evidence e
+                JOIN evidence_artifacts ea ON ea.evidence_id = e.id
+                JOIN artifacts a ON a.id = ea.artifact_id
+                WHERE e.id = ?1 AND ea.stream = 'stderr'
+                "#,
+                params![evidence.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(imported_stderr_preview, "warn [redacted]");
+        assert_eq!(
+            fs::read_to_string(temp.path().join(imported_stderr_blob_path)).unwrap(),
+            "warn ghp_secret"
         );
         assert!(second.validate().unwrap().is_empty());
     }
