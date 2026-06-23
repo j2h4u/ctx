@@ -279,55 +279,53 @@ function Write-Tool-Wrapper {
   Set-Content -Path $Path -Value $Command -Encoding ascii
 }
 
-function Ensure-Zig-GNU-Build-Environment {
+function Ensure-MinGW-GNU-Build-Environment {
   if ($env:CTX_EXPECT_HOST_TRIPLE -ne "x86_64-pc-windows-gnu") {
     return
   }
 
   $toolCache = Default-Windows-Tool-Cache-Root
-  $zigVersion = if ($env:CTX_ZIG_VERSION) { $env:CTX_ZIG_VERSION } else { "0.14.1" }
-  $zigCache = Join-PathSafe $toolCache "zig"
-  $zigRoot = Join-PathSafe $zigCache "zig-x86_64-windows-$zigVersion"
-  $zigExe = Join-PathSafe $zigRoot "zig.exe"
-  $archive = Join-PathSafe $zigCache "zig-x86_64-windows-$zigVersion.zip"
-  New-Item -ItemType Directory -Force -Path $zigCache | Out-Null
+  $mingwVersion = if ($env:CTX_LLVM_MINGW_VERSION) { $env:CTX_LLVM_MINGW_VERSION } else { "20260616" }
+  $mingwRuntime = if ($env:CTX_LLVM_MINGW_RUNTIME) { $env:CTX_LLVM_MINGW_RUNTIME } else { "msvcrt" }
+  $mingwName = "llvm-mingw-$mingwVersion-$mingwRuntime-x86_64"
+  $mingwCache = Join-PathSafe $toolCache "llvm-mingw"
+  $mingwRoot = Join-PathSafe $mingwCache $mingwName
+  $mingwBin = Join-PathSafe $mingwRoot "bin"
+  $mingwGcc = Join-PathSafe $mingwBin "x86_64-w64-mingw32-gcc.exe"
+  $mingwGxx = Join-PathSafe $mingwBin "x86_64-w64-mingw32-g++.exe"
+  $mingwAr = Join-PathSafe $mingwBin "x86_64-w64-mingw32-ar.exe"
+  $archive = Join-PathSafe $mingwCache "$mingwName.zip"
+  New-Item -ItemType Directory -Force -Path $mingwCache | Out-Null
 
-  if (-not (Test-Path $zigExe)) {
+  if (-not (Test-Path $mingwGcc)) {
     if (-not (Test-Path $archive)) {
-      $url = "https://ziglang.org/download/$zigVersion/zig-x86_64-windows-$zigVersion.zip"
-      Write-Host "Zig not found; downloading $url"
+      $url = "https://github.com/mstorsjo/llvm-mingw/releases/download/$mingwVersion/$mingwName.zip"
+      Write-Host "LLVM-MinGW not found; downloading $url"
       Download-File -Uri $url -OutFile $archive
     }
-    $extractDir = Join-PathSafe $zigCache "extract-$zigVersion"
+    $extractDir = Join-PathSafe $mingwCache "extract-$mingwName"
     if (Test-Path $extractDir) {
       Remove-Item -Recurse -Force $extractDir
     }
     New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
     Expand-Archive -Path $archive -DestinationPath $extractDir -Force
-    $extractedRoot = Join-PathSafe $extractDir "zig-x86_64-windows-$zigVersion"
-    if (-not (Test-Path (Join-PathSafe $extractedRoot "zig.exe"))) {
-      throw "Zig archive did not contain expected zig.exe at $extractedRoot"
+    $extractedRoot = Join-PathSafe $extractDir $mingwName
+    if (-not (Test-Path (Join-PathSafe $extractedRoot "bin\x86_64-w64-mingw32-gcc.exe"))) {
+      throw "LLVM-MinGW archive did not contain expected x86_64-w64-mingw32-gcc.exe at $extractedRoot"
     }
-    if (Test-Path $zigRoot) {
-      Remove-Item -Recurse -Force $zigRoot
+    if (Test-Path $mingwRoot) {
+      Remove-Item -Recurse -Force $mingwRoot
     }
-    Move-Item -Force $extractedRoot $zigRoot
+    Move-Item -Force $extractedRoot $mingwRoot
     Remove-Item -Recurse -Force $extractDir
   }
 
-  $zigCc = Join-PathSafe $zigCache "zig-cc-x86_64-windows-gnu.cmd"
-  $zigCxx = Join-PathSafe $zigCache "zig-cxx-x86_64-windows-gnu.cmd"
-  $zigAr = Join-PathSafe $zigCache "zig-ar.cmd"
-  Write-Tool-Wrapper $zigCc "@echo off`r`n`"$zigExe`" cc -target x86_64-windows-gnu %*`r`n"
-  Write-Tool-Wrapper $zigCxx "@echo off`r`n`"$zigExe`" c++ -target x86_64-windows-gnu %*`r`n"
-  Write-Tool-Wrapper $zigAr "@echo off`r`n`"$zigExe`" ar %*`r`n"
-
-  $env:CC_x86_64_pc_windows_gnu = $zigCc
-  $env:CXX_x86_64_pc_windows_gnu = $zigCxx
-  $env:AR_x86_64_pc_windows_gnu = $zigAr
-  $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = $zigCc
-  $env:PATH = "$zigRoot;$zigCache;$env:PATH"
-  Write-Host "Windows GNU build tools: zig=$zigExe linker=$zigCc"
+  $env:CC_x86_64_pc_windows_gnu = $mingwGcc
+  $env:CXX_x86_64_pc_windows_gnu = $mingwGxx
+  $env:AR_x86_64_pc_windows_gnu = $mingwAr
+  $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = $mingwGcc
+  $env:PATH = "$mingwBin;$env:PATH"
+  Write-Host "Windows GNU build tools: mingw=$mingwRoot linker=$mingwGcc"
 }
 
 function Ensure-MSVC-Build-Environment {
@@ -439,7 +437,7 @@ function Require-Host-Triple {
   if ($actual -match '-msvc$') {
     Ensure-MSVC-Build-Environment
   } elseif ($actual -eq "x86_64-pc-windows-gnu") {
-    Ensure-Zig-GNU-Build-Environment
+    Ensure-MinGW-GNU-Build-Environment
   }
 }
 
@@ -496,7 +494,7 @@ function Run-Platform-Smoke {
   Require-Host-Triple $env:CTX_EXPECT_HOST_TRIPLE
   Ensure-Rust-Toolchain
   Ensure-MSVC-Build-Environment
-  Ensure-Zig-GNU-Build-Environment
+  Ensure-MinGW-GNU-Build-Environment
   $locked = Cargo-Locked-Args
   Run-Cargo -CargoArgs (@("build", "-p", "ctx", "--bin", "ctx") + $locked)
 
@@ -547,7 +545,7 @@ function Run-Release-Dry-Run {
   Require-Host-Triple $env:CTX_EXPECT_HOST_TRIPLE
   Ensure-Rust-Toolchain
   Ensure-MSVC-Build-Environment
-  Ensure-Zig-GNU-Build-Environment
+  Ensure-MinGW-GNU-Build-Environment
   $locked = Cargo-Locked-Args
   Run-Cargo -CargoArgs (@("build", "--workspace", "--release", "--bins") + $locked)
 

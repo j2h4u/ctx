@@ -142,9 +142,10 @@ Known remaining CI/release blockers:
   `release-linux-managed` with `ctx-runner-class=release-linux-x64-stage`,
   `ctx-mac-gui-shared-arm64`, `ctx-mac-gui-shared-x64`, and `windows-x64`.
 - The Windows lane uses `scripts/ci-windows.ps1` so smoke/release dry-runs do
-  not require Bash on `windows-x64`; it now bootstraps Rust GNU plus Zig under
-  the Buildkite/ctx tool cache so `rustc -vV` reports
-  `host: x86_64-pc-windows-gnu`.
+  not require Bash on `windows-x64`; it now bootstraps Rust GNU plus LLVM-MinGW
+  under the Buildkite/ctx tool cache so `rustc -vV` reports
+  `host: x86_64-pc-windows-gnu` and the GNU linker has the expected CRT
+  libraries.
 - FreeBSD native release artifacts are blocked until a native
   `queue=freebsd-x64` Buildkite agent pool exists, or until a separate
   cross-build lane proves the FreeBSD linker/toolchain contract.
@@ -1067,15 +1068,15 @@ None accepted yet.
 - Repo-owned remediation:
   - Windows smoke/release now use the Rust `x86_64-pc-windows-gnu` host triple;
   - `scripts/ci-windows.ps1` installs that Rust host via rustup when needed;
-  - the wrapper downloads Zig under the Buildkite/ctx tool cache and writes
-    local `zig cc`, `zig c++`, and `zig ar` command wrappers for Cargo and
+  - the wrapper downloads LLVM-MinGW under the Buildkite/ctx tool cache and
+    wires Cargo, `cc`, `c++`, and `ar` to the bundled MinGW compiler tools for
     bundled SQLite builds, avoiding Visual Studio and `/tmp`.
 - Remaining external evidence gap:
   - commit and push the GNU toolchain remediation;
   - trigger and monitor a fresh public Buildkite run proving Windows smoke and
     Windows release dry-run.
 
-## 2026-06-23 Buildkite Windows Zig Download Follow-Up
+## 2026-06-23 Buildkite Windows GNU Download Follow-Up
 
 - Build 48:
   <https://buildkite.com/luca-king/ctx-public-release-verification/builds/48>
@@ -1086,19 +1087,19 @@ None accepted yet.
     pipeline contract, fmt, docs, cargo check, clippy, cargo test, examples,
     Bazel, and FreeBSD blocker artifact;
   - IN PROGRESS: Windows smoke reached the intended `x86_64-pc-windows-gnu`
-    Rust bootstrap and began downloading Zig, proving the lane was no longer
+    Rust bootstrap and began downloading the GNU toolchain, proving the lane was no longer
     blocked by the missing MSVC `link.exe`;
-  - RISK: the Windows log stayed silent at the `Invoke-WebRequest` Zig download
+  - RISK: the Windows log stayed silent at the `Invoke-WebRequest` GNU toolchain download
     line for multiple polling intervals, leaving no bounded retry/timeout or
     completion evidence.
 - Repo-owned remediation:
   - `scripts/ci-windows.ps1` now disables PowerShell progress rendering and
-    routes rustup, Zig, and optional Visual Studio Build Tools downloads through
+    routes rustup, GNU toolchain, and optional Visual Studio Build Tools downloads through
     a `Download-File` helper;
   - the helper prefers `curl.exe` with redirects, retries, connect timeout, and
     a bounded max runtime, writes through a temporary `.download` file, verifies
     non-empty output, and logs downloaded byte counts;
-  - the GNU/Zig toolchain and external Buildkite tool-cache strategy are
+  - the GNU toolchain and external Buildkite tool-cache strategy are
     unchanged.
 - Local validation before pushing:
   - `./scripts/check-buildkite-pipeline.sh`: PASS;
@@ -1108,5 +1109,52 @@ None accepted yet.
     because `pwsh`/`powershell` are unavailable on this Linux host.
 - Remaining external evidence gap:
   - commit and push the download hardening;
+  - trigger and monitor a fresh public Buildkite run proving Windows smoke and
+    Windows release dry-run.
+
+## 2026-06-23 Buildkite Windows LLVM-MinGW Follow-Up
+
+- Build 49:
+  <https://buildkite.com/luca-king/ctx-public-release-verification/builds/49>
+- Branch/head:
+  `work-record` / `8e7803cd82210b8f5721cd00fabac5f46e43f714`
+- Outcome:
+  - Windows smoke bootstrapped Rust GNU and reached compilation, then failed
+    linking the first proc-macro build because the Zig linker wrapper could not
+    find the Windows GNU `msvcrt`/MinGW import libraries.
+- Repo-owned remediation:
+  - replace the Zig wrapper with LLVM-MinGW, which ships the Windows GNU
+    compiler, linker, archiver, and import libraries needed by Rust GNU and the
+    bundled SQLite C build;
+  - keep all downloads and extracted tools under the Buildkite/ctx tool cache.
+- Remaining external evidence gap:
+  - commit and push the LLVM-MinGW remediation;
+  - trigger and monitor a fresh public Buildkite run proving Windows smoke and
+    Windows release dry-run.
+
+## 2026-06-23 Buildkite Windows LLVM-MinGW Follow-Up
+
+- Build 49:
+  <https://buildkite.com/luca-king/ctx-public-release-verification/builds/49>
+- Branch/head:
+  `work-record` / `8e7803cd82210b8f5721cd00fabac5f46e43f714`
+- Outcome:
+  - PASS before Windows failure: pipeline contract, fmt, docs, cargo check,
+    clippy, cargo test, examples, and Bazel;
+  - FAIL: Windows smoke proved the retryable download hardening worked and
+    reached Cargo compilation, but linking build scripts through Zig failed
+    because Zig could not find the `msvcrt` dynamic system library for Rust's
+    `x86_64-pc-windows-gnu` target.
+- Repo-owned remediation:
+  - `scripts/ci-windows.ps1` now bootstraps the fixed
+    `llvm-mingw-20260616-msvcrt-x86_64.zip` toolchain from
+    `mstorsjo/llvm-mingw`;
+  - Windows GNU `CC`, `CXX`, `AR`, and Cargo linker environment now point at
+    `x86_64-w64-mingw32-gcc.exe`, `x86_64-w64-mingw32-g++.exe`, and
+    `x86_64-w64-mingw32-ar.exe` from that toolchain;
+  - the external Buildkite tool-cache, Rust GNU host, download hardening, and
+    product smoke/release commands are unchanged.
+- Remaining external evidence gap:
+  - commit and push the LLVM-MinGW remediation;
   - trigger and monitor a fresh public Buildkite run proving Windows smoke and
     Windows release dry-run.

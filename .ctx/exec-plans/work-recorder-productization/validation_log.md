@@ -1689,8 +1689,8 @@ Future entries must include:
     `link.exe` nor a Visual Studio Build Tools environment script.
 - Remediation validation planned for the next head:
   - Windows lanes target `x86_64-pc-windows-gnu`;
-  - Windows wrapper bootstraps Rust GNU plus Zig `cc`/`c++`/`ar` wrappers under
-    the Buildkite/ctx tool cache;
+  - Windows wrapper bootstraps Rust GNU plus LLVM-MinGW `cc`/`c++`/`ar` tools
+    under the Buildkite/ctx tool cache;
   - rerun focused local syntax/contract/docs/diff checks;
   - trigger and monitor a fresh public Buildkite run for `origin/work-record`.
 
@@ -1701,18 +1701,53 @@ Future entries must include:
   - PASS before Windows completion: Linux and macOS smoke/release lanes, the
     core Linux verification lanes, and the FreeBSD blocker artifact completed;
   - Windows smoke reached `x86_64-pc-windows-gnu` Rust installation and began
-    downloading Zig, proving the runner had moved past the previous MSVC
+    downloading the GNU toolchain, proving the runner had moved past the previous MSVC
     `link.exe` blocker;
-  - the job log remained silent at the `Invoke-WebRequest` Zig download line
+  - the job log remained silent at the `Invoke-WebRequest` GNU toolchain download line
     for multiple polls, so the next remediation is to make Windows downloads
     retryable, bounded, and observable.
 - Remediation validation planned for the next head:
   - `scripts/ci-windows.ps1` uses a shared `Download-File` helper for rustup,
-    Zig, and optional Visual Studio Build Tools downloads;
+    GNU toolchain, and optional Visual Studio Build Tools downloads;
   - the helper prefers `curl.exe --fail --location --retry ... --max-time ...`,
     writes through a temporary file, validates non-empty output, and logs byte
     counts;
   - rerun focused local syntax/contract/diff checks;
+  - trigger and monitor a fresh public Buildkite run for `origin/work-record`.
+
+## 2026-06-23 Build 49 Windows LLVM-MinGW Follow-Up
+
+- Remote Buildkite evidence:
+  - build 49 ran `8e7803cd82210b8f5721cd00fabac5f46e43f714`;
+  - PASS before Windows failure: pipeline contract, fmt, docs, cargo check,
+    clippy, cargo test, examples, and Bazel;
+  - Windows smoke used the hardened download path and reached Cargo
+    compilation;
+  - FAIL: Zig linked the first Rust build scripts but could not find the
+    `msvcrt` dynamic system library, so the GNU lane needs a toolchain that
+    includes the expected MinGW CRT libraries.
+- Remediation validation planned for the next head:
+  - Windows GNU bootstrap switches from Zig wrappers to
+    `llvm-mingw-20260616-msvcrt-x86_64.zip`;
+  - `CC_x86_64_pc_windows_gnu`, `CXX_x86_64_pc_windows_gnu`,
+    `AR_x86_64_pc_windows_gnu`, and
+    `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` point at the LLVM-MinGW
+    `x86_64-w64-mingw32-*` tools;
+  - rerun focused local syntax/contract/diff checks;
+  - trigger and monitor a fresh public Buildkite run for `origin/work-record`.
+
+## 2026-06-23 Build 49 Windows LLVM-MinGW Follow-Up
+
+- Remote Buildkite evidence:
+  - build 49 ran `8e7803cd82210b8f5721cd00fabac5f46e43f714`;
+  - Windows smoke bootstrapped Rust GNU and entered compilation;
+  - FAIL: the Zig linker wrapper could not find Windows GNU import libraries,
+    reporting missing `msvcrt` while linking proc-macro build scripts.
+- Remediation validation planned for the next head:
+  - replace Zig with LLVM-MinGW for the Windows GNU lane;
+  - keep the same Buildkite/ctx tool-cache root and bounded `Download-File`
+    helper;
+  - rerun focused local syntax/contract/docs/diff checks;
   - trigger and monitor a fresh public Buildkite run for `origin/work-record`.
 
 - Command:
