@@ -54,6 +54,14 @@ requirements. `//:privacy_redaction_oracle` imports a synthetic provider
 history with fake secret-shaped values, then checks `search`, `context`, `show`,
 and SQLite search projections for redaction.
 
+`//:security_no_repo_writes` also runs a runtime side-effect oracle with a temp
+home, fake repository sentinels, repository hook sentinels, and a read-only
+copied provider fixture. It emits `side-effect-oracle.json`, before/after
+manifests, and `no-network-oracle.json` under `CTX_ARTIFACT_DIR`. When `strace`
+is available and usable, setup/import/search/context are traced and the gate
+fails on `AF_INET` or `AF_INET6` activity. If `strace` is missing or unusable,
+the no-network artifact records a skipped status with the reason.
+
 ## Mode Placement
 
 Security-sensitive product changes should run the `production` mode described in

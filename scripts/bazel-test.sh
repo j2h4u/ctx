@@ -376,12 +376,384 @@ run_fresh_home_flow() {
   run_timed "fresh-home-validate" env CTX_DATA_ROOT="${data_root}" "${ctx_bin}" validate --json
 }
 
+file_mode() {
+  local path="$1"
+
+  stat -c '%a' "${path}" 2>/dev/null || stat -f '%Lp' "${path}"
+}
+
+file_size_bytes() {
+  local path="$1"
+
+  wc -c < "${path}" | tr -d '[:space:]'
+}
+
+write_manifest_entry() {
+  local path="$1"
+  local mode size checksum target
+
+  if [[ -L "${path}" ]]; then
+    mode="$(file_mode "${path}")"
+    target="$(readlink "${path}")"
+    printf '{"type":"symlink","mode":"%s","target":"%s","path":"%s"}\n' \
+      "$(json_escape "${mode}")" \
+      "$(json_escape "${target}")" \
+      "$(json_escape "${path}")"
+    return 0
+  fi
+
+  if [[ -f "${path}" ]]; then
+    mode="$(file_mode "${path}")"
+    size="$(file_size_bytes "${path}")"
+    checksum="$(sha256_file "${path}")"
+    printf '{"type":"file","mode":"%s","bytes":%s,"sha256":"%s","path":"%s"}\n' \
+      "$(json_escape "${mode}")" \
+      "${size}" \
+      "$(json_escape "${checksum}")" \
+      "$(json_escape "${path}")"
+    return 0
+  fi
+
+  if [[ -d "${path}" ]]; then
+    mode="$(file_mode "${path}")"
+    printf '{"type":"dir","mode":"%s","path":"%s"}\n' \
+      "$(json_escape "${mode}")" \
+      "$(json_escape "${path}")"
+    return 0
+  fi
+
+  printf '{"type":"missing","path":"%s"}\n' "$(json_escape "${path}")"
+}
+
+write_side_effect_manifest() {
+  local output="$1"
+  shift
+  local root path
+
+  : > "${output}"
+  for root in "$@"; do
+    if [[ -d "${root}" ]]; then
+      while IFS= read -r -d '' path; do
+        write_manifest_entry "${path}" >> "${output}"
+      done < <(find "${root}" -print0 | sort -z)
+    else
+      write_manifest_entry "${root}" >> "${output}"
+    fi
+  done
+}
+
+run_security_ctx_command() {
+  local name="$1"
+  local workspace="$2"
+  local home_dir="$3"
+  local data_root="$4"
+  local ctx_bin="$5"
+  shift 5
+
+  (
+    cd "${workspace}"
+    run_timed "${name}" \
+      env \
+        -u OPENAI_API_KEY \
+        -u ANTHROPIC_API_KEY \
+        -u GEMINI_API_KEY \
+        -u GOOGLE_API_KEY \
+        -u AZURE_OPENAI_API_KEY \
+        HOME="${home_dir}" \
+        CTX_DATA_ROOT="${data_root}" \
+        "${ctx_bin}" "$@"
+  )
+}
+
+capture_security_ctx_command() {
+  local workspace="$1"
+  local home_dir="$2"
+  local data_root="$3"
+  local ctx_bin="$4"
+  shift 4
+
+  (
+    cd "${workspace}"
+    env \
+      -u OPENAI_API_KEY \
+      -u ANTHROPIC_API_KEY \
+      -u GEMINI_API_KEY \
+      -u GOOGLE_API_KEY \
+      -u AZURE_OPENAI_API_KEY \
+      HOME="${home_dir}" \
+      CTX_DATA_ROOT="${data_root}" \
+      "${ctx_bin}" "$@"
+  )
+}
+
+run_security_runtime_flow() {
+  local prefix="$1"
+  local workspace="$2"
+  local home_dir="$3"
+  local data_root="$4"
+  local ctx_bin="$5"
+  local fixture="$6"
+  local list_json record_id
+
+  run_security_ctx_command "${prefix}-setup" "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" setup
+  run_security_ctx_command "${prefix}-sources" "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" sources --json
+  run_security_ctx_command "${prefix}-import" "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" import --provider codex --path "${fixture}" --json
+
+  list_json="$(capture_security_ctx_command "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" list --json)"
+  printf '%s\n' "${list_json}" > "${CTX_ARTIFACT_DIR}/${prefix}-list.json"
+  record_id="$(printf '%s\n' "${list_json}" | sed -n 's/.*"id": "\([^"]*\)".*/\1/p' | head -n1)"
+  [[ -n "${record_id}" ]] || fail "${prefix} list did not return a record id"
+
+  run_security_ctx_command "${prefix}-search" "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" search onboarding --json
+  run_security_ctx_command "${prefix}-show" "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" show "${record_id}" --json
+  run_security_ctx_command "${prefix}-context" "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" context onboarding --json
+  run_security_ctx_command "${prefix}-status" "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" status --json
+  run_security_ctx_command "${prefix}-doctor" "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" doctor --json
+  run_security_ctx_command "${prefix}-validate" "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" validate --json
+}
+
+write_no_network_report() {
+  local output="$1"
+  local status="$2"
+  local reason="$3"
+  local tool="${4:-}"
+  local trace_dir="${5:-}"
+
+  cat > "${output}" <<EOF
+{
+  "status": "$(json_escape "${status}")",
+  "reason": "$(json_escape "${reason}")",
+  "tool": "$(json_escape "${tool}")",
+  "trace_dir": "$(json_escape "${trace_dir}")",
+  "checked_syscalls": [
+    "socket",
+    "connect",
+    "sendto",
+    "sendmsg",
+    "recvfrom",
+    "recvmsg",
+    "accept",
+    "accept4",
+    "bind",
+    "listen"
+  ]
+}
+EOF
+}
+
+write_side_effect_report() {
+  local output="$1"
+  local status="$2"
+  local reason="$3"
+  local before_manifest="$4"
+  local after_manifest="$5"
+  local diff_output="${6:-}"
+
+  cat > "${output}" <<EOF
+{
+  "status": "$(json_escape "${status}")",
+  "reason": "$(json_escape "${reason}")",
+  "before_manifest": "$(json_escape "${before_manifest}")",
+  "after_manifest": "$(json_escape "${after_manifest}")",
+  "diff": "$(json_escape "${diff_output}")",
+  "monitored_surfaces": [
+    "fake_home",
+    "fake_repo_files_and_hooks",
+    "read_only_provider_fixture"
+  ],
+  "detects": [
+    "content",
+    "creation",
+    "deletion",
+    "mode"
+  ]
+}
+EOF
+}
+
+assert_manifest_unchanged() {
+  local name="$1"
+  local before="$2"
+  local after="$3"
+  local report="$4"
+  local diff_output="${CTX_ARTIFACT_DIR}/${name}-diff.txt"
+
+  if cmp -s "${before}" "${after}"; then
+    write_side_effect_report "${report}" "passed" "monitored files unchanged" "${before}" "${after}"
+    return 0
+  fi
+
+  diff -u "${before}" "${after}" > "${diff_output}" || true
+  write_side_effect_report "${report}" "failed" "monitored files changed" "${before}" "${after}" "${diff_output}"
+  printf 'side-effect manifest changed for %s:\n' "${name}" >&2
+  cat "${diff_output}" >&2
+  fail "security side-effect oracle detected modified ${name}"
+}
+
+run_straced_security_ctx_command() {
+  local name="$1"
+  local strace_bin="$2"
+  local trace_output="$3"
+  local workspace="$4"
+  local home_dir="$5"
+  local data_root="$6"
+  local ctx_bin="$7"
+  shift 7
+
+  (
+    cd "${workspace}"
+    run_timed "${name}" \
+      "${strace_bin}" \
+        -f \
+        -e trace=network \
+        -o "${trace_output}" \
+        env \
+          -u OPENAI_API_KEY \
+          -u ANTHROPIC_API_KEY \
+          -u GEMINI_API_KEY \
+          -u GOOGLE_API_KEY \
+          -u AZURE_OPENAI_API_KEY \
+          HOME="${home_dir}" \
+          CTX_DATA_ROOT="${data_root}" \
+          "${ctx_bin}" "$@"
+  )
+}
+
+run_security_no_network_oracle() {
+  local oracle_root="$1"
+  local workspace="$2"
+  local home_dir="$3"
+  local fixture="$4"
+  local ctx_bin="$5"
+  local report="${CTX_ARTIFACT_DIR}/no-network-oracle.json"
+  local strace_bin data_root trace_dir violations grep_status probe_trace probe_stderr probe_status probe_reason
+
+  strace_bin="$(command -v strace 2>/dev/null || true)"
+  if [[ -z "${strace_bin}" ]]; then
+    write_no_network_report "${report}" "skipped" "strace not found on PATH"
+    printf 'no-network oracle skipped: strace not found on PATH\n'
+    return 0
+  fi
+
+  data_root="${oracle_root}/no network data root"
+  trace_dir="${CTX_ARTIFACT_DIR}/strace-network"
+  violations="${CTX_ARTIFACT_DIR}/no-network-violations.txt"
+  rm -rf "${trace_dir}"
+  mkdir -p "${data_root}" "${trace_dir}"
+
+  probe_trace="${trace_dir}/probe.log"
+  probe_stderr="${trace_dir}/probe.stderr"
+  set +e
+  "${strace_bin}" -f -e trace=network -o "${probe_trace}" true >/dev/null 2>"${probe_stderr}"
+  probe_status=$?
+  set -e
+  if (( probe_status != 0 )); then
+    probe_reason="$(tr '\n' ' ' < "${probe_stderr}" | sed 's/[[:space:]][[:space:]]*/ /g' | cut -c1-240)"
+    if [[ -z "${probe_reason}" ]]; then
+      probe_reason="strace probe exited with status ${probe_status}"
+    fi
+    write_no_network_report "${report}" "skipped" "${probe_reason}" "${strace_bin}" "${trace_dir}"
+    printf 'no-network oracle skipped: %s\n' "${probe_reason}"
+    return 0
+  fi
+
+  run_straced_security_ctx_command "security-no-network-setup" "${strace_bin}" "${trace_dir}/setup.log" \
+    "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" setup
+  run_straced_security_ctx_command "security-no-network-import" "${strace_bin}" "${trace_dir}/import.log" \
+    "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" import --provider codex --path "${fixture}" --json
+  run_straced_security_ctx_command "security-no-network-search" "${strace_bin}" "${trace_dir}/search.log" \
+    "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" search onboarding --json
+  run_straced_security_ctx_command "security-no-network-context" "${strace_bin}" "${trace_dir}/context.log" \
+    "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" context onboarding --json
+
+  set +e
+  grep -R -n -E 'AF_INET|AF_INET6' "${trace_dir}" > "${violations}"
+  grep_status=$?
+  set -e
+
+  if (( grep_status == 0 )); then
+    write_no_network_report "${report}" "failed" "AF_INET or AF_INET6 network activity observed" "${strace_bin}" "${trace_dir}"
+    printf 'no-network oracle detected AF_INET/AF_INET6 activity:\n' >&2
+    cat "${violations}" >&2
+    fail 'setup/import/search/context attempted network activity'
+  fi
+  if (( grep_status > 1 )); then
+    cat "${violations}" >&2 || true
+    fail 'no-network oracle could not scan strace output'
+  fi
+
+  write_no_network_report "${report}" "passed" "no traced AF_INET or AF_INET6 activity observed" "${strace_bin}" "${trace_dir}"
+  printf 'no-network oracle artifact: %s\n' "${report}"
+}
+
+prepare_security_oracle_fixture() {
+  local oracle_root="$1"
+  local home_dir="$2"
+  local workspace="$3"
+  local fixture_copy="$4"
+  local source_fixture="${CTX_REPO_ROOT}/tests/fixtures/provider-history/codex-sessions"
+
+  mkdir -p "${home_dir}" "${workspace}" "$(dirname "${fixture_copy}")"
+  printf '# ctx security sentinel\nCTX_SENTINEL_BASHRC=unchanged\n' > "${home_dir}/.bashrc"
+  printf '# ctx security sentinel\nCTX_SENTINEL_ZSHRC=unchanged\n' > "${home_dir}/.zshrc"
+
+  git -C "${workspace}" init -q
+  mkdir -p "${workspace}/src" "${workspace}/docs" "${workspace}/.git/hooks"
+  printf '# ctx side-effect sentinel repo\n' > "${workspace}/README.md"
+  printf 'repo sentinel source\n' > "${workspace}/src/sentinel.txt"
+  printf 'repo sentinel docs\n' > "${workspace}/docs/sentinel.txt"
+  printf '#!/usr/bin/env bash\nprintf "pre-commit sentinel should not run\\n"\n' > "${workspace}/.git/hooks/pre-commit"
+  printf '#!/usr/bin/env bash\nprintf "post-checkout sentinel should not run\\n"\n' > "${workspace}/.git/hooks/post-checkout"
+  chmod +x "${workspace}/.git/hooks/pre-commit" "${workspace}/.git/hooks/post-checkout"
+
+  mkdir -p "${fixture_copy}"
+  cp -R "${source_fixture}/." "${fixture_copy}/"
+  chmod -R a-w "${fixture_copy}"
+
+  printf 'security oracle workspace: %s\n' "${oracle_root}"
+  printf 'security oracle provider fixture: %s\n' "${fixture_copy}"
+}
+
+run_security_side_effect_oracle() {
+  local ctx_bin="$1"
+  local oracle_root home_dir workspace data_root fixture_copy before_manifest after_manifest report
+
+  oracle_root="$(mktemp -d "${TMPDIR}/ctx security oracle.XXXXXX")"
+  home_dir="${oracle_root}/home with spaces"
+  workspace="${oracle_root}/workspace repo"
+  data_root="${oracle_root}/data root"
+  fixture_copy="${oracle_root}/provider fixtures/codex sessions"
+  before_manifest="${CTX_ARTIFACT_DIR}/side-effect-before.jsonl"
+  after_manifest="${CTX_ARTIFACT_DIR}/side-effect-after.jsonl"
+  report="${CTX_ARTIFACT_DIR}/side-effect-oracle.json"
+
+  mkdir -p "${data_root}"
+  prepare_security_oracle_fixture "${oracle_root}" "${home_dir}" "${workspace}" "${fixture_copy}"
+
+  write_side_effect_manifest "${before_manifest}" "${home_dir}" "${workspace}" "${fixture_copy}"
+  run_security_runtime_flow "security-side-effect" "${workspace}" "${home_dir}" "${data_root}" "${ctx_bin}" "${fixture_copy}"
+  run_security_no_network_oracle "${oracle_root}" "${workspace}" "${home_dir}" "${fixture_copy}" "${ctx_bin}"
+  write_side_effect_manifest "${after_manifest}" "${home_dir}" "${workspace}" "${fixture_copy}"
+
+  assert_manifest_unchanged "side-effect" "${before_manifest}" "${after_manifest}" "${report}"
+  printf 'side-effect oracle artifact: %s\n' "${report}"
+  printf 'side-effect manifests: %s %s\n' "${before_manifest}" "${after_manifest}"
+}
+
 run_security_no_repo_writes() {
-  local before after
+  local before after ctx_bin
+
+  build_ctx_debug
+  ctx_bin="$(ctx_debug_bin)"
+  [[ -x "${ctx_bin}" || -f "${ctx_bin}" ]] || fail "ctx debug binary missing: ${ctx_bin}"
 
   before="$(git status --porcelain=v1 --untracked-files=all)"
-  run_fresh_home_flow
+  printf '%s\n' "${before}" > "${CTX_ARTIFACT_DIR}/git-status-before.txt"
+
+  run_security_side_effect_oracle "${ctx_bin}"
+
   after="$(git status --porcelain=v1 --untracked-files=all)"
+  printf '%s\n' "${after}" > "${CTX_ARTIFACT_DIR}/git-status-after.txt"
 
   if [[ "${before}" != "${after}" ]]; then
     printf 'git status before Bazel no-repo-writes flow:\n%s\n' "${before}" >&2
