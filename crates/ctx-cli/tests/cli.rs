@@ -2,7 +2,10 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use rusqlite::Connection;
 use serde_json::Value;
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use tempfile::{Builder, TempDir};
 
 fn tempdir() -> TempDir {
@@ -36,6 +39,20 @@ fn redaction_fixture(name: &str) -> String {
         .to_str()
         .unwrap()
         .to_owned()
+}
+
+fn copy_dir_all(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let file_type = entry.file_type().unwrap();
+        let target = to.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
 }
 
 fn json_output(command: &mut Command) -> Value {
@@ -407,6 +424,155 @@ fn fresh_home_search_mvp_flow() {
 }
 
 #[test]
+fn codex_cli_resume_is_idempotent_rescan_and_filters_subagents() {
+    let temp = tempdir();
+    let fixture = provider_history_fixture("codex-sessions");
+
+    let first = json_output(ctx(&temp).args([
+        "import",
+        "--provider",
+        "codex",
+        "--path",
+        &fixture,
+        "--json",
+    ]));
+    assert_eq!(first["schema_version"], 1);
+    assert_eq!(first["resume"], false);
+    assert_eq!(first["resume_mode"], "normal_scan");
+    assert_eq!(first["totals"]["imported_sessions"], 2);
+    assert_eq!(first["totals"]["imported_events"], 8);
+    assert_eq!(first["totals"]["imported_edges"], 1);
+
+    let with_subagents = json_output(ctx(&temp).args(["search", "subagent", "--json"]));
+    assert!(!with_subagents["results"].as_array().unwrap().is_empty());
+    assert_eq!(with_subagents["filters"]["include_subagents"], true);
+
+    let primary_only =
+        json_output(ctx(&temp).args(["search", "subagent", "--primary-only", "--json"]));
+    assert_eq!(primary_only["filters"]["include_subagents"], false);
+    assert_eq!(primary_only["filters"]["primary_only"], true);
+    assert!(
+        primary_only["results"].as_array().unwrap().len()
+            <= with_subagents["results"].as_array().unwrap().len()
+    );
+
+    let second = json_output(ctx(&temp).args([
+        "import",
+        "--provider",
+        "codex",
+        "--path",
+        &fixture,
+        "--resume",
+        "--json",
+    ]));
+    assert_eq!(second["schema_version"], 1);
+    assert_eq!(second["resume"], true);
+    assert_eq!(second["resume_mode"], "idempotent_rescan");
+    assert_eq!(second["totals"]["imported_sessions"], 0);
+    assert_eq!(second["totals"]["imported_events"], 0);
+    assert_eq!(second["totals"]["imported_edges"], 0);
+    assert!(second["totals"]["skipped"].as_u64().unwrap() > 0);
+    assert_eq!(second["sources"][0]["imported_sessions"], 0);
+    assert_eq!(second["sources"][0]["imported_events"], 0);
+}
+
+#[test]
+fn pi_cli_import_search_and_context_flow() {
+    let temp = tempdir();
+    let fixture = provider_history_fixture("pi-session.jsonl");
+
+    let imported =
+        json_output(ctx(&temp).args(["import", "--provider", "pi", "--path", &fixture, "--json"]));
+    assert_eq!(imported["schema_version"], 1);
+    assert_eq!(imported["sources"][0]["provider"], "pi");
+    assert_eq!(imported["sources"][0]["source_format"], "pi_session_jsonl");
+    assert_eq!(imported["totals"]["imported_sessions"], 1);
+    assert_eq!(imported["totals"]["imported_events"], 5);
+
+    let search =
+        json_output(ctx(&temp).args(["search", "provider metadata", "--provider", "pi", "--json"]));
+    assert_eq!(search["schema_version"], 1);
+    assert!(!search["results"].as_array().unwrap().is_empty());
+    assert!(search["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|result| result["provider"] == "pi"));
+
+    let context = json_output(ctx(&temp).args([
+        "context",
+        "provider metadata",
+        "--provider",
+        "pi",
+        "--json",
+    ]));
+    assert_eq!(context["schema_version"], 1);
+    assert!(!context["results"].as_array().unwrap().is_empty());
+    assert!(context["results"][0]["citations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|citation| citation["provider"] == "pi"));
+}
+
+#[test]
+fn codex_cli_reports_malformed_partial_import_progress() {
+    let temp = tempdir();
+    let fixture = provider_history_fixture("codex-malformed-session.jsonl");
+
+    let imported = json_output(ctx(&temp).args([
+        "import",
+        "--provider",
+        "codex",
+        "--path",
+        &fixture,
+        "--json",
+    ]));
+    assert_eq!(imported["schema_version"], 1);
+    assert_eq!(imported["totals"]["imported_sessions"], 1);
+    assert_eq!(imported["totals"]["imported_events"], 2);
+    assert_eq!(imported["totals"]["failed"], 1);
+    assert_eq!(imported["sources"][0]["failed"], 1);
+
+    let search = json_output(ctx(&temp).args(["search", "after malformed", "--json"]));
+    assert!(!search["results"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn codex_cli_marks_deleted_raw_source_citations_unavailable() {
+    let temp = tempdir();
+    let source = PathBuf::from(provider_history_fixture("codex-sessions"));
+    let copied = temp.path().join("copied-codex-sessions");
+    copy_dir_all(&source, &copied);
+    let copied_text = copied.to_str().unwrap().to_owned();
+
+    let imported = json_output(ctx(&temp).args([
+        "import",
+        "--provider",
+        "codex",
+        "--path",
+        &copied_text,
+        "--json",
+    ]));
+    assert_eq!(imported["totals"]["imported_events"], 8);
+
+    fs::remove_dir_all(&copied).unwrap();
+
+    let search = json_output(ctx(&temp).args(["search", "onboarding", "--json"]));
+    assert!(search["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|result| result["source_exists"] == false));
+    assert!(search["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|result| result["citations"].as_array().unwrap().iter())
+        .any(|citation| citation["source_exists"] == false));
+}
+
+#[test]
 fn privacy_redaction_oracle_covers_cli_json_and_sqlite() {
     let temp = tempdir();
     let fixture = redaction_fixture("codex-sessions");
@@ -440,7 +606,10 @@ fn privacy_redaction_oracle_covers_cli_json_and_sqlite() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|event| event["preview"].as_str().unwrap_or("").contains("[REDACTED")));
+        .any(|event| event["preview"]
+            .as_str()
+            .unwrap_or("")
+            .contains("[REDACTED")));
 
     let cli_json = format!("{import}\n{search}\n{context}\n{show}");
     assert!(cli_json.contains("[REDACTED"));

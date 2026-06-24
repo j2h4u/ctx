@@ -43,10 +43,7 @@ pub enum CaptureError {
     #[error("invalid spool path: {0:?}")]
     InvalidPath(PathBuf),
     #[error("invalid provider transcript path {path:?}: {reason}")]
-    InvalidProviderTranscriptPath {
-        path: PathBuf,
-        reason: &'static str,
-    },
+    InvalidProviderTranscriptPath { path: PathBuf, reason: &'static str },
     #[error("spool writer is already closed")]
     WriterClosed,
     #[error("line {line} in {path:?} is not a valid capture envelope: {source}")]
@@ -1165,6 +1162,7 @@ pub fn import_codex_session_tree(
     let mut merged = ProviderImportSummary::default();
     merged.skipped_sessions += skipped_by_bounds;
     merged.skipped += skipped_by_bounds;
+    let mut captures = Vec::new();
     let mut in_transaction = false;
     if !paths.is_empty() {
         store.begin_immediate_batch()?;
@@ -1187,27 +1185,29 @@ pub fn import_codex_session_tree(
                 return Err(err);
             }
         };
-        let summary = match import_provider_capture_lines(
-            store,
-            NormalizedProviderImportOptions {
-                work_record_id: options.work_record_id,
-                allow_partial_failures: options.allow_partial_failures,
-                persist_cursors: true,
-                wrap_transaction: false,
-            },
-            normalization.summary,
-            normalization.captures,
-        ) {
-            Ok(summary) => summary,
-            Err(err) => {
-                if in_transaction {
-                    let _ = store.rollback_batch();
-                }
-                return Err(err);
-            }
-        };
-        merged.merge(summary);
+        merged.merge(normalization.summary);
+        captures.extend(normalization.captures);
     }
+    let summary = match import_provider_capture_lines(
+        store,
+        NormalizedProviderImportOptions {
+            work_record_id: options.work_record_id,
+            allow_partial_failures: options.allow_partial_failures,
+            persist_cursors: true,
+            wrap_transaction: false,
+        },
+        merged,
+        captures,
+    ) {
+        Ok(summary) => summary,
+        Err(err) => {
+            if in_transaction {
+                let _ = store.rollback_batch();
+            }
+            return Err(err);
+        }
+    };
+    merged = summary;
     if in_transaction {
         store.commit_batch()?;
     }
@@ -2333,6 +2333,7 @@ fn import_provider_capture_lines(
             }
         }
     }
+    resolve_pending_provider_edges(store, &mut summary, &mut caches)?;
     if has_captures && options.wrap_transaction {
         if let Err(err) = store.commit_batch() {
             let _ = store.rollback_batch();
@@ -2351,6 +2352,21 @@ struct ProviderImportCaches {
     imported_edges: BTreeSet<Uuid>,
     processed_edges: BTreeSet<Uuid>,
     session_exists: BTreeMap<Uuid, bool>,
+    pending_edges: BTreeMap<Uuid, PendingProviderEdge>,
+}
+
+#[derive(Clone)]
+struct PendingProviderEdge {
+    provider_session_id: String,
+    parent_provider_session_id: Option<String>,
+    session_id: Uuid,
+    parent_session_id: Uuid,
+    root_session_id: Option<Uuid>,
+    source_id: Uuid,
+    source_format: String,
+    imported_at: DateTime<Utc>,
+    fidelity: Fidelity,
+    line_number: usize,
 }
 
 fn import_provider_capture_line(
@@ -2527,8 +2543,24 @@ fn import_provider_capture_line(
             }
         }
     } else if requested_parent_session_id.is_some() {
-        summary.skipped_edges += 1;
-        summary.skipped += 1;
+        let edge_id = provider_edge_uuid(provider, &session.provider_session_id, "parent_child");
+        if let Some(parent_session_id) = requested_parent_session_id {
+            caches
+                .pending_edges
+                .entry(edge_id)
+                .or_insert_with(|| PendingProviderEdge {
+                    provider_session_id: session.provider_session_id.clone(),
+                    parent_provider_session_id: session.parent_provider_session_id.clone(),
+                    session_id,
+                    parent_session_id,
+                    root_session_id: requested_root_session_id,
+                    source_id,
+                    source_format: source.source_format.clone(),
+                    imported_at,
+                    fidelity: session.fidelity,
+                    line_number,
+                });
+        }
     }
 
     if let Some(event) = &capture.event {
@@ -2640,6 +2672,107 @@ fn import_provider_capture_line(
     }
 
     Ok(summary)
+}
+
+fn resolve_pending_provider_edges(
+    store: &mut Store,
+    summary: &mut ProviderImportSummary,
+    caches: &mut ProviderImportCaches,
+) -> Result<()> {
+    let pending = std::mem::take(&mut caches.pending_edges);
+    for (edge_id, edge) in pending {
+        if caches.processed_edges.contains(&edge_id) {
+            update_session_parent_if_needed(store, &edge, caches)?;
+            continue;
+        }
+        if !provider_session_exists_cached(
+            store,
+            edge.parent_session_id,
+            &mut caches.session_exists,
+        )? {
+            summary.skipped_edges += 1;
+            summary.skipped += 1;
+            continue;
+        }
+        let root_session_id = resolve_pending_root_session_id(store, &edge, caches)?;
+        update_session_parent(store, &edge, root_session_id)?;
+        caches.session_exists.insert(edge.session_id, true);
+
+        let was_present = store.session_edge_exists(edge_id)?;
+        let session_edge = SessionEdge {
+            id: edge_id,
+            from_session_id: edge.parent_session_id,
+            to_session_id: edge.session_id,
+            edge_type: SessionEdgeType::ParentChild,
+            confidence: Confidence::Explicit,
+            source_id: Some(edge.source_id),
+            timestamps: timestamps(edge.imported_at),
+            sync: provider_sync_metadata(
+                edge.fidelity,
+                json!({
+                    "provider_session_id": edge.provider_session_id,
+                    "parent_provider_session_id": edge.parent_provider_session_id,
+                    "source_format": edge.source_format,
+                    "fixture_line": edge.line_number,
+                    "imported_at": edge.imported_at,
+                    "deferred_edge_resolution": true,
+                }),
+            ),
+        };
+        store.upsert_session_edge(&session_edge)?;
+        caches.processed_edges.insert(edge_id);
+        if !was_present && caches.imported_edges.insert(edge_id) {
+            summary.imported_edges += 1;
+            summary.imported += 1;
+        } else {
+            summary.skipped_edges += 1;
+            summary.skipped += 1;
+        }
+    }
+    Ok(())
+}
+
+fn resolve_pending_root_session_id(
+    store: &Store,
+    edge: &PendingProviderEdge,
+    caches: &mut ProviderImportCaches,
+) -> Result<Option<Uuid>> {
+    match edge.root_session_id {
+        Some(root_id)
+            if root_id == edge.session_id
+                || provider_session_exists_cached(store, root_id, &mut caches.session_exists)? =>
+        {
+            Ok(Some(root_id))
+        }
+        Some(_) | None => Ok(Some(edge.parent_session_id)),
+    }
+}
+
+fn update_session_parent_if_needed(
+    store: &mut Store,
+    edge: &PendingProviderEdge,
+    caches: &mut ProviderImportCaches,
+) -> Result<()> {
+    let root_session_id = resolve_pending_root_session_id(store, edge, caches)?;
+    update_session_parent(store, edge, root_session_id)
+}
+
+fn update_session_parent(
+    store: &mut Store,
+    edge: &PendingProviderEdge,
+    root_session_id: Option<Uuid>,
+) -> Result<()> {
+    let mut session = store.get_session(edge.session_id)?;
+    if session.parent_session_id == Some(edge.parent_session_id)
+        && session.root_session_id == root_session_id
+    {
+        return Ok(());
+    }
+    session.parent_session_id = Some(edge.parent_session_id);
+    session.root_session_id = root_session_id;
+    session.timestamps.updated_at = edge.imported_at;
+    store.upsert_session(&session)?;
+    Ok(())
 }
 
 fn fixture_line_to_capture(
@@ -3631,6 +3764,37 @@ mod tests {
     }
 
     #[test]
+    fn provider_fixture_replay_defers_child_edges_until_parent_is_known() {
+        let temp = tempdir();
+        let fixture = provider_fixture("out-of-order-subagent.jsonl");
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+
+        let summary = import_provider_fixture_jsonl(
+            &fixture,
+            &mut store,
+            fixed_import_options(fixture.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(summary.failed, 0, "{:?}", summary.failures);
+        assert_eq!(summary.imported_sessions, 2);
+        assert_eq!(summary.imported_events, 2);
+        assert_eq!(summary.imported_edges, 1);
+        assert_eq!(summary.skipped_edges, 0);
+
+        let parent_id = provider_session_uuid(CaptureProvider::Codex, "out-of-order-root");
+        let child_id = provider_session_uuid(CaptureProvider::Codex, "out-of-order-child");
+        let child = store.get_session(child_id).unwrap();
+        assert_eq!(child.parent_session_id, Some(parent_id));
+        assert_eq!(child.root_session_id, Some(parent_id));
+        let conn = rusqlite::Connection::open(temp.path().join("work.sqlite")).unwrap();
+        let edge_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session_edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(edge_count, 1);
+    }
+
+    #[test]
     fn provider_fixture_replay_supports_pi_and_redacts_metadata() {
         let temp = tempdir();
         let fixture = provider_fixture("pi.jsonl");
@@ -3804,6 +3968,36 @@ mod tests {
         assert!(child_events
             .iter()
             .any(|event| event.payload.to_string().contains("dashboard search")));
+    }
+
+    #[test]
+    fn codex_session_tree_defers_cross_file_child_edges_until_parent_is_known() {
+        let temp = tempdir();
+        let fixture = provider_history_fixture("codex-out-of-order-sessions");
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+
+        let summary = import_codex_session_tree(
+            &fixture,
+            &mut store,
+            CodexSessionImportOptions {
+                source_path: Some(fixture.clone()),
+                imported_at: "2026-06-24T02:15:00Z".parse().unwrap(),
+                max_session_files: Some(usize::MAX),
+                ..CodexSessionImportOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(summary.failed, 0, "{:?}", summary.failures);
+        assert_eq!(summary.imported_sessions, 2);
+        assert_eq!(summary.imported_events, 2);
+        assert_eq!(summary.imported_edges, 1);
+
+        let parent_id = provider_session_uuid(CaptureProvider::Codex, "codex-out-of-order-root");
+        let child_id = provider_session_uuid(CaptureProvider::Codex, "codex-out-of-order-child");
+        let child = store.get_session(child_id).unwrap();
+        assert_eq!(child.parent_session_id, Some(parent_id));
+        assert_eq!(child.root_session_id, Some(parent_id));
     }
 
     #[cfg(unix)]
@@ -4034,6 +4228,84 @@ mod tests {
             cursor_events[0].sync.metadata["metadata"]["docs_surface"].as_str(),
             Some("Cursor CLI sessions and stream-json output")
         );
+    }
+
+    #[test]
+    fn fixture_only_provider_replay_is_idempotent_for_major_providers() {
+        for (name, provider, external_session_id, sessions, events, edges) in [
+            (
+                "claude.jsonl",
+                CaptureProvider::Claude,
+                "claude-session-1",
+                1,
+                2,
+                0,
+            ),
+            (
+                "opencode.jsonl",
+                CaptureProvider::OpenCode,
+                "opencode-session-1",
+                2,
+                3,
+                1,
+            ),
+            (
+                "antigravity.jsonl",
+                CaptureProvider::Antigravity,
+                "agy-session-1",
+                2,
+                3,
+                1,
+            ),
+            (
+                "gemini.jsonl",
+                CaptureProvider::Gemini,
+                "gemini-session-1",
+                1,
+                2,
+                0,
+            ),
+            (
+                "cursor.jsonl",
+                CaptureProvider::Cursor,
+                "cursor-session-1",
+                1,
+                2,
+                0,
+            ),
+        ] {
+            let temp = tempdir();
+            let fixture = provider_fixture(name);
+            let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+
+            let first = import_provider_fixture_jsonl(
+                &fixture,
+                &mut store,
+                fixed_import_options(fixture.clone()),
+            )
+            .unwrap();
+            assert_eq!(first.failed, 0, "{name}: {:?}", first.failures);
+            assert_eq!(first.imported_sessions, sessions, "{name}");
+            assert_eq!(first.imported_events, events, "{name}");
+            assert_eq!(first.imported_edges, edges, "{name}");
+
+            let second = import_provider_fixture_jsonl(
+                &fixture,
+                &mut store,
+                fixed_import_options(fixture.clone()),
+            )
+            .unwrap();
+            assert_eq!(second.failed, 0, "{name}: {:?}", second.failures);
+            assert_eq!(second.imported_sessions, 0, "{name}");
+            assert_eq!(second.imported_events, 0, "{name}");
+            assert_eq!(second.imported_edges, 0, "{name}");
+            assert_eq!(second.skipped_sessions, sessions, "{name}");
+            assert_eq!(second.skipped_events, events, "{name}");
+            assert_eq!(second.skipped_edges, edges, "{name}");
+
+            let session_id = provider_session_uuid(provider, external_session_id);
+            assert!(!store.events_for_session(session_id).unwrap().is_empty());
+        }
     }
 
     #[test]
