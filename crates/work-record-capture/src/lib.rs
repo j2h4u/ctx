@@ -42,6 +42,11 @@ pub enum CaptureError {
     InvalidPayload(String),
     #[error("invalid spool path: {0:?}")]
     InvalidPath(PathBuf),
+    #[error("invalid provider transcript path {path:?}: {reason}")]
+    InvalidProviderTranscriptPath {
+        path: PathBuf,
+        reason: &'static str,
+    },
     #[error("spool writer is already closed")]
     WriterClosed,
     #[error("line {line} in {path:?} is not a valid capture envelope: {source}")]
@@ -448,6 +453,7 @@ impl ProviderCaptureAdapter for ProviderFixtureJsonlAdapter {
         path: &Path,
         context: &ProviderAdapterContext,
     ) -> Result<ProviderNormalizationResult> {
+        ensure_regular_provider_transcript_file(path)?;
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let mut result = ProviderNormalizationResult::default();
@@ -509,6 +515,7 @@ impl ProviderCaptureAdapter for CodexHistoryJsonlAdapter {
         path: &Path,
         context: &ProviderAdapterContext,
     ) -> Result<ProviderNormalizationResult> {
+        ensure_regular_provider_transcript_file(path)?;
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let mut result = ProviderNormalizationResult::default();
@@ -689,6 +696,7 @@ impl ProviderCaptureAdapter for CodexSessionJsonlAdapter {
         path: &Path,
         context: &ProviderAdapterContext,
     ) -> Result<ProviderNormalizationResult> {
+        ensure_regular_provider_transcript_file(path)?;
         let file = File::open(path)?;
         let mut reader = BufReader::new(file);
         let mut result = ProviderNormalizationResult::default();
@@ -823,6 +831,7 @@ impl ProviderCaptureAdapter for PiSessionJsonlAdapter {
         path: &Path,
         context: &ProviderAdapterContext,
     ) -> Result<ProviderNormalizationResult> {
+        ensure_regular_provider_transcript_file(path)?;
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let mut result = ProviderNormalizationResult::default();
@@ -1287,10 +1296,22 @@ const CODEX_MAX_METADATA_TEXT_CHARS: usize = 4_000;
 const CODEX_MAX_OUTPUT_PREVIEW_CHARS: usize = 4_000;
 
 fn collect_jsonl_paths(root: &Path, paths: &mut Vec<PathBuf>) -> Result<()> {
-    if root.is_file() {
+    let metadata = fs::symlink_metadata(root)?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(CaptureError::InvalidProviderTranscriptPath {
+            path: root.to_path_buf(),
+            reason: "symlinked provider transcript roots are rejected",
+        });
+    }
+    if file_type.is_file() {
         if root.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+            ensure_regular_provider_transcript_file(root)?;
             paths.push(root.to_path_buf());
         }
+        return Ok(());
+    }
+    if !file_type.is_dir() {
         return Ok(());
     }
     for entry in fs::read_dir(root)? {
@@ -1299,28 +1320,30 @@ fn collect_jsonl_paths(root: &Path, paths: &mut Vec<PathBuf>) -> Result<()> {
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
             collect_jsonl_paths(&path, paths)?;
-        } else if is_jsonl_file_entry(&path, &file_type) {
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+            ensure_regular_provider_transcript_file(&path)?;
             paths.push(path);
         }
     }
     Ok(())
 }
 
-fn is_jsonl_file_entry(path: &Path, file_type: &fs::FileType) -> bool {
-    if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
-        return false;
+fn ensure_regular_provider_transcript_file(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(CaptureError::InvalidProviderTranscriptPath {
+            path: path.to_path_buf(),
+            reason: "symlinked provider transcript files are rejected",
+        });
     }
-    if file_type.is_file() {
-        return true;
+    if !file_type.is_file() {
+        return Err(CaptureError::InvalidProviderTranscriptPath {
+            path: path.to_path_buf(),
+            reason: "provider transcript paths must be regular files",
+        });
     }
-    if file_type.is_symlink()
-        && fs::metadata(path)
-            .map(|metadata| metadata.is_file())
-            .unwrap_or(false)
-    {
-        return true;
-    }
-    false
+    Ok(())
 }
 
 fn parse_rfc3339_utc(value: &str) -> Option<DateTime<Utc>> {
@@ -3785,7 +3808,37 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn codex_session_tree_imports_symlinked_jsonl_files() {
+    fn codex_session_file_rejects_symlinked_jsonl_files() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir();
+        let fixture = provider_history_fixture("codex-sessions").join("2026/06/23/root.jsonl");
+        let link = temp.path().join("linked-root.jsonl");
+        symlink(&fixture, &link).unwrap();
+
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let err = import_codex_session_jsonl(
+            &link,
+            &mut store,
+            CodexSessionImportOptions {
+                imported_at: "2026-06-23T16:30:00Z".parse().unwrap(),
+                ..CodexSessionImportOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            CaptureError::InvalidProviderTranscriptPath { path, reason }
+                if path.ends_with("linked-root.jsonl")
+                    && reason == "symlinked provider transcript files are rejected"
+        ));
+        assert!(store.list_sessions().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_session_tree_rejects_symlinked_jsonl_files() {
         use std::os::unix::fs::symlink;
 
         let temp = tempdir();
@@ -3793,14 +3846,9 @@ mod tests {
         let sessions = temp.path().join("sessions/2026/06/23");
         fs::create_dir_all(&sessions).unwrap();
         symlink(fixture.join("root.jsonl"), sessions.join("root.jsonl")).unwrap();
-        symlink(
-            fixture.join("subagent.jsonl"),
-            sessions.join("subagent.jsonl"),
-        )
-        .unwrap();
 
         let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
-        let summary = import_codex_session_tree(
+        let err = import_codex_session_tree(
             temp.path().join("sessions"),
             &mut store,
             CodexSessionImportOptions {
@@ -3808,12 +3856,15 @@ mod tests {
                 ..CodexSessionImportOptions::default()
             },
         )
-        .unwrap();
+        .unwrap_err();
 
-        assert_eq!(summary.failed, 0, "{:?}", summary.failures);
-        assert_eq!(summary.imported_sessions, 2);
-        assert_eq!(summary.imported_events, 8);
-        assert_eq!(summary.imported_edges, 1);
+        assert!(matches!(
+            err,
+            CaptureError::InvalidProviderTranscriptPath { path, reason }
+                if path.ends_with("root.jsonl")
+                    && reason == "symlinked provider transcript files are rejected"
+        ));
+        assert!(store.list_sessions().unwrap().is_empty());
     }
 
     #[test]

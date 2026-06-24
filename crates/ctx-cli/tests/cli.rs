@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use rusqlite::Connection;
 use serde_json::Value;
 use std::{fs, path::PathBuf};
 use tempfile::{Builder, TempDir};
@@ -22,6 +23,15 @@ fn ctx(temp: &TempDir) -> Command {
 fn provider_history_fixture(name: &str) -> String {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/provider-history")
+        .join(name)
+        .to_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn redaction_fixture(name: &str) -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/redaction")
         .join(name)
         .to_str()
         .unwrap()
@@ -53,6 +63,38 @@ fn assert_omits_keys(value: &Value, forbidden_keys: &[&str]) {
         }
         _ => {}
     }
+}
+
+fn assert_omits_sensitive_markers(label: &str, value: &str) {
+    for forbidden in [
+        "sk-fake00000000000000000000000000000000000000000000",
+        "ghp_fake000000000000000000000000000000000000",
+        "AKIAFAKE000000000000",
+        "fake.jwt.token",
+        "fake_password",
+        "fake_secret_value",
+        "fake-password-123",
+        "fake_token@git.example.com",
+        "person@example.invalid",
+    ] {
+        assert!(
+            !value.contains(forbidden),
+            "{label} leaked sensitive marker {forbidden} in {value}"
+        );
+    }
+}
+
+fn sqlite_column_text(conn: &Connection, sql: &str) -> String {
+    let mut statement = conn.prepare(sql).unwrap();
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap();
+    let mut text = String::new();
+    for row in rows {
+        text.push_str(&row.unwrap());
+        text.push('\n');
+    }
+    text
 }
 
 #[test]
@@ -362,4 +404,60 @@ fn fresh_home_search_mvp_flow() {
     let validate = json_output(ctx(&temp).args(["validate", "--json"]));
     assert_eq!(validate["schema_version"], 1);
     assert_eq!(validate["valid"], true);
+}
+
+#[test]
+fn privacy_redaction_oracle_covers_cli_json_and_sqlite() {
+    let temp = tempdir();
+    let fixture = redaction_fixture("codex-sessions");
+
+    let import = json_output(ctx(&temp).args([
+        "import",
+        "--provider",
+        "codex",
+        "--path",
+        &fixture,
+        "--json",
+    ]));
+    assert_eq!(import["schema_version"], 1);
+    assert_eq!(import["totals"]["failed"], 0);
+    assert!(import["totals"]["imported_sessions"].as_u64().unwrap() > 0);
+
+    let search = json_output(ctx(&temp).args(["search", "redaction oracle", "--json"]));
+    assert_eq!(search["schema_version"], 1);
+    assert_eq!(search["share_safe"], false);
+    assert!(!search["results"].as_array().unwrap().is_empty());
+    let item_id = search["results"][0]["item_id"].as_str().unwrap().to_owned();
+
+    let context = json_output(ctx(&temp).args(["context", "redaction oracle", "--json"]));
+    assert_eq!(context["schema_version"], 1);
+    assert_eq!(context["share_safe"], false);
+    assert!(!context["results"].as_array().unwrap().is_empty());
+
+    let show = json_output(ctx(&temp).args(["show", &item_id, "--json"]));
+    assert_eq!(show["schema_version"], 1);
+    assert!(show["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["preview"].as_str().unwrap_or("").contains("[REDACTED")));
+
+    let cli_json = format!("{import}\n{search}\n{context}\n{show}");
+    assert!(cli_json.contains("[REDACTED"));
+    assert_omits_sensitive_markers("cli json", &cli_json);
+
+    let conn = Connection::open(temp.path().join("work.sqlite")).unwrap();
+    let event_payloads = sqlite_column_text(&conn, "SELECT COALESCE(payload_json, '') FROM events");
+    let event_index = sqlite_column_text(
+        &conn,
+        "SELECT COALESCE(safe_preview_text, '') FROM event_search",
+    );
+    let record_index = sqlite_column_text(
+        &conn,
+        "SELECT COALESCE(title, '') || ' ' || COALESCE(summary, '') || ' ' || COALESCE(primary_user_text, '') || ' ' || COALESCE(decision_text, '') || ' ' || COALESCE(context_text, '') || ' ' || COALESCE(tag_text, '') FROM work_record_search",
+    );
+    let sqlite_text = format!("{event_payloads}\n{event_index}\n{record_index}");
+    assert!(sqlite_text.contains("[REDACTED"));
+    assert!(event_index.contains("[REDACTED_PATH]"));
+    assert_omits_sensitive_markers("sqlite indexed output", &sqlite_text);
 }

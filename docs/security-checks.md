@@ -11,7 +11,10 @@ true for the search-only product.
 - `ctx search`, `ctx context`, `ctx list`, and `ctx show` write nothing.
 - Core setup/import/search/context do not require network access or API keys.
 - Provider files are read as sources and not modified.
+- Provider transcript imports reject symlinked JSONL files by default.
 - JSON output is private by default and must not be described as share-safe.
+- Search/context/show JSON and SQLite search projections must not expose
+  secret-shaped values that the redaction oracle covers.
 - Unsupported providers remain explicit in the provider support matrix.
 
 ## Static Docs Checks
@@ -36,12 +39,29 @@ When Bazel owns the docs gate, run:
 bazel test //:docs_check --config=ci
 ```
 
+## Bazel Security Gates
+
+Run the production security/privacy gates through Bazel:
+
+```bash
+bazel test //:security_static_audit //:security_no_repo_writes //:privacy_redaction_oracle --config=ci
+```
+
+`//:security_static_audit` scans active runtime crates for hidden
+network/client, subprocess, browser, daemon, LLM/API-key, and PATH mutation
+surfaces, and checks public setup/docs/install surfaces for PATH edits or API-key
+requirements. `//:privacy_redaction_oracle` imports a synthetic provider
+history with fake secret-shaped values, then checks `search`, `context`, `show`,
+and SQLite search projections for redaction.
+
 ## Manual Review Checklist
 
 - README scope matches `docs/product-contract.md`.
 - CLI examples use flags implemented by `crates/ctx-cli`.
 - Provider support docs match `docs/provider-support-matrix.json`.
 - JSON docs identify local/private output and compatibility limits.
+- Symlink policy stays explicit: provider transcript symlinks are rejected unless
+  a future change adds canonical root-contained symlink support with tests.
 - Security docs do not promise sanitization beyond bounded previews and
   share-safety markers.
 - Release install docs do not imply public artifacts before they exist.

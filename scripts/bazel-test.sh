@@ -390,6 +390,84 @@ run_security_no_repo_writes() {
   fi
 }
 
+assert_no_matches() {
+  local name="$1"
+  local pattern="$2"
+  shift 2
+  local output status
+
+  output="${CTX_ARTIFACT_DIR}/static-audit-${name}.txt"
+  set +e
+  rg -n --hidden -S -e "${pattern}" "$@" > "${output}"
+  status=$?
+  set -e
+
+  if (( status == 0 )); then
+    printf 'static audit `%s` found forbidden matches:\n' "${name}" >&2
+    cat "${output}" >&2
+    fail "static audit ${name} failed"
+  fi
+  if (( status > 1 )); then
+    cat "${output}" >&2 || true
+    fail "static audit ${name} could not scan requested files"
+  fi
+}
+
+run_security_static_audit() {
+  local ctx_package="ctx"
+  local runtime_crates=(
+    crates/ctx-cli/src
+    crates/work-record-capture/src
+    crates/work-record-core/src
+    crates/work-record-search/src
+    crates/work-record-store/src
+  )
+  local public_surfaces=(
+    README.md
+    SECURITY.md
+    docs
+    skills/ctx-agent-memory/SKILL.md
+    scripts/install.sh
+    scripts/install.ps1
+    crates/ctx-cli/src/main.rs
+  )
+
+  cargo_test_filter "${ctx_package}" help_exposes_only_search_mvp_commands
+  cargo_test_filter "${ctx_package}" removed_commands_are_rejected
+  cargo_test_filter "${ctx_package}" provider_help_matches_implemented_importers
+  cargo_test_filter work-record-capture codex_session_file_rejects_symlinked_jsonl_files
+  cargo_test_filter work-record-capture codex_session_tree_rejects_symlinked_jsonl_files
+
+  assert_no_matches \
+    rust-network-clients \
+    'std::net::|Tcp(Stream|Listener)|UdpSocket|Unix(Stream|Listener)|reqwest|ureq|hyper|tonic|axum|warp|actix_web|tungstenite|tokio::net' \
+    "${runtime_crates[@]}" Cargo.toml Cargo.lock
+  assert_no_matches \
+    rust-subprocess-spawn \
+    'std::process::Command|process::Command|Command::new' \
+    "${runtime_crates[@]}"
+  assert_no_matches \
+    rust-browser-daemon \
+    'webbrowser|open::that|xdg-open|open_browser|daemonize|start_server|serve_forever' \
+    "${runtime_crates[@]}"
+  assert_no_matches \
+    rust-llm-api-surface \
+    'OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|async_openai|openai::|anthropic::|gemini::' \
+    "${runtime_crates[@]}" Cargo.toml Cargo.lock
+  assert_no_matches \
+    rust-path-mutation \
+    'env::set_var\([^)]*["'\'']PATH["'\'']|std::env::set_var\([^)]*["'\'']PATH["'\'']' \
+    "${runtime_crates[@]}"
+  assert_no_matches \
+    public-path-mutation \
+    'export[[:space:]]+PATH=|PATH=.*\$[{]?PATH|setx[[:space:]]+PATH|\.bashrc|\.zshrc|fish_user_paths|shell hook' \
+    "${public_surfaces[@]}"
+  assert_no_matches \
+    public-llm-key-requirement \
+    'OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|API key required|required API key' \
+    "${public_surfaces[@]}"
+}
+
 sha256_file() {
   local path="$1"
 
@@ -575,15 +653,14 @@ case "${mode}" in
     cargo_test_filter work-record-capture provider_fixture_replay
     ;;
   security_static_audit)
-    ctx_package="ctx"
-    cargo_test_filter ctx help_exposes_only_search_mvp_commands
-    cargo_test_filter ctx removed_commands_are_rejected
-    cargo_test_filter "${ctx_package}" provider_help_matches_implemented_importers
+    run_security_static_audit
     ;;
   security_no_repo_writes)
     run_security_no_repo_writes
     ;;
   privacy_redaction_oracle)
+    ctx_package="ctx"
+    cargo_test_filter "${ctx_package}" privacy_redaction_oracle_covers_cli_json_and_sqlite
     cargo_test_filter work-record-core redaction
     cargo_test_filter work-record-search redacts_secret_like_values_in_snippets
     cargo_test_filter work-record-capture provider_fixture_replay_supports_pi_and_redacts_metadata
