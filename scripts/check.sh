@@ -126,7 +126,10 @@ run_platform_smoke() {
   fi
 
   data_root="$(mktemp -d "${TMPDIR}/ctx-records-smoke.XXXXXX")"
-  ctx_run_timed "platform-smoke-setup" env CTX_DATA_ROOT="${data_root}" "${smoke_bin}" setup
+  ctx_run_timed "platform-smoke-setup" env \
+    CTX_DATA_ROOT="${data_root}" \
+    CTX_DASHBOARD_IDLE_SECONDS=1 \
+    "${smoke_bin}" setup
   record_json="$(CTX_DATA_ROOT="${data_root}" "${smoke_bin}" record \
     --title "platform smoke" \
     --body "platform smoke body" \

@@ -583,6 +583,7 @@ function Run-Platform-Smoke {
   $dataRoot = Join-PathSafe $env:TMPDIR ("ctx-records-smoke-" + [Guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
   $env:CTX_DATA_ROOT = $dataRoot
+  $env:CTX_DASHBOARD_IDLE_SECONDS = "1"
 
   Run-Ctx $bin @("setup")
   $recordOutput = & $bin record --title "platform smoke" --body "platform smoke body" --tag "smoke" --json

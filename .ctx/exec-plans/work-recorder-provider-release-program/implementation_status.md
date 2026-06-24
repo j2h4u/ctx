@@ -1,6 +1,6 @@
 # Work Recorder Provider Release Implementation Status
 
-Last updated: 2026-06-24T01:42:14Z.
+Last updated: 2026-06-24T02:12:19Z.
 
 ## Current Integration Branch
 
@@ -397,6 +397,31 @@ Buildkite #87 update:
     bash scripts/check.sh bazel` could not exercise Bazel locally because
     Bazel/Bazelisk is not installed on this host; it produced a skipped timing
     artifact. Buildkite remains the required Bazel verification surface.
+
+Buildkite #88 update:
+
+- Buildkite #88 was triggered for pushed head
+  `545fe2436b4a9314e5e57e56e600bf0d110d1e25`.
+- Result before cancellation: Bazel passed, confirming the symlinked Codex
+  session runfiles fix. Dashboard/report artifact review, security archive
+  fixtures, Linux smoke, macOS smoke, and the FreeBSD blocker artifact also
+  passed. Windows smoke produced successful setup/search/context/dashboard/
+  validate output and a timing artifact, but the job remained running.
+- Root cause: `ctx setup` correctly starts a localhost dashboard server.
+  Windows Buildkite can keep the job alive while the dashboard child process is
+  still within the product default one-hour idle timeout, even after the smoke
+  command has printed all success output.
+- Remediation: platform smoke jobs now set `CTX_DASHBOARD_IDLE_SECONDS=1`
+  around `ctx setup`. This keeps normal product behavior unchanged while CI
+  still proves dashboard startup and avoids waiting on the long-lived smoke
+  dashboard process.
+- The manager canceled #88 as obsolete after confirming it was still running on
+  the prior head.
+- Local validation:
+  - `bash scripts/check-buildkite-pipeline.sh` passed.
+  - `bash -n scripts/check.sh` passed.
+  - `CTX_ARTIFACT_DIR=target/ctx-artifacts/platform-smoke-idle-fix
+    bash scripts/check.sh platform-smoke` passed.
 
 Private hosted checkpoint:
 
