@@ -33,6 +33,28 @@ fn json_output(command: &mut Command) -> Value {
     serde_json::from_slice(&output).unwrap()
 }
 
+fn assert_omits_keys(value: &Value, forbidden_keys: &[&str]) {
+    match value {
+        Value::Object(map) => {
+            for key in forbidden_keys {
+                assert!(
+                    !map.contains_key(*key),
+                    "forbidden JSON key {key} appeared in {value:#}"
+                );
+            }
+            for nested in map.values() {
+                assert_omits_keys(nested, forbidden_keys);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                assert_omits_keys(item, forbidden_keys);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[test]
 fn help_exposes_only_search_mvp_commands() {
     let temp = tempdir();
@@ -238,74 +260,106 @@ fn fresh_home_search_mvp_flow() {
             "local agent history search is ready",
         ));
 
-    ctx(&temp)
-        .args(["sources", "--json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("codex"));
+    let setup_json = json_output(ctx(&temp).args(["setup", "--json"]));
+    assert_eq!(setup_json["schema_version"], 1);
+    assert_eq!(setup_json["network_required"], false);
+    assert_eq!(setup_json["repo_writes"], false);
 
-    ctx(&temp)
-        .args([
-            "import",
-            "--provider",
-            "codex",
-            "--path",
-            &fixture,
-            "--json",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("imported_sessions"))
-        .stdout(predicate::str::contains("source_files"))
-        .stdout(predicate::str::contains("source_bytes"));
+    let sources = json_output(ctx(&temp).args(["sources", "--json"]));
+    assert_eq!(sources["schema_version"], 1);
+    assert!(sources["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|source| source["provider"] == "codex"));
+
+    let import = json_output(ctx(&temp).args([
+        "import",
+        "--provider",
+        "codex",
+        "--path",
+        &fixture,
+        "--json",
+    ]));
+    assert_eq!(import["schema_version"], 1);
+    assert!(import["totals"]["imported_sessions"].as_u64().unwrap() > 0);
+    assert!(import["totals"]["source_files"].as_u64().unwrap() > 0);
+    assert!(import["totals"]["source_bytes"].as_u64().unwrap() > 0);
 
     let mut list_command = ctx(&temp);
     list_command.args(["list", "--json"]);
     let listed = json_output(&mut list_command);
-    let first_id = listed["items"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(listed["schema_version"], 1);
+    assert_omits_keys(&listed, &["record_id", "work_record_id", "kind"]);
+    assert_eq!(listed["items"][0]["item_type"], "agent_history");
+    let first_id = listed["items"][0]["item_id"].as_str().unwrap().to_owned();
+    assert_eq!(listed["items"][0]["id"], listed["items"][0]["item_id"]);
 
-    ctx(&temp)
-        .args(["search", "onboarding", "--json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("results"));
+    let search = json_output(ctx(&temp).args(["search", "onboarding", "--json"]));
+    assert_eq!(search["schema_version"], 1);
+    assert_eq!(search["share_safe"], false);
+    assert_omits_keys(
+        &search,
+        &["record_id", "work_record_id", "raw_source_path", "kind"],
+    );
+    assert!(search["results"][0]["item_id"].is_string());
+    assert_eq!(search["results"][0]["item_type"], "agent_history");
+    assert!(search["results"][0]["citations"][0]["item_id"].is_string());
+    assert!(search["results"][0]["citations"][0]["item_type"].is_string());
 
-    ctx(&temp)
-        .args(["search", "--file", "crates/foo/src/lib.rs", "--json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"query\": \"\""))
-        .stdout(predicate::str::contains("\"results\""));
+    let file_search =
+        json_output(ctx(&temp).args(["search", "--file", "crates/foo/src/lib.rs", "--json"]));
+    assert_eq!(file_search["query"], "");
+    assert!(file_search["results"].is_array());
 
-    ctx(&temp)
-        .args(["show", &first_id, "--json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(&first_id));
+    let show = json_output(ctx(&temp).args(["show", &first_id, "--json"]));
+    assert_eq!(show["schema_version"], 1);
+    assert_eq!(show["item"]["item_id"], first_id);
+    assert_eq!(show["item"]["item_type"], "agent_history");
+    assert_omits_keys(
+        &show,
+        &[
+            "record_id",
+            "work_record_id",
+            "kind",
+            "payload",
+            "payload_blob_id",
+            "dedupe_key",
+            "capture_source_id",
+        ],
+    );
+    assert!(show["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|event| event["item_type"] == "event" && event["preview"].is_string()));
 
     let mut context_command = ctx(&temp);
     context_command.args(["context", "onboarding", "--json"]);
     let context = json_output(&mut context_command);
     assert_eq!(context["schema_version"], 1);
     assert_eq!(context["filters"]["include_subagents"], true);
+    assert_eq!(context["share_safe"], false);
+    assert_omits_keys(
+        &context,
+        &["record_id", "work_record_id", "raw_source_path", "kind"],
+    );
+    assert!(context["results"][0]["item_id"].is_string());
+    assert_eq!(context["results"][0]["item_type"], "agent_history");
+    assert!(context["results"][0]["citations"][0]["item_id"].is_string());
+    assert!(context["results"][0]["citations"][0]["item_type"].is_string());
     assert!(context["results"][0].get("evidence").is_none());
     assert!(context["truncation"].get("omitted_evidence").is_none());
 
-    ctx(&temp)
-        .args(["status", "--json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("indexed_items"));
+    let status = json_output(ctx(&temp).args(["status", "--json"]));
+    assert_eq!(status["schema_version"], 1);
+    assert!(status["indexed_items"].as_u64().unwrap() > 0);
 
-    ctx(&temp)
-        .args(["doctor", "--json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"ok\": true"));
+    let doctor = json_output(ctx(&temp).args(["doctor", "--json"]));
+    assert_eq!(doctor["schema_version"], 1);
+    assert_eq!(doctor["ok"], true);
 
-    ctx(&temp)
-        .args(["validate", "--json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"valid\": true"));
+    let validate = json_output(ctx(&temp).args(["validate", "--json"]));
+    assert_eq!(validate["schema_version"], 1);
+    assert_eq!(validate["valid"], true);
 }
