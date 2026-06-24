@@ -431,57 +431,6 @@ validate_provider_live_e2e_lanes() {
   require_contains "${notes}" "Gemini CLI" "provider live E2E notes include Gemini CLI"
 }
 
-validate_dashboard_visual_evidence() {
-  local manifest="artifacts/buildkite/finished-product/dashboard-report-artifact-review/visual-evidence.json"
-  local status blocker screenshot_path
-
-  require_file "${manifest}"
-  require_file "artifacts/buildkite/finished-product/dashboard-report-artifact-review/screenshot-status.txt"
-  require_json_parser || return 0
-
-  require_manifest_value "${manifest}" ".schema_version" "1" "dashboard visual evidence records schema version"
-  require_manifest_value "${manifest}" ".kind" "dashboard_visual_evidence" "dashboard visual evidence records kind"
-  status="$(manifest_value "${manifest}" ".visual_status")"
-  case "${status}" in
-    captured)
-      require_manifest_value "${manifest}" ".screenshot_count" "12" "dashboard visual evidence records screenshot count"
-      for key in \
-        desktop_overview \
-        desktop_record_detail \
-        desktop_timeline \
-        desktop_evidence_failure \
-        desktop_search_timeline \
-        desktop_setup_health \
-        mobile_overview \
-        mobile_record_detail \
-        mobile_timeline \
-        mobile_evidence_failure \
-        mobile_search_timeline \
-        mobile_setup_health; do
-        screenshot_path="$(manifest_value "${manifest}" ".${key}")"
-        if [[ -z "${screenshot_path}" || "${screenshot_path}" = /* || "${screenshot_path}" == *..* ]]; then
-          fail_certificate "dashboard visual evidence ${key} must be a safe relative screenshot path"
-        else
-          require_file "artifacts/buildkite/finished-product/dashboard-report-artifact-review/${screenshot_path}"
-        fi
-      done
-      ;;
-    accepted_blocker)
-      blocker="$(manifest_value "${manifest}" ".accepted_visual_blocker")"
-      if [[ -z "${blocker}" ]]; then
-        fail_certificate "dashboard visual evidence accepted_blocker must include accepted_visual_blocker"
-      fi
-      require_contains \
-        "artifacts/buildkite/finished-product/dashboard-report-artifact-review/screenshot-status.txt" \
-        "accepted visual blocker:" \
-        "dashboard visual evidence records explicit accepted blocker"
-      ;;
-    *)
-      fail_certificate "dashboard visual evidence must be captured or accepted_blocker, got ${status:-<missing>}"
-      ;;
-  esac
-}
-
 validate_evidence() {
   validate_release_dry_run \
     "linux-x64" \
@@ -524,11 +473,7 @@ validate_evidence() {
   validate_provider_live_e2e_lanes
   require_summary_status "artifacts/buildkite/finished-product/rich-search-context/rich-search-context.json" "rich-search-context"
   require_file "artifacts/buildkite/finished-product/rich-search-context/rich-context.json"
-  require_summary_status "artifacts/buildkite/finished-product/dashboard-report-artifact-review/dashboard-report-artifact-review.json" "dashboard-report-artifact-review"
-  require_contains "artifacts/buildkite/finished-product/dashboard-report-artifact-review/report.json" '"record_count"' "dashboard/report artifact records report data"
-  validate_dashboard_visual_evidence
-  require_summary_status "artifacts/buildkite/finished-product/pr-publish-dry-run/pr-publish-dry-run.json" "pr-publish-dry-run"
-  require_contains "artifacts/buildkite/finished-product/pr-publish-dry-run/pr-comment-dry-run.md" "ctx-records:pr-comment:start" "PR publish artifact records dry-run marker"
+  require_summary_status "artifacts/buildkite/finished-product/search-mvp-package-audit/search-mvp-package-audit.json" "search-mvp-package-audit"
   require_summary_status "artifacts/buildkite/finished-product/security-archive-fixtures/security-archive-fixtures.json" "security-archive-fixtures"
   require_contains "artifacts/buildkite/finished-product/security-archive-fixtures/security-archive-fixtures.md" "Publishing: false" "security archive fixture records non-publishing status"
   require_summary_status "artifacts/buildkite/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.json" "jj-e2e-blocker-status"
@@ -591,9 +536,7 @@ write_certificate() {
 - Provider fixture import artifact: \`artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json\`
 - Provider live E2E lane definitions: \`artifacts/buildkite/provider-live-e2e-lanes/provider-live-e2e-lanes.json\`
 - Rich search/context artifact: \`artifacts/buildkite/finished-product/rich-search-context/rich-context.json\`
-- Dashboard/report artifact review: \`artifacts/buildkite/finished-product/dashboard-report-artifact-review/report.json\`
-- Dashboard visual evidence manifest: \`artifacts/buildkite/finished-product/dashboard-report-artifact-review/visual-evidence.json\`
-- PR publish dry-run artifact: \`artifacts/buildkite/finished-product/pr-publish-dry-run/pr-comment-dry-run.md\`
+- Search MVP package/content audit: \`artifacts/buildkite/finished-product/search-mvp-package-audit/search-mvp-package-audit.json\`
 - Security/malicious archive fixture artifact: \`artifacts/buildkite/finished-product/security-archive-fixtures/security-archive-fixtures.md\`
 - jj e2e blocker status artifact: \`artifacts/buildkite/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.txt\`
 - Installer dry-run smoke artifact: \`artifacts/buildkite/finished-product/installer-dry-run-smoke/install-dry-run.txt\`
@@ -647,9 +590,7 @@ EOF
     "provider_fixture_import": "artifacts/buildkite/finished-product/provider-fixtures/provider-fixtures.json",
     "provider_live_e2e_lane_definitions": "artifacts/buildkite/provider-live-e2e-lanes/provider-live-e2e-lanes.json",
     "rich_search_context": "artifacts/buildkite/finished-product/rich-search-context/rich-context.json",
-    "dashboard_report_artifact_review": "artifacts/buildkite/finished-product/dashboard-report-artifact-review/report.json",
-    "dashboard_visual_evidence": "artifacts/buildkite/finished-product/dashboard-report-artifact-review/visual-evidence.json",
-    "pr_publish_dry_run": "artifacts/buildkite/finished-product/pr-publish-dry-run/pr-comment-dry-run.md",
+    "search_mvp_package_audit": "artifacts/buildkite/finished-product/search-mvp-package-audit/search-mvp-package-audit.json",
     "security_archive_fixtures": "artifacts/buildkite/finished-product/security-archive-fixtures/security-archive-fixtures.md",
     "jj_e2e_blocker_status": "artifacts/buildkite/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.txt",
     "installer_dry_run_smoke": "artifacts/buildkite/finished-product/installer-dry-run-smoke/install-dry-run.txt",

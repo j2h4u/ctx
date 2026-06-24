@@ -4,9 +4,9 @@ sh_test(
     data = glob([
         "Cargo.lock",
         "Cargo.toml",
-        "apps/ctx-dashboard/dist/**",
         "crates/**",
         "docs/provider-support-matrix.json",
+        "scripts/audit-search-mvp-package.sh",
         "tests/**",
     ]),
 )

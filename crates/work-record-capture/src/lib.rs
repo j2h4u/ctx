@@ -4,7 +4,6 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use chrono::{DateTime, Utc};
@@ -15,7 +14,7 @@ use uuid::Uuid;
 use work_record_core::{
     inbox_dir as core_inbox_dir, new_id, redact_share_safe_markers, AgentType, CaptureEnvelope,
     CaptureProvider, CaptureSource, CaptureSourceDescriptor, CaptureSourceKind, Confidence,
-    EntityTimestamps, Event, EventRole, EventType, Evidence, Fidelity, ProviderCaptureEnvelope,
+    EntityTimestamps, Event, EventRole, EventType, Fidelity, ProviderCaptureEnvelope,
     ProviderCursorCheckpoint, ProviderCursorRange, ProviderEventEnvelope, ProviderRawRetention,
     ProviderRedactionBoundary, ProviderSessionEnvelope, ProviderSourceEnvelope,
     ProviderSourceTrust, RedactionState, Run, RunStatus, RunType, Session, SessionEdge,
@@ -25,8 +24,6 @@ use work_record_core::{
 use work_record_store::{Store, StoreError};
 
 pub const CAPTURE_SCHEMA_VERSION: u32 = 1;
-const SHIM_DIRECT_IMPORT_BUSY_TIMEOUT: Duration = Duration::from_millis(75);
-
 #[derive(Debug, Error)]
 pub enum CaptureError {
     #[error("io error: {0}")]
@@ -139,21 +136,6 @@ impl Default for FixtureOptions {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ShimCommandOptions {
-    pub provider: CaptureProvider,
-    pub command: Vec<String>,
-    pub exit_code: i32,
-    pub stdout: String,
-    pub stderr: String,
-    pub started_at: DateTime<Utc>,
-    pub duration_ms: i64,
-    pub machine_id: Option<String>,
-    pub cwd: Option<PathBuf>,
-    pub real_command: Option<PathBuf>,
-    pub shim_dir: Option<PathBuf>,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpoolCounts {
     pub pending: usize,
@@ -174,7 +156,6 @@ pub struct SpoolImportSummary {
     pub processed_files: usize,
     pub skipped_files: usize,
     pub imported_records: usize,
-    pub imported_evidence: usize,
     pub failed_files: usize,
     pub failures: Vec<SpoolImportFailure>,
 }
@@ -926,25 +907,14 @@ pub struct SpoolRepairSummary {
     pub retried_files: usize,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ShimCaptureSummary {
-    pub imported_records: usize,
-    pub imported_evidence: usize,
-    pub spooled: bool,
-    pub spool_path: Option<PathBuf>,
-    pub fallback_error: Option<String>,
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct ArchiveCounts {
     records: usize,
-    evidence: usize,
 }
 
 impl ArchiveCounts {
     fn add(&mut self, other: Self) {
         self.records += other.records;
-        self.evidence += other.evidence;
     }
 }
 
@@ -957,42 +927,6 @@ pub fn write_fixture(inbox: impl AsRef<Path>, options: FixtureOptions) -> Result
     let mut writer = SpoolWriter::create(inbox, &envelope.source.machine_id)?;
     writer.write_envelope(&envelope)?;
     writer.finish()
-}
-
-pub fn write_shim_command(inbox: impl AsRef<Path>, options: ShimCommandOptions) -> Result<PathBuf> {
-    let envelope = shim_command_envelope(options)?;
-    let mut writer = SpoolWriter::create(inbox, &envelope.source.machine_id)?;
-    writer.write_envelope(&envelope)?;
-    writer.finish()
-}
-
-pub fn capture_shim_command(
-    inbox: impl AsRef<Path>,
-    db_path: impl AsRef<Path>,
-    options: ShimCommandOptions,
-) -> Result<ShimCaptureSummary> {
-    let envelope = shim_command_envelope(options)?;
-    match import_envelope_direct(db_path.as_ref(), &envelope) {
-        Ok(counts) => Ok(ShimCaptureSummary {
-            imported_records: counts.records,
-            imported_evidence: counts.evidence,
-            spooled: false,
-            spool_path: None,
-            fallback_error: None,
-        }),
-        Err(err) => {
-            let mut writer = SpoolWriter::create(inbox, &envelope.source.machine_id)?;
-            writer.write_envelope(&envelope)?;
-            let spool_path = writer.finish()?;
-            Ok(ShimCaptureSummary {
-                imported_records: 0,
-                imported_evidence: 0,
-                spooled: true,
-                spool_path: Some(spool_path),
-                fallback_error: Some(err.to_string()),
-            })
-        }
-    }
 }
 
 pub fn fixture_envelope(options: FixtureOptions) -> Result<CaptureEnvelope> {
@@ -1039,71 +973,6 @@ pub fn fixture_envelope(options: FixtureOptions) -> Result<CaptureEnvelope> {
         payload,
         payload_hash,
         fidelity: Fidelity::Imported,
-    })
-}
-
-pub fn shim_command_envelope(options: ShimCommandOptions) -> Result<CaptureEnvelope> {
-    let machine_id = options.machine_id.unwrap_or_else(default_machine_id);
-    let cwd_path = match options.cwd {
-        Some(path) => path,
-        None => env::current_dir()?,
-    };
-    let cwd = cwd_path.display().to_string();
-    let command = options.command.join(" ");
-    let provider = options.provider;
-    let dedupe_key = format!(
-        "shim:{}:{}:{}:{}",
-        provider.as_str(),
-        options.started_at.timestamp_millis(),
-        std::process::id(),
-        new_id()
-    );
-    let payload = json!({
-        "kind": "evidence",
-        "title": format!("{} command: {}", provider.as_str(), command),
-        "body": format!(
-            "Captured local {} shim command in {} with exit code {}.",
-            provider.as_str(),
-            cwd,
-            options.exit_code
-        ),
-        "tags": ["capture", "shim", provider.as_str()],
-        "record_kind": "command",
-        "workspace": cwd,
-        "command": command,
-        "exit_code": options.exit_code,
-        "stdout": options.stdout,
-        "stderr": options.stderr,
-        "started_at": options.started_at,
-        "duration_ms": options.duration_ms,
-    });
-    let payload_hash = Some(compute_payload_hash(&payload)?);
-
-    Ok(CaptureEnvelope {
-        schema_version: CAPTURE_SCHEMA_VERSION,
-        capture_event_id: new_id(),
-        dedupe_key,
-        source: CaptureSourceDescriptor {
-            kind: CaptureSourceKind::Shim,
-            provider,
-            machine_id,
-            process_id: Some(std::process::id()),
-            cwd: Some(cwd.clone()),
-            raw_source_path: options
-                .real_command
-                .as_ref()
-                .map(|path| path.display().to_string()),
-            external_session_id: None,
-        },
-        occurred_at: options.started_at,
-        cwd: Some(cwd),
-        env_session_hints: json!({
-            "shim_dir": options.shim_dir.map(|path| path.display().to_string()),
-            "real_command": options.real_command.map(|path| path.display().to_string()),
-        }),
-        payload,
-        payload_hash,
-        fidelity: Fidelity::Partial,
     })
 }
 
@@ -1154,7 +1023,6 @@ pub fn import_spool(inbox: impl AsRef<Path>, store: &mut Store) -> Result<SpoolI
                 fs::rename(&processing, done)?;
                 summary.processed_files += 1;
                 summary.imported_records += counts.records;
-                summary.imported_evidence += counts.evidence;
             }
             Err(err) => {
                 let failed = state_path(&processing, ".failed")?;
@@ -2971,8 +2839,6 @@ pub fn archive_from_envelopes(envelopes: &[CaptureEnvelope]) -> Result<WorkRecor
         schema_version: 1,
         version: 1,
         records: Vec::new(),
-        evidence: Vec::new(),
-        artifacts: Vec::new(),
         ..WorkRecordArchive::default()
     };
 
@@ -2981,43 +2847,30 @@ pub fn archive_from_envelopes(envelopes: &[CaptureEnvelope]) -> Result<WorkRecor
         if let Some(archive_value) = envelope.payload.get("archive") {
             let nested: WorkRecordArchive = serde_json::from_value(archive_value.clone())?;
             archive.records.extend(nested.records);
-            archive.evidence.extend(nested.evidence);
-            archive.artifacts.extend(nested.artifacts);
+            archive.capture_sources.extend(nested.capture_sources);
+            archive.sessions.extend(nested.sessions);
+            archive.runs.extend(nested.runs);
+            archive.events.extend(nested.events);
+            archive.artifact_records.extend(nested.artifact_records);
+            archive.vcs_workspaces.extend(nested.vcs_workspaces);
+            archive.vcs_changes.extend(nested.vcs_changes);
+            archive.work_record_links.extend(nested.work_record_links);
+            archive.summaries.extend(nested.summaries);
+            archive.files_touched.extend(nested.files_touched);
             continue;
         }
 
-        let evidence_value = envelope
-            .payload
-            .get("evidence")
-            .filter(|value| value.is_object());
         let record_value = envelope
             .payload
             .get("record")
             .filter(|value| value.is_object());
-        let should_create_record = record_value.is_some()
-            || payload_has_record_fields(&envelope.payload)
-            || evidence_value.is_none();
+        let should_create_record =
+            record_value.is_some() || payload_has_record_fields(&envelope.payload);
 
-        let record_id = if should_create_record {
+        if should_create_record {
             let value = record_value.unwrap_or(&envelope.payload);
             let record = record_from_envelope(envelope, value)?;
-            let id = record.id;
             archive.records.push(record);
-            Some(id)
-        } else {
-            None
-        };
-
-        if let Some(value) = evidence_value {
-            archive
-                .evidence
-                .push(evidence_from_envelope(envelope, value, record_id)?);
-        } else if payload_has_evidence_fields(&envelope.payload) {
-            archive.evidence.push(evidence_from_envelope(
-                envelope,
-                &envelope.payload,
-                record_id,
-            )?);
         }
     }
 
@@ -3052,12 +2905,6 @@ fn import_processing_file(path: &Path, store: &mut Store) -> Result<ArchiveCount
     Ok(counts)
 }
 
-fn import_envelope_direct(db_path: &Path, envelope: &CaptureEnvelope) -> Result<ArchiveCounts> {
-    let mut store = Store::open_with_busy_timeout(db_path, SHIM_DIRECT_IMPORT_BUSY_TIMEOUT)
-        .map_err(CaptureError::from)?;
-    import_envelope(&mut store, envelope)
-}
-
 fn import_envelope(store: &mut Store, envelope: &CaptureEnvelope) -> Result<ArchiveCounts> {
     let archive = archive_from_envelopes(std::slice::from_ref(envelope))?;
     let source_id = stable_capture_uuid(&envelope.dedupe_key, "source");
@@ -3071,7 +2918,6 @@ fn import_envelope(store: &mut Store, envelope: &CaptureEnvelope) -> Result<Arch
     )?;
     Ok(ArchiveCounts {
         records: archive.records.len(),
-        evidence: archive.evidence.len(),
     })
 }
 
@@ -3167,9 +3013,7 @@ fn record_from_envelope(envelope: &CaptureEnvelope, value: &Value) -> Result<Wor
     });
     let kind = string_field(value, "record_kind")
         .or_else(|| string_field(value, "work_record_kind"))
-        .or_else(|| {
-            string_field(value, "kind").filter(|kind| kind != "work_record" && kind != "evidence")
-        })
+        .or_else(|| string_field(value, "kind").filter(|kind| kind != "work_record"))
         .unwrap_or_else(|| "capture".to_owned());
     let workspace = string_field(value, "workspace")
         .or_else(|| envelope.cwd.clone())
@@ -3184,39 +3028,8 @@ fn record_from_envelope(envelope: &CaptureEnvelope, value: &Value) -> Result<Wor
         tags,
         kind,
         workspace,
-        pr_url: string_field(value, "pr_url"),
         created_at,
         updated_at,
-    })
-}
-
-fn evidence_from_envelope(
-    envelope: &CaptureEnvelope,
-    value: &Value,
-    default_record_id: Option<Uuid>,
-) -> Result<Evidence> {
-    let id = uuid_field(value, "id")?
-        .unwrap_or_else(|| stable_capture_uuid(&envelope.dedupe_key, "evidence"));
-    let record_id = uuid_field(value, "record_id")?.or(default_record_id);
-    let command = string_field(value, "command")
-        .unwrap_or_else(|| format!("captured {} event", envelope.source.provider));
-    let exit_code = i64_field(value, "exit_code")?
-        .map(|value| value as i32)
-        .unwrap_or(0);
-    let stdout = string_field(value, "stdout").unwrap_or_default();
-    let stderr = string_field(value, "stderr").unwrap_or_default();
-    let started_at = datetime_field(value, "started_at")?.unwrap_or(envelope.occurred_at);
-    let duration_ms = i64_field(value, "duration_ms")?.unwrap_or(0);
-
-    Ok(Evidence {
-        id,
-        record_id,
-        command,
-        exit_code,
-        stdout,
-        stderr,
-        started_at,
-        duration_ms,
     })
 }
 
@@ -3261,18 +3074,6 @@ fn string_array_field(value: &Value, field: &str) -> Result<Option<Vec<String>>>
         Some(Value::Null) | None => Ok(None),
         Some(_) => Err(CaptureError::InvalidPayload(format!(
             "{field} must be an array of strings"
-        ))),
-    }
-}
-
-fn i64_field(value: &Value, field: &str) -> Result<Option<i64>> {
-    match value.get(field) {
-        Some(Value::Number(number)) => number.as_i64().map(Some).ok_or_else(|| {
-            CaptureError::InvalidPayload(format!("{field} must be a signed integer"))
-        }),
-        Some(Value::Null) | None => Ok(None),
-        Some(_) => Err(CaptureError::InvalidPayload(format!(
-            "{field} must be a signed integer"
         ))),
     }
 }
@@ -3543,21 +3344,6 @@ fn payload_has_record_fields(value: &Value) -> bool {
         "record_kind",
         "work_record_kind",
         "workspace",
-        "pr_url",
-    ]
-    .iter()
-    .any(|field| value.get(*field).is_some())
-}
-
-fn payload_has_evidence_fields(value: &Value) -> bool {
-    [
-        "command",
-        "exit_code",
-        "stdout",
-        "stderr",
-        "started_at",
-        "duration_ms",
-        "record_id",
     ]
     .iter()
     .any(|field| value.get(*field).is_some())
@@ -3623,24 +3409,6 @@ mod tests {
             occurred_at: DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
-        }
-    }
-
-    fn shim_options(command: &[&str], exit_code: i32) -> ShimCommandOptions {
-        ShimCommandOptions {
-            provider: CaptureProvider::Git,
-            command: command.iter().map(|part| (*part).to_owned()).collect(),
-            exit_code,
-            stdout: "shim stdout".into(),
-            stderr: "shim stderr".into(),
-            started_at: DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z")
-                .unwrap()
-                .with_timezone(&Utc),
-            duration_ms: 10,
-            machine_id: Some("test-machine".into()),
-            cwd: Some(PathBuf::from("/tmp/work")),
-            real_command: Some(PathBuf::from("/usr/bin/git")),
-            shim_dir: Some(PathBuf::from("/tmp/shims")),
         }
     }
 
@@ -3773,91 +3541,6 @@ mod tests {
         assert_eq!(records[0].id.get_version_num(), 7);
         assert_eq!(records[0].title, "First title");
         assert_eq!(spool_counts(&inbox).unwrap().done, 2);
-    }
-
-    #[test]
-    fn shim_import_persists_capture_source_and_source_links() {
-        let temp = tempdir();
-        let inbox = temp.path().join("inbox");
-        let db_path = temp.path().join("work.sqlite");
-        write_shim_command(&inbox, shim_options(&["git", "status"], 0)).unwrap();
-        let mut store = Store::open(&db_path).unwrap();
-
-        let summary = import_spool(&inbox, &mut store).unwrap();
-        assert_eq!(summary.failed_files, 0);
-        assert_eq!(summary.imported_records, 1);
-        assert_eq!(summary.imported_evidence, 1);
-        drop(store);
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let (source_count, provider, kind, cwd): (i64, String, String, String) = conn
-            .query_row(
-                "SELECT COUNT(*), provider, kind, cwd FROM capture_sources",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-        assert_eq!(source_count, 1);
-        assert_eq!(provider, "git");
-        assert_eq!(kind, "shim");
-        assert_eq!(cwd, "/tmp/work");
-
-        let source_id: String = conn
-            .query_row("SELECT id FROM capture_sources", [], |row| row.get(0))
-            .unwrap();
-        let record_source_id: String = conn
-            .query_row("SELECT source_id FROM work_records", [], |row| row.get(0))
-            .unwrap();
-        let evidence_source_id: String = conn
-            .query_row("SELECT source_id FROM evidence", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(record_source_id, source_id);
-        assert_eq!(evidence_source_id, source_id);
-    }
-
-    #[test]
-    fn shim_capture_imports_directly_when_database_is_available() {
-        let temp = tempdir();
-        let inbox = temp.path().join("inbox");
-        let db_path = temp.path().join("work.sqlite");
-
-        let summary =
-            capture_shim_command(&inbox, &db_path, shim_options(&["git", "status"], 0)).unwrap();
-
-        assert!(!summary.spooled);
-        assert_eq!(summary.imported_records, 1);
-        assert_eq!(summary.imported_evidence, 1);
-        assert_eq!(spool_counts(&inbox).unwrap().pending, 0);
-        let store = Store::open(&db_path).unwrap();
-        assert_eq!(store.list_records(10).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn shim_capture_falls_back_to_spool_when_database_is_locked() {
-        let temp = tempdir();
-        let inbox = temp.path().join("inbox");
-        let db_path = temp.path().join("work.sqlite");
-        drop(Store::open(&db_path).unwrap());
-        let lock = rusqlite::Connection::open(&db_path).unwrap();
-        lock.execute_batch("BEGIN IMMEDIATE;").unwrap();
-
-        let summary =
-            capture_shim_command(&inbox, &db_path, shim_options(&["git", "status"], 0)).unwrap();
-
-        assert!(summary.spooled);
-        assert!(summary.spool_path.as_ref().unwrap().exists());
-        assert!(summary
-            .fallback_error
-            .as_deref()
-            .unwrap()
-            .contains("sqlite error"));
-        assert_eq!(spool_counts(&inbox).unwrap().pending, 1);
-
-        drop(lock);
-        let mut store = Store::open(&db_path).unwrap();
-        let import = import_spool(&inbox, &mut store).unwrap();
-        assert_eq!(import.imported_records, 1);
-        assert_eq!(import.imported_evidence, 1);
     }
 
     #[test]

@@ -1,4 +1,7 @@
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use chrono::Utc;
 use serde::Serialize;
@@ -6,9 +9,8 @@ use thiserror::Error;
 use uuid::Uuid;
 use work_record_core::{
     redact_share_safe_markers, AgentContextPacket, Artifact, ContextBudget, ContextCitation,
-    ContextCitationType, ContextEvidence, ContextLinks, ContextPagination, ContextResult,
-    ContextTruncation, Event, Evidence, EvidenceFreshness, EvidenceKind, EvidenceStatus,
-    FileTouched, PullRequest, RedactionState, Run, Session, Summary, VcsChange, Visibility,
+    ContextCitationType, ContextLinks, ContextPagination, ContextResult, ContextTruncation, Event,
+    EventType, FileTouched, RedactionState, Run, Session, Summary, VcsChange, Visibility,
     WorkRecord,
 };
 use work_record_store::Store;
@@ -17,7 +19,6 @@ pub const AGENT_CONTEXT_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_MAX_TOKENS: u32 = 12_000;
 pub const DEFAULT_RESULT_LIMIT: usize = 10;
 pub const DEFAULT_SNIPPET_CHARS: usize = 320;
-pub const DEFAULT_EVIDENCE_PER_RESULT: usize = 4;
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -32,8 +33,7 @@ pub struct PacketOptions {
     pub limit: usize,
     pub max_tokens: u32,
     pub snippet_chars: usize,
-    pub evidence_per_result: usize,
-    pub dashboard_base_url: Option<String>,
+    pub filters: SearchFilters,
 }
 
 impl Default for PacketOptions {
@@ -42,8 +42,39 @@ impl Default for PacketOptions {
             limit: DEFAULT_RESULT_LIMIT,
             max_tokens: DEFAULT_MAX_TOKENS,
             snippet_chars: DEFAULT_SNIPPET_CHARS,
-            evidence_per_result: DEFAULT_EVIDENCE_PER_RESULT,
-            dashboard_base_url: None,
+            filters: SearchFilters::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SearchFilters {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<work_record_core::CaptureProvider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<chrono::DateTime<Utc>>,
+    #[serde(default)]
+    pub primary_only: bool,
+    #[serde(default)]
+    pub include_subagents: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<EventType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+impl Default for SearchFilters {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            repo: None,
+            since: None,
+            primary_only: false,
+            include_subagents: true,
+            event_type: None,
+            file: None,
         }
     }
 }
@@ -52,6 +83,7 @@ impl Default for PacketOptions {
 pub struct SearchPacket {
     pub schema_version: u32,
     pub query: String,
+    pub filters: SearchFilters,
     pub generated_at: chrono::DateTime<Utc>,
     pub results: Vec<SearchPacketResult>,
     pub pagination: ContextPagination,
@@ -61,9 +93,27 @@ pub struct SearchPacket {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SearchPacketResult {
     pub record_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_seq: Option<u64>,
     pub title: String,
     pub snippet: String,
     pub rank: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<work_record_core::CaptureProvider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<chrono::DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_source_exists: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
     #[serde(default)]
     pub why_matched: Vec<String>,
     #[serde(default)]
@@ -81,19 +131,19 @@ struct Candidate {
     score: f32,
     why_matched: Vec<String>,
     citations: Vec<ContextCitation>,
+    primary_hit: Option<HitMetadata>,
 }
 
 #[derive(Debug, Clone, Default)]
 struct RecordContext {
-    evidence: Vec<Evidence>,
     sessions: Vec<Session>,
     runs: Vec<Run>,
     events: Vec<Event>,
     artifacts: Vec<Artifact>,
     files_touched: Vec<FileTouched>,
     vcs_changes: Vec<VcsChange>,
-    pull_requests: Vec<PullRequest>,
     summaries: Vec<Summary>,
+    sources: BTreeMap<Uuid, work_record_core::CaptureSource>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +152,20 @@ struct SearchSection {
     weight: f32,
     text: String,
     citation: ContextCitation,
+    hit: HitMetadata,
+}
+
+#[derive(Debug, Clone)]
+struct HitMetadata {
+    time: chrono::DateTime<Utc>,
+    provider: Option<work_record_core::CaptureProvider>,
+    session_id: Option<Uuid>,
+    event_id: Option<Uuid>,
+    event_seq: Option<u64>,
+    cwd: Option<String>,
+    raw_source_path: Option<String>,
+    raw_source_exists: Option<bool>,
+    cursor: Option<String>,
 }
 
 pub fn context_packet(
@@ -113,7 +177,6 @@ pub fn context_packet(
     let candidates = ranked_candidates(store, query, &options)?;
     let mut truncation = ContextTruncation::default();
     let mut estimated_tokens = base_context_tokens(query);
-    let mut omitted_evidence = 0_u32;
     let mut results = Vec::new();
 
     for candidate in candidates.iter().take(options.limit) {
@@ -123,12 +186,6 @@ pub fn context_packet(
             query.unwrap_or_default(),
             options.snippet_chars,
         );
-        let evidence = context_evidence(&candidate.context.evidence, options.evidence_per_result);
-        if candidate.context.evidence.len() > evidence.len() {
-            omitted_evidence = omitted_evidence
-                .saturating_add((candidate.context.evidence.len() - evidence.len()) as u32);
-        }
-
         let mut result = ContextResult {
             record_id: candidate.record.id,
             title: safe_snippet(&candidate.record.title, 240),
@@ -136,7 +193,6 @@ pub fn context_packet(
             rank: candidate.score,
             why_matched: candidate.why_matched.clone(),
             citations: candidate.citations.clone(),
-            evidence,
             links: links_for(&candidate.record, &options),
             visibility: Visibility::LocalOnly,
         };
@@ -172,19 +228,12 @@ pub fn context_packet(
             truncation.reason = Some("limit".to_owned());
         }
     }
-    truncation.omitted_evidence = omitted_evidence;
-    if omitted_evidence > 0 {
-        truncation.truncated = true;
-        if truncation.reason.is_none() {
-            truncation.reason = Some("evidence_limit".to_owned());
-        }
-    }
-
     let has_more = limited_by_count;
     let cursor_offset = results.len();
     Ok(AgentContextPacket {
         schema_version: AGENT_CONTEXT_SCHEMA_VERSION,
         query: query.map(str::to_owned),
+        filters: serde_json::to_value(&options.filters).unwrap_or_else(|_| serde_json::json!({})),
         generated_at: Utc::now(),
         budget: ContextBudget {
             max_tokens: options.max_tokens,
@@ -205,6 +254,12 @@ pub fn search_packet(store: &Store, query: &str, options: &PacketOptions) -> Res
     for candidate in candidates.iter().take(options.limit) {
         results.push(SearchPacketResult {
             record_id: candidate.record.id,
+            session_id: candidate
+                .primary_hit
+                .as_ref()
+                .and_then(|hit| hit.session_id),
+            event_id: candidate.primary_hit.as_ref().and_then(|hit| hit.event_id),
+            event_seq: candidate.primary_hit.as_ref().and_then(|hit| hit.event_seq),
             title: safe_snippet(&candidate.record.title, 240),
             snippet: search_snippet(
                 &candidate.record,
@@ -213,6 +268,24 @@ pub fn search_packet(store: &Store, query: &str, options: &PacketOptions) -> Res
                 options.snippet_chars,
             ),
             rank: candidate.score,
+            provider: candidate.primary_hit.as_ref().and_then(|hit| hit.provider),
+            timestamp: candidate.primary_hit.as_ref().map(|hit| hit.time),
+            cwd: candidate
+                .primary_hit
+                .as_ref()
+                .and_then(|hit| hit.cwd.clone()),
+            raw_source_path: candidate
+                .primary_hit
+                .as_ref()
+                .and_then(|hit| hit.raw_source_path.clone()),
+            raw_source_exists: candidate
+                .primary_hit
+                .as_ref()
+                .and_then(|hit| hit.raw_source_exists),
+            cursor: candidate
+                .primary_hit
+                .as_ref()
+                .and_then(|hit| hit.cursor.clone()),
             why_matched: candidate.why_matched.clone(),
             citations: candidate.citations.clone(),
             links: links_for(&candidate.record, &options),
@@ -231,6 +304,7 @@ pub fn search_packet(store: &Store, query: &str, options: &PacketOptions) -> Res
     Ok(SearchPacket {
         schema_version: AGENT_CONTEXT_SCHEMA_VERSION,
         query: query.to_owned(),
+        filters: options.filters,
         generated_at: Utc::now(),
         results,
         pagination: pagination(Some(cursor_offset), has_more),
@@ -242,35 +316,12 @@ pub fn redacted_snippet(input: &str, max_chars: usize) -> String {
     safe_snippet(input, max_chars)
 }
 
-pub fn share_safe_dashboard_base_url(value: &str) -> Option<String> {
-    let trimmed = value.trim().trim_end_matches('/');
-    if trimmed.is_empty()
-        || trimmed.contains('@')
-        || trimmed.contains('?')
-        || trimmed.contains('#')
-        || trimmed.split_once("://").is_none()
-    {
-        return None;
-    }
-
-    let (scheme, rest) = trimmed.split_once("://")?;
-    if !matches!(scheme, "http" | "https") || rest.is_empty() || rest.starts_with('/') {
-        return None;
-    }
-
-    Some(trimmed.to_owned())
-}
-
 fn normalized_options(options: &PacketOptions) -> PacketOptions {
     PacketOptions {
         limit: options.limit.max(1),
         max_tokens: options.max_tokens.max(32),
         snippet_chars: options.snippet_chars.clamp(32, 2_000),
-        evidence_per_result: options.evidence_per_result,
-        dashboard_base_url: options
-            .dashboard_base_url
-            .as_deref()
-            .and_then(share_safe_dashboard_base_url),
+        filters: options.filters.clone(),
     }
 }
 
@@ -279,7 +330,14 @@ fn ranked_candidates(
     query: Option<&str>,
     options: &PacketOptions,
 ) -> Result<Vec<Candidate>> {
-    let fetch_limit = options.limit.saturating_add(1);
+    let fetch_limit = if has_filters(&options.filters) {
+        options
+            .limit
+            .saturating_mul(25)
+            .clamp(options.limit + 1, 500)
+    } else {
+        options.limit.saturating_add(1)
+    };
     let mut records = Vec::<WorkRecord>::new();
     let mut seen = BTreeSet::<Uuid>::new();
 
@@ -300,6 +358,9 @@ fn ranked_candidates(
     let mut candidates = Vec::new();
     for record in records {
         let context = hydrate_record_context(store, record.id)?;
+        if !record_matches_filters(&record, &context, &options.filters) {
+            continue;
+        }
         let analysis = analyze_record(&record, &context, &terms);
         if terms.is_empty() || analysis.score > 0.0 {
             candidates.push(Candidate {
@@ -308,6 +369,7 @@ fn ranked_candidates(
                 score: analysis.score,
                 why_matched: analysis.why_matched,
                 citations: analysis.citations,
+                primary_hit: analysis.primary_hit,
             });
         }
     }
@@ -324,16 +386,65 @@ fn ranked_candidates(
 }
 
 fn hydrate_record_context(store: &Store, record_id: Uuid) -> Result<RecordContext> {
+    let sessions = store.sessions_for_record(record_id)?;
+    let runs = store.runs_for_record(record_id)?;
+    let events = store.events_for_record(record_id)?;
+    let artifacts = store.artifacts_for_record(record_id)?;
+    let files_touched = store.files_touched_for_record(record_id)?;
+    let vcs_changes = store.vcs_changes_for_record(record_id)?;
+    let summaries = store.summaries_for_record(record_id)?;
+    let mut source_ids = BTreeSet::new();
+    for session in &sessions {
+        if let Some(id) = session.capture_source_id {
+            source_ids.insert(id);
+        }
+    }
+    for run in &runs {
+        if let Some(id) = run.source_id {
+            source_ids.insert(id);
+        }
+    }
+    for event in &events {
+        if let Some(id) = event.capture_source_id {
+            source_ids.insert(id);
+        }
+    }
+    for artifact in &artifacts {
+        if let Some(id) = artifact.source_id {
+            source_ids.insert(id);
+        }
+    }
+    for file in &files_touched {
+        if let Some(id) = file.source_id {
+            source_ids.insert(id);
+        }
+    }
+    for change in &vcs_changes {
+        if let Some(id) = change.source_id {
+            source_ids.insert(id);
+        }
+    }
+    for summary in &summaries {
+        if let Some(id) = summary.source_id {
+            source_ids.insert(id);
+        }
+    }
+    let mut sources = BTreeMap::new();
+    for source_id in source_ids {
+        if let Ok(source) = store.get_capture_source(source_id) {
+            sources.insert(source_id, source);
+        }
+    }
+
     Ok(RecordContext {
-        evidence: store.evidence_for_record(record_id)?,
-        sessions: store.sessions_for_record(record_id)?,
-        runs: store.runs_for_record(record_id)?,
-        events: store.events_for_record(record_id)?,
-        artifacts: store.artifacts_for_record(record_id)?,
-        files_touched: store.files_touched_for_record(record_id)?,
-        vcs_changes: store.vcs_changes_for_record(record_id)?,
-        pull_requests: store.pull_requests_for_record(record_id)?,
-        summaries: store.summaries_for_record(record_id)?,
+        sessions,
+        runs,
+        events,
+        artifacts,
+        files_touched,
+        vcs_changes,
+        summaries,
+        sources,
     })
 }
 
@@ -341,6 +452,7 @@ struct MatchAnalysis {
     score: f32,
     why_matched: Vec<String>,
     citations: Vec<ContextCitation>,
+    primary_hit: Option<HitMetadata>,
 }
 
 fn analyze_record(record: &WorkRecord, context: &RecordContext, terms: &[String]) -> MatchAnalysis {
@@ -356,21 +468,41 @@ fn analyze_record(record: &WorkRecord, context: &RecordContext, terms: &[String]
             ContextCitation {
                 citation_type: ContextCitationType::WorkRecord,
                 id: record.id,
-                label: "recent work record".to_owned(),
+                label: "recent session".to_owned(),
                 time: record.updated_at,
+                provider: None,
+                session_id: None,
+                event_seq: None,
+                raw_source_path: None,
+                raw_source_exists: None,
+                cursor: None,
             },
+            &empty_hit(record.updated_at),
         );
         return MatchAnalysis {
             score: 1.0,
             why_matched: why,
             citations,
+            primary_hit: None,
         };
     }
 
+    let mut primary_hit = None;
+    let mut primary_weight = f32::MIN;
     for section in search_sections(record, context) {
         if matches_terms(&section.text, terms) {
             score += section.weight;
-            add_match(&mut why, &mut citations, section.reason, section.citation);
+            if section.weight > primary_weight {
+                primary_weight = section.weight;
+                primary_hit = Some(section.hit.clone());
+            }
+            add_match(
+                &mut why,
+                &mut citations,
+                section.reason,
+                section.citation,
+                &section.hit,
+            );
         }
     }
 
@@ -378,6 +510,7 @@ fn analyze_record(record: &WorkRecord, context: &RecordContext, terms: &[String]
         score,
         why_matched: why,
         citations,
+        primary_hit,
     }
 }
 
@@ -385,11 +518,18 @@ fn add_match(
     why: &mut Vec<String>,
     citations: &mut Vec<ContextCitation>,
     reason: &str,
-    citation: ContextCitation,
+    mut citation: ContextCitation,
+    hit: &HitMetadata,
 ) {
     if !why.iter().any(|value| value == reason) {
         why.push(reason.to_owned());
     }
+    citation.provider = hit.provider;
+    citation.session_id = hit.session_id;
+    citation.event_seq = hit.event_seq;
+    citation.raw_source_path = hit.raw_source_path.clone();
+    citation.raw_source_exists = hit.raw_source_exists;
+    citation.cursor = hit.cursor.clone();
     if !citations.iter().any(|existing| {
         existing.citation_type == citation.citation_type && existing.id == citation.id
     }) {
@@ -399,6 +539,7 @@ fn add_match(
 
 fn search_sections(record: &WorkRecord, context: &RecordContext) -> Vec<SearchSection> {
     let mut sections = Vec::new();
+    let record_hit = empty_hit(record.updated_at);
     sections.push(SearchSection {
         reason: "title",
         weight: 8.0,
@@ -406,9 +547,10 @@ fn search_sections(record: &WorkRecord, context: &RecordContext) -> Vec<SearchSe
         citation: citation(
             ContextCitationType::WorkRecord,
             record.id,
-            "work record title",
+            "session title",
             record.updated_at,
         ),
+        hit: record_hit.clone(),
     });
     sections.push(SearchSection {
         reason: "primary_user_message",
@@ -417,9 +559,10 @@ fn search_sections(record: &WorkRecord, context: &RecordContext) -> Vec<SearchSe
         citation: citation(
             ContextCitationType::WorkRecord,
             record.id,
-            "record summary",
+            "session text",
             record.updated_at,
         ),
+        hit: record_hit.clone(),
     });
     for tag in &record.tags {
         sections.push(SearchSection {
@@ -429,60 +572,14 @@ fn search_sections(record: &WorkRecord, context: &RecordContext) -> Vec<SearchSe
             citation: citation(
                 ContextCitationType::WorkRecord,
                 record.id,
-                "record tag",
+                "session tag",
                 record.updated_at,
             ),
+            hit: record_hit.clone(),
         });
     }
-    if let Some(url) = &record.pr_url {
-        sections.push(SearchSection {
-            reason: "pr_link",
-            weight: 2.0,
-            text: url.clone(),
-            citation: citation(
-                ContextCitationType::WorkRecord,
-                record.id,
-                "linked pull request",
-                record.updated_at,
-            ),
-        });
-    }
-
-    for item in &context.evidence {
-        let failed = item.exit_code != 0;
-        sections.push(SearchSection {
-            reason: if failed {
-                "failed_command"
-            } else {
-                "evidence_command"
-            },
-            weight: if failed { 4.0 } else { 2.0 },
-            text: item.command.clone(),
-            citation: citation(
-                ContextCitationType::Evidence,
-                item.id,
-                "evidence command",
-                item.started_at,
-            ),
-        });
-        sections.push(SearchSection {
-            reason: if failed {
-                "failed_evidence_output"
-            } else {
-                "evidence_output"
-            },
-            weight: if failed { 5.0 } else { 3.0 },
-            text: format!("{} {}", item.stdout, item.stderr),
-            citation: citation(
-                ContextCitationType::Evidence,
-                item.id,
-                "evidence output",
-                item.started_at,
-            ),
-        });
-    }
-
     for session in &context.sessions {
+        let hit = session_hit(session, context);
         sections.push(SearchSection {
             reason: "session_metadata",
             weight: 2.5,
@@ -500,10 +597,12 @@ fn search_sections(record: &WorkRecord, context: &RecordContext) -> Vec<SearchSe
                 "session",
                 session.started_at,
             ),
+            hit,
         });
     }
 
     for run in &context.runs {
+        let hit = run_hit(run, context);
         sections.push(SearchSection {
             reason: "run_command",
             weight: if run.exit_code.unwrap_or(0) == 0 {
@@ -523,11 +622,13 @@ fn search_sections(record: &WorkRecord, context: &RecordContext) -> Vec<SearchSe
                 "run command",
                 run.started_at,
             ),
+            hit,
         });
     }
 
     for event in &context.events {
         let event_text = event_text(event);
+        let hit = event_hit(event, context);
         sections.push(SearchSection {
             reason: match event.event_type {
                 work_record_core::EventType::Message => "message",
@@ -546,10 +647,12 @@ fn search_sections(record: &WorkRecord, context: &RecordContext) -> Vec<SearchSe
                 "event",
                 event.occurred_at,
             ),
+            hit,
         });
     }
 
     for artifact in &context.artifacts {
+        let hit = artifact_hit(artifact, context);
         sections.push(SearchSection {
             reason: "artifact",
             weight: 2.5,
@@ -565,10 +668,12 @@ fn search_sections(record: &WorkRecord, context: &RecordContext) -> Vec<SearchSe
                 "artifact",
                 artifact.timestamps.updated_at,
             ),
+            hit,
         });
     }
 
     for file in &context.files_touched {
+        let hit = file_hit(file, context);
         sections.push(SearchSection {
             reason: "file_touched",
             weight: 3.0,
@@ -585,11 +690,17 @@ fn search_sections(record: &WorkRecord, context: &RecordContext) -> Vec<SearchSe
                 "file touched",
                 file.timestamps.updated_at,
             ),
+            hit,
         });
     }
 
     for change in &context.vcs_changes {
         let parent_change_ids = change.parent_change_ids.join(" ");
+        let hit = source_hit(
+            change.source_id,
+            change.author_time.unwrap_or(change.timestamps.updated_at),
+            context,
+        );
         sections.push(SearchSection {
             reason: "vcs_change",
             weight: 3.0,
@@ -606,33 +717,12 @@ fn search_sections(record: &WorkRecord, context: &RecordContext) -> Vec<SearchSe
                 "vcs change",
                 change.author_time.unwrap_or(change.timestamps.updated_at),
             ),
-        });
-    }
-
-    for pr in &context.pull_requests {
-        sections.push(SearchSection {
-            reason: "pull_request",
-            weight: 3.5,
-            text: joined([
-                pr.url.as_str(),
-                pr.title.as_deref().unwrap_or_default(),
-                pr.state.as_deref().unwrap_or_default(),
-                pr.head_ref.as_deref().unwrap_or_default(),
-                pr.base_ref.as_deref().unwrap_or_default(),
-                pr.head_sha.as_deref().unwrap_or_default(),
-                pr.owner.as_deref().unwrap_or_default(),
-                pr.repo.as_deref().unwrap_or_default(),
-            ]),
-            citation: citation(
-                ContextCitationType::PullRequest,
-                pr.id,
-                "pull request",
-                pr.timestamps.updated_at,
-            ),
+            hit,
         });
     }
 
     for summary in &context.summaries {
+        let hit = source_hit(summary.source_id, summary.timestamps.updated_at, context);
         sections.push(SearchSection {
             reason: "summary",
             weight: 4.0,
@@ -643,6 +733,7 @@ fn search_sections(record: &WorkRecord, context: &RecordContext) -> Vec<SearchSe
                 "summary",
                 summary.timestamps.updated_at,
             ),
+            hit,
         });
     }
 
@@ -660,7 +751,143 @@ fn citation(
         id,
         label: label.to_owned(),
         time,
+        provider: None,
+        session_id: None,
+        event_seq: None,
+        raw_source_path: None,
+        raw_source_exists: None,
+        cursor: None,
     }
+}
+
+fn empty_hit(time: chrono::DateTime<Utc>) -> HitMetadata {
+    HitMetadata {
+        time,
+        provider: None,
+        session_id: None,
+        event_id: None,
+        event_seq: None,
+        cwd: None,
+        raw_source_path: None,
+        raw_source_exists: None,
+        cursor: None,
+    }
+}
+
+fn session_hit(session: &Session, context: &RecordContext) -> HitMetadata {
+    let mut hit = source_hit(session.capture_source_id, session.started_at, context);
+    hit.provider = Some(session.provider);
+    hit.session_id = Some(session.id);
+    if hit.cwd.is_none() {
+        hit.cwd = source_for_id(session.capture_source_id, context)
+            .and_then(|source| source.descriptor.cwd.clone());
+    }
+    hit
+}
+
+fn run_hit(run: &Run, context: &RecordContext) -> HitMetadata {
+    let mut hit = source_hit(run.source_id, run.started_at, context);
+    hit.session_id = run.session_id;
+    if hit.provider.is_none() {
+        hit.provider = run
+            .session_id
+            .and_then(|id| context.sessions.iter().find(|session| session.id == id))
+            .map(|session| session.provider);
+    }
+    if hit.cwd.is_none() {
+        hit.cwd = run.cwd.clone();
+    }
+    hit
+}
+
+fn event_hit(event: &Event, context: &RecordContext) -> HitMetadata {
+    let mut hit = source_hit(event.capture_source_id, event.occurred_at, context);
+    hit.session_id = event.session_id;
+    hit.event_id = Some(event.id);
+    hit.event_seq = Some(event.seq);
+    hit.cursor = event_cursor(event).or(hit.cursor);
+    if hit.provider.is_none() {
+        hit.provider = event
+            .session_id
+            .and_then(|id| context.sessions.iter().find(|session| session.id == id))
+            .map(|session| session.provider);
+    }
+    hit
+}
+
+fn artifact_hit(artifact: &Artifact, context: &RecordContext) -> HitMetadata {
+    source_hit(artifact.source_id, artifact.timestamps.updated_at, context)
+}
+
+fn file_hit(file: &FileTouched, context: &RecordContext) -> HitMetadata {
+    let mut hit = source_hit(file.source_id, file.timestamps.updated_at, context);
+    hit.event_id = file.event_id;
+    hit.session_id = file.event_id.and_then(|id| {
+        context
+            .events
+            .iter()
+            .find(|event| event.id == id)
+            .and_then(|event| event.session_id)
+    });
+    hit
+}
+
+fn source_hit(
+    source_id: Option<Uuid>,
+    time: chrono::DateTime<Utc>,
+    context: &RecordContext,
+) -> HitMetadata {
+    let Some(source) = source_for_id(source_id, context) else {
+        return empty_hit(time);
+    };
+    let raw_source_path = source.descriptor.raw_source_path.clone();
+    HitMetadata {
+        time,
+        provider: Some(source.descriptor.provider),
+        session_id: None,
+        event_id: None,
+        event_seq: None,
+        cwd: source.descriptor.cwd.clone(),
+        raw_source_exists: raw_source_path
+            .as_deref()
+            .map(|path| Path::new(path).is_file()),
+        raw_source_path,
+        cursor: source_cursor(source),
+    }
+}
+
+fn source_for_id(
+    source_id: Option<Uuid>,
+    context: &RecordContext,
+) -> Option<&work_record_core::CaptureSource> {
+    source_id.and_then(|id| context.sources.get(&id))
+}
+
+fn source_cursor(source: &work_record_core::CaptureSource) -> Option<String> {
+    source
+        .sync
+        .metadata
+        .get("cursor")
+        .and_then(|cursor| cursor.get("after"))
+        .and_then(|after| after.get("cursor"))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+}
+
+fn event_cursor(event: &Event) -> Option<String> {
+    event
+        .payload
+        .get("cursor")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .or_else(|| {
+            event
+                .sync
+                .metadata
+                .get("cursor")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
 }
 
 fn joined<const N: usize>(parts: [&str; N]) -> String {
@@ -797,33 +1024,141 @@ fn query_terms(query: &str) -> Vec<String> {
         .collect()
 }
 
+fn has_filters(filters: &SearchFilters) -> bool {
+    filters.provider.is_some()
+        || filters
+            .repo
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || filters.since.is_some()
+        || filters.primary_only
+        || !filters.include_subagents
+        || filters.event_type.is_some()
+        || filters
+            .file
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn record_matches_filters(
+    record: &WorkRecord,
+    context: &RecordContext,
+    filters: &SearchFilters,
+) -> bool {
+    if let Some(provider) = filters.provider {
+        let session_match = context
+            .sessions
+            .iter()
+            .any(|session| session.provider == provider);
+        let source_match = context
+            .sources
+            .values()
+            .any(|source| source.descriptor.provider == provider);
+        if !session_match && !source_match {
+            return false;
+        }
+    }
+
+    if let Some(since) = filters.since {
+        let has_recent_event = context
+            .events
+            .iter()
+            .any(|event| event.occurred_at >= since);
+        let has_recent_session = context.sessions.iter().any(|session| {
+            session.started_at >= since || session.ended_at.is_some_and(|ended| ended >= since)
+        });
+        if record.updated_at < since && !has_recent_event && !has_recent_session {
+            return false;
+        }
+    }
+
+    if filters.primary_only {
+        if !context.sessions.iter().any(|session| {
+            session.is_primary || session.agent_type == work_record_core::AgentType::Primary
+        }) {
+            return false;
+        }
+    } else if !filters.include_subagents
+        && context
+            .sessions
+            .iter()
+            .any(|session| session.agent_type == work_record_core::AgentType::Subagent)
+        && !context.sessions.iter().any(|session| {
+            session.is_primary || session.agent_type == work_record_core::AgentType::Primary
+        })
+    {
+        return false;
+    }
+
+    if let Some(event_type) = filters.event_type {
+        if !context
+            .events
+            .iter()
+            .any(|event| event.event_type == event_type)
+        {
+            return false;
+        }
+    }
+
+    if let Some(repo) = filters
+        .repo
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let repo = repo.to_lowercase();
+        let matches_record = record
+            .workspace
+            .as_deref()
+            .is_some_and(|workspace| workspace.to_lowercase().contains(&repo));
+        let matches_session = context.sessions.iter().any(|session| {
+            session
+                .sync
+                .metadata
+                .get("metadata")
+                .and_then(|value| value.as_object())
+                .is_some_and(|metadata| {
+                    metadata
+                        .values()
+                        .any(|value| value.to_string().to_lowercase().contains(&repo))
+                })
+        });
+        let matches_source = context.sources.values().any(|source| {
+            source
+                .descriptor
+                .cwd
+                .as_deref()
+                .is_some_and(|cwd| cwd.to_lowercase().contains(&repo))
+        });
+        if !matches_record && !matches_session && !matches_source {
+            return false;
+        }
+    }
+
+    if let Some(file) = filters
+        .file
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if !context.files_touched.iter().any(|touched| {
+            touched.path == file
+                || touched.path.ends_with(file)
+                || touched.old_path.as_deref() == Some(file)
+        }) {
+            return false;
+        }
+    }
+
+    true
+}
+
 fn matches_terms(value: &str, terms: &[String]) -> bool {
     if terms.is_empty() {
         return false;
     }
     let haystack = value.to_lowercase();
     terms.iter().all(|term| haystack.contains(term))
-}
-
-fn context_evidence(evidence: &[Evidence], limit: usize) -> Vec<ContextEvidence> {
-    evidence
-        .iter()
-        .take(limit)
-        .map(|item| ContextEvidence {
-            id: item.id,
-            kind: EvidenceKind::Manual,
-            status: evidence_status(item.exit_code),
-            freshness: EvidenceFreshness::Unbound,
-        })
-        .collect()
-}
-
-fn evidence_status(exit_code: i32) -> EvidenceStatus {
-    if exit_code == 0 {
-        EvidenceStatus::Passed
-    } else {
-        EvidenceStatus::Failed
-    }
 }
 
 fn search_snippet(
@@ -841,19 +1176,7 @@ fn search_snippet(
     if !record.body.trim().is_empty() {
         return safe_snippet(&record.body, max_chars);
     }
-    context
-        .evidence
-        .iter()
-        .find_map(|item| {
-            if !item.stdout.trim().is_empty() {
-                Some(safe_snippet(&item.stdout, max_chars))
-            } else if !item.stderr.trim().is_empty() {
-                Some(safe_snippet(&item.stderr, max_chars))
-            } else {
-                None
-            }
-        })
-        .unwrap_or_default()
+    String::new()
 }
 
 fn context_summary(
@@ -919,27 +1242,8 @@ fn non_empty(value: String) -> Option<String> {
     }
 }
 
-fn links_for(record: &WorkRecord, options: &PacketOptions) -> ContextLinks {
-    ContextLinks {
-        dashboard: options
-            .dashboard_base_url
-            .as_deref()
-            .map(|base| format!("{}/records/{}", base, record.id)),
-        pr: record.pr_url.as_deref().and_then(safe_external_url),
-    }
-}
-
-fn safe_external_url(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.starts_with("https://")
-        && !trimmed.contains('@')
-        && !trimmed.contains('?')
-        && !trimmed.contains('#')
-    {
-        Some(trimmed.to_owned())
-    } else {
-        None
-    }
+fn links_for(_record: &WorkRecord, _options: &PacketOptions) -> ContextLinks {
+    ContextLinks {}
 }
 
 fn pagination(cursor_base: Option<usize>, has_more: bool) -> ContextPagination {
@@ -965,7 +1269,6 @@ fn estimate_context_result_tokens(result: &ContextResult) -> u32 {
         ));
     total = total.saturating_add((result.why_matched.len() as u32).saturating_mul(4));
     total = total.saturating_add((result.citations.len() as u32).saturating_mul(12));
-    total = total.saturating_add((result.evidence.len() as u32).saturating_mul(8));
     total
 }
 
@@ -978,11 +1281,11 @@ fn estimate_tokens(value: &str) -> u32 {
 mod tests {
     use super::*;
     use work_record_core::{
-        AgentType, ArtifactKind, CaptureProvider, Confidence, EntityTimestamps, EventRole,
-        EventType, Fidelity, FileChangeKind, PullRequestLinkSource, PullRequestProvider,
-        RedactionState, RunStatus, RunType, SessionStatus, SummaryKind, SyncMetadata, SyncState,
-        VcsChangeKind, VcsHost, VcsKind, VcsWorkspace, WorkRecordLink, WorkRecordLinkTargetType,
-        WorkRecordLinkType,
+        AgentType, ArtifactKind, CaptureProvider, CaptureSource, CaptureSourceDescriptor,
+        CaptureSourceKind, Confidence, EntityTimestamps, EventRole, EventType, Fidelity,
+        FileChangeKind, RedactionState, RunStatus, RunType, SessionStatus, SummaryKind,
+        SyncMetadata, SyncState, VcsChangeKind, VcsHost, VcsKind, VcsWorkspace, WorkRecordLink,
+        WorkRecordLinkTargetType, WorkRecordLinkType,
     };
 
     fn tempdir() -> tempfile::TempDir {
@@ -1043,45 +1346,16 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_base_url_must_be_share_safe() {
-        assert_eq!(
-            share_safe_dashboard_base_url(" http://127.0.0.1:3000/ "),
-            Some("http://127.0.0.1:3000".to_owned())
-        );
-        assert_eq!(share_safe_dashboard_base_url("file:///tmp/ctx"), None);
-        assert_eq!(
-            share_safe_dashboard_base_url("https://token@example.test"),
-            None
-        );
-        assert_eq!(
-            share_safe_dashboard_base_url("https://example.test?q=secret"),
-            None
-        );
-    }
-
-    #[test]
     fn rich_search_matches_typed_context_with_citations_and_redaction() {
         let (_temp, store) = test_store();
-        let mut record = WorkRecord::new(
+        let record = WorkRecord::new(
             "Plain work",
             "ordinary body without the query",
             vec!["needle-tag".into()],
             "task",
             None,
         );
-        record.pr_url = Some("https://github.com/ctxrs/ctx/pull/44".into());
         store.insert_record(&record).unwrap();
-
-        let evidence = Evidence::new(
-            Some(record.id),
-            "cargo test needle-command",
-            1,
-            "needle-output token=ghp_1234567890abcdef1234567890abcdef".into(),
-            "password=hunter2".into(),
-            fixed_time(),
-            50,
-        );
-        store.insert_evidence(&evidence).unwrap();
 
         let artifact = Artifact {
             id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000201").unwrap(),
@@ -1191,27 +1465,6 @@ mod tests {
         };
         store.upsert_vcs_change(&change).unwrap();
 
-        let pr = PullRequest {
-            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000207").unwrap(),
-            vcs_workspace_id: Some(workspace_id),
-            provider: PullRequestProvider::Github,
-            url: "https://github.com/ctxrs/ctx/pull/77".into(),
-            number: Some(77),
-            owner: Some("ctxrs".into()),
-            repo: Some("ctx".into()),
-            title: Some("needle pull request".into()),
-            state: Some("open".into()),
-            head_ref: Some("ctx/needle-pr".into()),
-            base_ref: Some("main".into()),
-            head_sha: Some("needle-sha".into()),
-            confidence: Confidence::Explicit,
-            link_source: PullRequestLinkSource::Explicit,
-            timestamps: timestamps(),
-            source_id: None,
-            sync: sync_metadata(),
-        };
-        store.upsert_pull_request(&pr).unwrap();
-
         let file = FileTouched {
             id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000208").unwrap(),
             work_record_id: Some(record.id),
@@ -1250,11 +1503,6 @@ mod tests {
                 WorkRecordLinkType::References,
             ),
             (
-                WorkRecordLinkTargetType::PullRequest,
-                pr.id,
-                WorkRecordLinkType::PublishedTo,
-            ),
-            (
                 WorkRecordLinkTargetType::Artifact,
                 artifact.id,
                 WorkRecordLinkType::Produced,
@@ -1290,15 +1538,12 @@ mod tests {
         let result = &packet.results[0];
         for reason in [
             "tag",
-            "failed_command",
-            "failed_evidence_output",
             "session_metadata",
             "run_command",
             "tool_call",
             "artifact",
             "file_touched",
             "vcs_change",
-            "pull_request",
             "summary",
         ] {
             assert!(
@@ -1307,17 +1552,25 @@ mod tests {
                 result.why_matched
             );
         }
+        for removed_reason in ["failed_command", "failed_evidence_output", "pull_request"] {
+            assert!(
+                !result
+                    .why_matched
+                    .iter()
+                    .any(|value| value == removed_reason),
+                "removed reason {removed_reason} leaked into search result: {:?}",
+                result.why_matched
+            );
+        }
 
         for citation_type in [
             ContextCitationType::WorkRecord,
-            ContextCitationType::Evidence,
             ContextCitationType::Session,
             ContextCitationType::Run,
             ContextCitationType::Event,
             ContextCitationType::Artifact,
             ContextCitationType::File,
             ContextCitationType::VcsChange,
-            ContextCitationType::PullRequest,
             ContextCitationType::Summary,
         ] {
             assert!(
@@ -1329,25 +1582,10 @@ mod tests {
                 result.citations
             );
         }
-
         assert_eq!(result.visibility, Visibility::LocalOnly);
         assert!(!result.snippet.contains("hunter2"));
         assert!(!result.snippet.contains("ghp_123456"));
         assert!(!result.snippet.contains("secretvalue"));
-
-        let redacted_output_packet = search_packet(
-            &store,
-            "needle-output",
-            &PacketOptions {
-                limit: 1,
-                snippet_chars: 600,
-                ..PacketOptions::default()
-            },
-        )
-        .unwrap();
-        let redacted_output_snippet = &redacted_output_packet.results[0].snippet;
-        assert!(redacted_output_snippet.contains("[REDACTED_SECRET]"));
-        assert!(!redacted_output_snippet.contains("ghp_123456"));
 
         let secret_packet = search_packet(
             &store,
@@ -1468,6 +1706,165 @@ mod tests {
         assert!(unsafe_packet.results.is_empty());
     }
 
+    #[test]
+    fn search_filters_and_citations_expose_source_metadata() {
+        let (_temp, store) = test_store();
+        let record = WorkRecord::new(
+            "Source-backed session",
+            "ordinary body",
+            Vec::new(),
+            "session",
+            Some("/workspace/ctx".into()),
+        );
+        store.insert_record(&record).unwrap();
+
+        let source_id = Uuid::parse_str("018f45d0-0000-7000-8000-000000000401").unwrap();
+        let source = CaptureSource {
+            id: source_id,
+            descriptor: CaptureSourceDescriptor {
+                kind: CaptureSourceKind::ProviderImport,
+                provider: CaptureProvider::Codex,
+                machine_id: "machine-1".into(),
+                process_id: None,
+                cwd: Some("/workspace/ctx".into()),
+                raw_source_path: Some("/definitely/missing/source-filter.jsonl".into()),
+                external_session_id: Some("source-filter-session".into()),
+            },
+            started_at: fixed_time(),
+            ended_at: None,
+            sync: SyncMetadata {
+                metadata: serde_json::json!({
+                    "source_format": "codex_session_jsonl",
+                    "cursor": {
+                        "after": {
+                            "stream": "provider:codex:codex_session_jsonl",
+                            "cursor": "line:8",
+                            "observed_at": "2026-06-23T12:00:00Z"
+                        }
+                    }
+                }),
+                ..sync_metadata()
+            },
+        };
+        store.upsert_capture_source(&source).unwrap();
+
+        let session = Session {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000402").unwrap(),
+            work_record_id: Some(record.id),
+            parent_session_id: None,
+            root_session_id: None,
+            capture_source_id: Some(source_id),
+            provider: CaptureProvider::Codex,
+            external_session_id: Some("source-filter-session".into()),
+            external_agent_id: None,
+            agent_type: AgentType::Primary,
+            role_hint: Some("primary".into()),
+            is_primary: true,
+            status: SessionStatus::Imported,
+            transcript_blob_id: None,
+            started_at: fixed_time(),
+            ended_at: None,
+            timestamps: timestamps(),
+            sync: sync_metadata(),
+        };
+        store.upsert_session(&session).unwrap();
+
+        let event = Event {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000403").unwrap(),
+            seq: 401,
+            work_record_id: Some(record.id),
+            session_id: Some(session.id),
+            run_id: None,
+            event_type: EventType::ToolCall,
+            role: Some(EventRole::Assistant),
+            occurred_at: fixed_time(),
+            capture_source_id: Some(source_id),
+            payload: serde_json::json!({
+                "cursor": "line:8",
+                "body": {
+                    "tool": "shell",
+                    "name": "exec_command",
+                    "arguments_preview": "source-filter-needle"
+                }
+            }),
+            payload_blob_id: None,
+            dedupe_key: Some("source-filter-event".into()),
+            redaction_state: RedactionState::SafePreview,
+            sync: sync_metadata(),
+        };
+        store.upsert_event(&event).unwrap();
+
+        let file = FileTouched {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000404").unwrap(),
+            work_record_id: Some(record.id),
+            run_id: None,
+            event_id: Some(event.id),
+            vcs_workspace_id: None,
+            path: "crates/search/src/source_filter.rs".into(),
+            change_kind: Some(FileChangeKind::Modified),
+            old_path: None,
+            line_count_delta: Some(1),
+            confidence: Confidence::Explicit,
+            timestamps: timestamps(),
+            source_id: Some(source_id),
+            sync: sync_metadata(),
+        };
+        store.upsert_file_touched(&file).unwrap();
+        store.upsert_record(&record).unwrap();
+
+        let packet = search_packet(
+            &store,
+            "source-filter-needle",
+            &PacketOptions {
+                limit: 10,
+                filters: SearchFilters {
+                    provider: Some(CaptureProvider::Codex),
+                    repo: Some("ctx".into()),
+                    event_type: Some(EventType::ToolCall),
+                    file: Some("source_filter.rs".into()),
+                    ..SearchFilters::default()
+                },
+                ..PacketOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(packet.results.len(), 1);
+        let result = &packet.results[0];
+        assert_eq!(result.provider, Some(CaptureProvider::Codex));
+        assert_eq!(result.session_id, Some(session.id));
+        assert_eq!(result.event_id, Some(event.id));
+        assert_eq!(result.event_seq, Some(401));
+        assert_eq!(
+            result.raw_source_path.as_deref(),
+            source.descriptor.raw_source_path.as_deref()
+        );
+        assert_eq!(result.raw_source_exists, Some(false));
+        assert_eq!(result.cursor.as_deref(), Some("line:8"));
+        assert!(result.citations.iter().any(|citation| {
+            citation.citation_type == ContextCitationType::Event
+                && citation.raw_source_path.as_deref()
+                    == source.descriptor.raw_source_path.as_deref()
+                && citation.raw_source_exists == Some(false)
+                && citation.cursor.as_deref() == Some("line:8")
+        }));
+
+        let wrong_provider = search_packet(
+            &store,
+            "source-filter-needle",
+            &PacketOptions {
+                limit: 10,
+                filters: SearchFilters {
+                    provider: Some(CaptureProvider::Pi),
+                    ..SearchFilters::default()
+                },
+                ..PacketOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(wrong_provider.results.is_empty());
+    }
+
     fn new_link_id(target_id: Uuid) -> Uuid {
         let mut bytes = *target_id.as_bytes();
         bytes[15] = bytes[15].wrapping_add(80);
@@ -1498,8 +1895,7 @@ mod tests {
                 limit: 40,
                 max_tokens: 260,
                 snippet_chars: 160,
-                evidence_per_result: 1,
-                dashboard_base_url: None,
+                filters: SearchFilters::default(),
             },
         )
         .unwrap();

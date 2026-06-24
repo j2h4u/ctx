@@ -31,9 +31,7 @@
 - Provider fixture import artifact: `${provider_fixtures_artifact}`
 - Provider live E2E lane definitions: `${provider_live_e2e_lane_definitions}`
 - Rich search/context artifact: `${rich_search_context_artifact}`
-- Dashboard/report artifact review: `${dashboard_report_artifact}`
-- Dashboard visual evidence manifest: `${dashboard_visual_evidence_artifact}`
-- PR publish dry-run artifact: `${pr_publish_dry_run_artifact}`
+- Search MVP package/content audit: `${search_mvp_package_audit_artifact}`
 - Security/malicious archive fixture artifact: `${security_archive_fixtures_artifact}`
 - jj e2e blocker status artifact: `${jj_e2e_blocker_status_artifact}`
 - Installer dry-run smoke artifact: `${installer_dry_run_smoke_artifact}`

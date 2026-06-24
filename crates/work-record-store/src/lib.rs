@@ -1,10 +1,15 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
 };
+
+#[cfg(feature = "legacy-pr-evidence")]
+use std::collections::HashSet;
+#[cfg(feature = "legacy-pr-evidence")]
+use std::path::Component;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -17,11 +22,14 @@ use uuid::Uuid;
 use work_record_core::{
     new_id, redact_preview, redact_share_safe_preview, AgentType, Artifact, ArtifactKind,
     CaptureProvider, CaptureSource, CaptureSourceDescriptor, EntityTimestamps, Event, EventRole,
-    EventType, Evidence, EvidenceFreshness, EvidenceKind, EvidenceMetadata, EvidenceStatus,
-    Fidelity, FileTouched, PullRequest, RedactionState, Run, RunStatus, RunType, Session,
+    EventType, Fidelity, FileTouched, RedactionState, Run, RunStatus, RunType, Session,
     SessionEdge, SessionStatus, Summary, SyncCursor, SyncMetadata, SyncState, VcsChange,
-    VcsWorkspace, Visibility, WorkContext, WorkRecord, WorkRecordArchive,
-    WorkRecordArchiveArtifact, WorkRecordLink,
+    VcsWorkspace, Visibility, WorkContext, WorkRecord, WorkRecordArchive, WorkRecordLink,
+};
+#[cfg(feature = "legacy-pr-evidence")]
+use work_record_core::{
+    Evidence, EvidenceFreshness, EvidenceKind, EvidenceMetadata, EvidenceStatus, PullRequest,
+    WorkRecordArchiveArtifact,
 };
 
 #[derive(Debug, Error)]
@@ -44,6 +52,7 @@ pub enum StoreError {
     UnsupportedArchiveVersion(u32),
     #[error("archive conflicts with existing {kind}: {id}")]
     ImportConflict { kind: &'static str, id: Uuid },
+    #[cfg(feature = "legacy-pr-evidence")]
     #[error("evidence must be attached to a work record")]
     EvidenceMissingWorkRecord,
     #[error("archive artifact {id} content does not match its blob hash")]
@@ -70,6 +79,7 @@ pub enum StoreError {
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
+#[cfg(feature = "legacy-pr-evidence")]
 pub fn classify_evidence_freshness(
     metadata: &EvidenceMetadata,
     current_head_sha: Option<&str>,
@@ -196,6 +206,7 @@ const WORK_RECORD_COLUMNS: &[ColumnSpec] = &[
     },
 ];
 
+#[cfg(feature = "legacy-pr-evidence")]
 const EVIDENCE_COLUMNS: &[ColumnSpec] = &[
     ColumnSpec {
         name: "work_record_id",
@@ -286,7 +297,7 @@ const EVIDENCE_COLUMNS: &[ColumnSpec] = &[
 const CREATE_TABLES_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS capture_sources (
     id TEXT PRIMARY KEY NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('provider_import', 'provider_hook', 'shim', 'direct_cli', 'dashboard', 'hosted_sync', 'manual')),
+    kind TEXT NOT NULL CHECK (kind IN ('provider_import', 'provider_hook', 'direct_cli', 'manual')),
     provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude', 'pi', 'opencode', 'antigravity', 'gemini', 'cursor', 'shell', 'git', 'jj', 'gh', 'unknown')),
     machine_id TEXT NOT NULL,
     process_id INTEGER,
@@ -347,7 +358,6 @@ CREATE TABLE IF NOT EXISTS work_records (
     tags_json TEXT NOT NULL DEFAULT '[]',
     kind TEXT NOT NULL DEFAULT 'note',
     workspace TEXT,
-    pr_url TEXT,
     created_at TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT ''
 );
@@ -420,7 +430,7 @@ CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY NOT NULL,
     work_record_id TEXT REFERENCES work_records(id),
     session_id TEXT REFERENCES sessions(id),
-    run_type TEXT NOT NULL CHECK (run_type IN ('agent_turn', 'command', 'tool_call', 'review', 'import', 'evidence', 'summary')),
+    run_type TEXT NOT NULL CHECK (run_type IN ('agent_turn', 'command', 'tool_call', 'review', 'import', 'summary')),
     status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'partial')),
     started_at_ms INTEGER NOT NULL,
     ended_at_ms INTEGER,
@@ -446,7 +456,7 @@ CREATE TABLE IF NOT EXISTS events (
     work_record_id TEXT REFERENCES work_records(id),
     session_id TEXT REFERENCES sessions(id),
     run_id TEXT REFERENCES runs(id),
-    event_type TEXT NOT NULL CHECK (event_type IN ('message', 'tool_call', 'tool_output', 'command_started', 'command_output', 'command_finished', 'file_touched', 'vcs_change', 'pr_link', 'evidence', 'artifact', 'summary', 'notice')),
+    event_type TEXT NOT NULL CHECK (event_type IN ('message', 'tool_call', 'tool_output', 'command_started', 'command_output', 'command_finished', 'file_touched', 'vcs_change', 'artifact', 'summary', 'notice')),
     role TEXT CHECK (role IS NULL OR role IN ('user', 'assistant', 'system', 'tool', 'unknown')),
     occurred_at_ms INTEGER NOT NULL,
     capture_source_id TEXT REFERENCES capture_sources(id),
@@ -484,39 +494,12 @@ CREATE TABLE IF NOT EXISTS vcs_changes (
     UNIQUE(vcs_workspace_id, kind, change_id)
 );
 
-CREATE TABLE IF NOT EXISTS pull_requests (
-    id TEXT PRIMARY KEY NOT NULL,
-    vcs_workspace_id TEXT REFERENCES vcs_workspaces(id),
-    provider TEXT NOT NULL CHECK (provider IN ('github', 'gitlab', 'unknown')),
-    url TEXT NOT NULL,
-    number INTEGER,
-    owner TEXT,
-    repo TEXT,
-    title TEXT,
-    state TEXT,
-    head_ref TEXT,
-    base_ref TEXT,
-    head_sha TEXT,
-    confidence TEXT NOT NULL DEFAULT 'unknown' CHECK (confidence IN ('explicit', 'high', 'medium', 'low', 'unknown')),
-    link_source TEXT NOT NULL CHECK (link_source IN ('explicit', 'gh_shim', 'captured_url', 'inferred_branch', 'inferred_commit', 'manual')),
-    created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL,
-    source_id TEXT REFERENCES capture_sources(id),
-    visibility TEXT NOT NULL DEFAULT 'local_only' CHECK (visibility IN ('local_only', 'reportable', 'sync_metadata', 'sync_full', 'withheld')),
-    fidelity TEXT NOT NULL DEFAULT 'partial' CHECK (fidelity IN ('full', 'partial', 'imported', 'inferred', 'summary_only')),
-    sync_state TEXT NOT NULL DEFAULT 'local_only' CHECK (sync_state IN ('local_only', 'pending', 'synced', 'failed', 'withheld')),
-    sync_version INTEGER NOT NULL DEFAULT 0,
-    deleted_at_ms INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    UNIQUE(provider, owner, repo, number)
-);
-
 CREATE TABLE IF NOT EXISTS work_record_links (
     id TEXT PRIMARY KEY NOT NULL,
     work_record_id TEXT NOT NULL REFERENCES work_records(id),
-    target_type TEXT NOT NULL CHECK (target_type IN ('session', 'run', 'event', 'vcs_workspace', 'vcs_change', 'pull_request', 'artifact', 'evidence')),
+    target_type TEXT NOT NULL CHECK (target_type IN ('session', 'run', 'event', 'vcs_workspace', 'vcs_change', 'artifact')),
     target_id TEXT NOT NULL,
-    link_type TEXT NOT NULL CHECK (link_type IN ('produced', 'touched', 'references', 'evidence_for', 'published_to', 'likely_related')),
+    link_type TEXT NOT NULL CHECK (link_type IN ('produced', 'touched', 'references', 'likely_related')),
     confidence TEXT NOT NULL DEFAULT 'unknown' CHECK (confidence IN ('explicit', 'high', 'medium', 'low', 'unknown')),
     source_id TEXT REFERENCES capture_sources(id),
     created_at_ms INTEGER NOT NULL,
@@ -528,55 +511,6 @@ CREATE TABLE IF NOT EXISTS work_record_links (
     deleted_at_ms INTEGER,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     UNIQUE(work_record_id, target_type, target_id, link_type)
-);
-
-CREATE TABLE IF NOT EXISTS evidence (
-    id TEXT PRIMARY KEY NOT NULL,
-    work_record_id TEXT NOT NULL REFERENCES work_records(id),
-    vcs_change_id TEXT REFERENCES vcs_changes(id),
-    kind TEXT NOT NULL DEFAULT 'manual' CHECK (kind IN ('test', 'lint', 'build', 'typecheck', 'screenshot', 'review', 'ci', 'manual')),
-    status TEXT NOT NULL DEFAULT 'unknown' CHECK (status IN ('passed', 'failed', 'skipped', 'stale', 'unknown')),
-    freshness TEXT NOT NULL DEFAULT 'unbound' CHECK (freshness IN ('fresh', 'probably_fresh', 'stale', 'unbound', 'inferred')),
-    command_run_id TEXT REFERENCES runs(id),
-    artifact_id TEXT REFERENCES artifacts(id),
-    observed_tree_hash TEXT,
-    observed_head_sha TEXT,
-    started_at_ms INTEGER,
-    ended_at_ms INTEGER,
-    stale_reason TEXT,
-    created_at_ms INTEGER NOT NULL DEFAULT 0,
-    updated_at_ms INTEGER NOT NULL DEFAULT 0,
-    source_id TEXT REFERENCES capture_sources(id),
-    visibility TEXT NOT NULL DEFAULT 'local_only' CHECK (visibility IN ('local_only', 'reportable', 'sync_metadata', 'sync_full', 'withheld')),
-    fidelity TEXT NOT NULL DEFAULT 'partial' CHECK (fidelity IN ('full', 'partial', 'imported', 'inferred', 'summary_only')),
-    sync_state TEXT NOT NULL DEFAULT 'local_only' CHECK (sync_state IN ('local_only', 'pending', 'synced', 'failed', 'withheld')),
-    sync_version INTEGER NOT NULL DEFAULT 0,
-    deleted_at_ms INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    record_id TEXT REFERENCES work_records(id) ON DELETE SET NULL,
-    command TEXT NOT NULL DEFAULT '',
-    exit_code INTEGER NOT NULL DEFAULT 0,
-    stdout TEXT NOT NULL DEFAULT '',
-    stderr TEXT NOT NULL DEFAULT '',
-    started_at TEXT NOT NULL DEFAULT '',
-    duration_ms INTEGER NOT NULL DEFAULT 0,
-    CHECK (record_id IS NULL OR work_record_id IS NULL OR record_id = work_record_id)
-);
-
-CREATE TABLE IF NOT EXISTS evidence_artifacts (
-    id TEXT PRIMARY KEY NOT NULL,
-    evidence_id TEXT NOT NULL REFERENCES evidence(id) ON DELETE CASCADE,
-    artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
-    stream TEXT NOT NULL CHECK (stream IN ('stdout', 'stderr')),
-    created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL,
-    visibility TEXT NOT NULL DEFAULT 'local_only' CHECK (visibility IN ('local_only', 'reportable', 'sync_metadata', 'sync_full', 'withheld')),
-    fidelity TEXT NOT NULL DEFAULT 'full' CHECK (fidelity IN ('full', 'partial', 'imported', 'inferred', 'summary_only')),
-    sync_state TEXT NOT NULL DEFAULT 'local_only' CHECK (sync_state IN ('local_only', 'pending', 'synced', 'failed', 'withheld')),
-    sync_version INTEGER NOT NULL DEFAULT 0,
-    deleted_at_ms INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    UNIQUE(evidence_id, artifact_id, stream)
 );
 
 CREATE TABLE IF NOT EXISTS summaries (
@@ -655,18 +589,6 @@ CREATE TABLE IF NOT EXISTS record_edges (
     metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 
-CREATE TABLE IF NOT EXISTS sync_aliases (
-    id TEXT PRIMARY KEY NOT NULL,
-    local_table TEXT NOT NULL,
-    local_id TEXT NOT NULL,
-    hosted_id TEXT NOT NULL,
-    team_id TEXT,
-    created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL,
-    UNIQUE(local_table, local_id, team_id),
-    UNIQUE(hosted_id, team_id)
-);
-
 CREATE TABLE IF NOT EXISTS sync_cursors (
     id TEXT PRIMARY KEY NOT NULL,
     team_id TEXT,
@@ -734,7 +656,7 @@ CREATE TABLE IF NOT EXISTS local_workspaces (
 
 CREATE TABLE IF NOT EXISTS audit_log (
     id TEXT PRIMARY KEY NOT NULL,
-    actor_kind TEXT NOT NULL CHECK (actor_kind IN ('human', 'agent', 'system', 'hosted')),
+    actor_kind TEXT NOT NULL CHECK (actor_kind IN ('human', 'agent', 'system')),
     actor_id TEXT,
     action TEXT NOT NULL,
     target_table TEXT,
@@ -786,24 +708,10 @@ CREATE INDEX IF NOT EXISTS idx_vcs_workspaces_source_id ON vcs_workspaces(source
 CREATE INDEX IF NOT EXISTS idx_vcs_changes_vcs_workspace_id ON vcs_changes(vcs_workspace_id);
 CREATE INDEX IF NOT EXISTS idx_vcs_changes_source_id ON vcs_changes(source_id);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_pull_requests_provider_owner_repo_number ON pull_requests(provider, owner, repo, number);
-CREATE INDEX IF NOT EXISTS idx_pull_requests_vcs_workspace_id ON pull_requests(vcs_workspace_id);
-CREATE INDEX IF NOT EXISTS idx_pull_requests_source_id ON pull_requests(source_id);
-
 CREATE INDEX IF NOT EXISTS idx_work_record_links_work_record_id ON work_record_links(work_record_id);
 CREATE INDEX IF NOT EXISTS idx_work_record_links_source_id ON work_record_links(source_id);
 
 CREATE INDEX IF NOT EXISTS idx_artifacts_source_id ON artifacts(source_id);
-
-CREATE INDEX IF NOT EXISTS idx_evidence_work_record_id ON evidence(work_record_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_record_id ON evidence(record_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_vcs_change_id ON evidence(vcs_change_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_command_run_id ON evidence(command_run_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_artifact_id ON evidence(artifact_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_source_id ON evidence(source_id);
-
-CREATE INDEX IF NOT EXISTS idx_evidence_artifacts_evidence_id ON evidence_artifacts(evidence_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_artifacts_artifact_id ON evidence_artifacts(artifact_id);
 
 CREATE INDEX IF NOT EXISTS idx_summaries_work_record_id ON summaries(work_record_id);
 CREATE INDEX IF NOT EXISTS idx_summaries_session_id ON summaries(session_id);
@@ -835,7 +743,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS work_record_search USING fts5(
     summary,
     primary_user_text,
     decision_text,
-    evidence_text,
+    context_text,
     tag_text
 );
 
@@ -898,7 +806,6 @@ impl Store {
         if migrated_legacy_layout {
             store.normalize_legacy_blob_paths()?;
         }
-        store.backfill_evidence_artifacts()?;
         store.ensure_search_projection_initialized()?;
         Ok(store)
     }
@@ -960,6 +867,10 @@ impl Store {
         Ok(schema.join(";\n"))
     }
 
+    pub fn refresh_search_index(&self) -> Result<()> {
+        self.rebuild_search_projection()
+    }
+
     pub fn upsert_capture_source(&self, source: &CaptureSource) -> Result<()> {
         self.conn.execute(
             r#"
@@ -1018,7 +929,7 @@ impl Store {
             .ok_or(StoreError::NotFound(id))
     }
 
-    fn list_capture_sources(&self) -> Result<Vec<CaptureSource>> {
+    pub fn list_capture_sources(&self) -> Result<Vec<CaptureSource>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, kind, provider, machine_id, process_id, cwd, raw_source_path, external_session_id, started_at_ms, ended_at_ms, fidelity, visibility, sync_state, sync_version, metadata_json FROM capture_sources ORDER BY started_at_ms, id",
         )?;
@@ -1140,7 +1051,7 @@ impl Store {
         Ok(())
     }
 
-    fn list_sessions(&self) -> Result<Vec<Session>> {
+    pub fn list_sessions(&self) -> Result<Vec<Session>> {
         let mut stmt = self
             .conn
             .prepare(session_select_sql("ORDER BY started_at_ms, id").as_str())?;
@@ -1692,6 +1603,7 @@ impl Store {
         collect_rows(rows)
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     pub fn upsert_pull_request(&self, pr: &PullRequest) -> Result<Uuid> {
         self.conn.execute(
             r#"
@@ -1756,6 +1668,7 @@ impl Store {
         Ok(pr.id)
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     fn list_pull_requests(&self) -> Result<Vec<PullRequest>> {
         let mut stmt = self
             .conn
@@ -1879,15 +1792,6 @@ impl Store {
             artifact_select_sql(
                 r#"
                 WHERE id IN (
-                    SELECT artifact_id
-                    FROM evidence
-                    WHERE (record_id = ?1 OR work_record_id = ?1) AND artifact_id IS NOT NULL
-                    UNION
-                    SELECT ea.artifact_id
-                    FROM evidence_artifacts ea
-                    JOIN evidence e ON e.id = ea.evidence_id
-                    WHERE e.record_id = ?1 OR e.work_record_id = ?1
-                    UNION
                     SELECT transcript_blob_id
                     FROM sessions
                     WHERE work_record_id = ?1 AND transcript_blob_id IS NOT NULL
@@ -1928,10 +1832,6 @@ impl Store {
             vcs_change_select_sql(
                 r#"
                 WHERE id IN (
-                    SELECT vcs_change_id
-                    FROM evidence
-                    WHERE (record_id = ?1 OR work_record_id = ?1) AND vcs_change_id IS NOT NULL
-                    UNION
                     SELECT target_id
                     FROM work_record_links
                     WHERE work_record_id = ?1 AND target_type = 'vcs_change'
@@ -1945,6 +1845,7 @@ impl Store {
         collect_rows(rows)
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     pub fn pull_requests_for_record(&self, record_id: Uuid) -> Result<Vec<PullRequest>> {
         let mut stmt = self.conn.prepare(
             pull_request_select_sql(
@@ -2134,9 +2035,9 @@ impl Store {
             (
                 id, title, summary, status, started_at_ms, last_activity_at_ms,
                 created_at_ms, updated_at_ms, body, tags_json, kind, workspace,
-                pr_url, created_at, updated_at
+                created_at, updated_at
             )
-            VALUES (?1, ?2, ?3, 'open', ?4, ?5, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            VALUES (?1, ?2, ?3, 'open', ?4, ?5, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             "#,
             params![
                 record.id.to_string(),
@@ -2148,7 +2049,6 @@ impl Store {
                 serde_json::to_string(&record.tags)?,
                 record.kind,
                 record.workspace,
-                record.pr_url,
                 record.created_at.to_rfc3339(),
                 record.updated_at.to_rfc3339(),
             ],
@@ -2191,9 +2091,9 @@ impl Store {
             (
                 id, title, summary, status, started_at_ms, last_activity_at_ms,
                 created_at_ms, updated_at_ms, body, tags_json, kind, workspace,
-                pr_url, created_at, updated_at
+                created_at, updated_at
             )
-            VALUES (?1, ?2, ?3, 'open', ?4, ?5, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            VALUES (?1, ?2, ?3, 'open', ?4, ?5, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 summary = excluded.summary,
@@ -2206,7 +2106,6 @@ impl Store {
                 tags_json = excluded.tags_json,
                 kind = excluded.kind,
                 workspace = excluded.workspace,
-                pr_url = excluded.pr_url,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at
             "#,
@@ -2220,7 +2119,6 @@ impl Store {
                 serde_json::to_string(&record.tags)?,
                 record.kind,
                 record.workspace,
-                record.pr_url,
                 record.created_at.to_rfc3339(),
                 record.updated_at.to_rfc3339(),
             ],
@@ -2313,29 +2211,7 @@ impl Store {
         Ok(Some(records))
     }
 
-    pub fn link_pr(&self, id: Uuid, pr_url: &str) -> Result<WorkRecord> {
-        let updated_at = Utc::now();
-        let updated_at_ms = timestamp_ms(updated_at);
-        let changed = self.conn.execute(
-            r#"
-            UPDATE work_records
-            SET pr_url = ?1, updated_at = ?2, updated_at_ms = ?3, last_activity_at_ms = ?3
-            WHERE id = ?4
-            "#,
-            params![
-                pr_url,
-                updated_at.to_rfc3339(),
-                updated_at_ms,
-                id.to_string()
-            ],
-        )?;
-        if changed == 0 {
-            return Err(StoreError::NotFound(id));
-        }
-        self.rebuild_search_projection()?;
-        self.get_record(id)
-    }
-
+    #[cfg(feature = "legacy-pr-evidence")]
     pub fn insert_evidence(&self, evidence: &Evidence) -> Result<()> {
         let work_record_id = evidence
             .record_id
@@ -2386,6 +2262,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     pub fn upsert_evidence(&self, evidence: &Evidence) -> Result<()> {
         let work_record_id = evidence
             .record_id
@@ -2450,6 +2327,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     fn store_output_artifact(&self, kind: &str, content: &str) -> Result<Option<String>> {
         if content.is_empty() {
             return Ok(None);
@@ -2502,6 +2380,7 @@ impl Store {
         Ok(Some(artifact_id))
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     fn replace_evidence_artifact_links(
         &self,
         evidence_id: Uuid,
@@ -2521,6 +2400,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     fn insert_evidence_artifact_link(
         &self,
         evidence_id: Uuid,
@@ -2548,6 +2428,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     fn backfill_evidence_artifacts(&self) -> Result<()> {
         let rows = {
             let mut stmt = self.conn.prepare(
@@ -2600,6 +2481,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     pub fn evidence_for_record(&self, record_id: Uuid) -> Result<Vec<Evidence>> {
         let mut stmt = self.conn.prepare(
             evidence_select_sql(
@@ -2611,6 +2493,7 @@ impl Store {
         collect_rows(rows)
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     pub fn get_evidence(&self, id: Uuid) -> Result<Evidence> {
         let mut stmt = self
             .conn
@@ -2620,6 +2503,7 @@ impl Store {
             .ok_or(StoreError::NotFound(id))
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     pub fn get_evidence_metadata(&self, id: Uuid) -> Result<EvidenceMetadata> {
         self.conn
             .query_row(
@@ -2631,6 +2515,7 @@ impl Store {
             .ok_or(StoreError::NotFound(id))
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     pub fn evidence_metadata_for_record(&self, record_id: Uuid) -> Result<Vec<EvidenceMetadata>> {
         let mut stmt = self.conn.prepare(
             evidence_metadata_select_sql(
@@ -2642,6 +2527,7 @@ impl Store {
         collect_rows(rows)
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     pub fn recent_evidence_metadata(&self, limit: usize) -> Result<Vec<EvidenceMetadata>> {
         let mut stmt = self.conn.prepare(
             evidence_metadata_select_sql("ORDER BY started_at_ms DESC, id LIMIT ?1").as_str(),
@@ -2650,6 +2536,7 @@ impl Store {
         collect_rows(rows)
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     pub fn update_evidence_metadata(&self, metadata: &EvidenceMetadata) -> Result<()> {
         let changed = self.conn.execute(
             r#"
@@ -2707,6 +2594,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     pub fn recent_evidence(&self, limit: usize) -> Result<Vec<Evidence>> {
         let mut stmt = self
             .conn
@@ -2720,28 +2608,36 @@ impl Store {
             Some(query) => self.search_records(query, limit)?,
             None => self.list_records(limit)?,
         };
+        #[cfg(feature = "legacy-pr-evidence")]
         let mut evidence = Vec::new();
+        #[cfg(feature = "legacy-pr-evidence")]
         for record in &records {
             evidence.extend(self.evidence_for_record(record.id)?);
         }
+        #[cfg(feature = "legacy-pr-evidence")]
         if evidence.is_empty() {
             evidence = self.recent_evidence(limit)?;
         }
         Ok(WorkContext {
             query: query.map(str::to_string),
             records,
+            #[cfg(feature = "legacy-pr-evidence")]
             evidence,
         })
     }
 
     pub fn export_archive(&self) -> Result<WorkRecordArchive> {
+        #[cfg(feature = "legacy-pr-evidence")]
         let evidence = self.recent_evidence(usize::MAX)?;
         Ok(WorkRecordArchive {
             schema_version: 2,
             version: 2,
             records: self.list_records(usize::MAX)?,
+            #[cfg(feature = "legacy-pr-evidence")]
             artifacts: self.archive_artifacts()?,
+            #[cfg(feature = "legacy-pr-evidence")]
             evidence,
+            #[cfg(feature = "legacy-pr-evidence")]
             evidence_metadata: self.recent_evidence_metadata(usize::MAX)?,
             capture_sources: self.list_capture_sources()?,
             sessions: self.list_sessions()?,
@@ -2750,6 +2646,7 @@ impl Store {
             artifact_records: self.list_artifacts()?,
             vcs_workspaces: self.list_vcs_workspaces()?,
             vcs_changes: self.list_vcs_changes()?,
+            #[cfg(feature = "legacy-pr-evidence")]
             pull_requests: self.list_pull_requests()?,
             work_record_links: self.list_work_record_links()?,
             summaries: self.list_summaries()?,
@@ -2760,7 +2657,9 @@ impl Store {
     pub fn import_archive(&mut self, archive: &WorkRecordArchive, overwrite: bool) -> Result<()> {
         validate_archive_version(archive)?;
         reject_archive_event_internal_conflicts(archive)?;
+        #[cfg(feature = "legacy-pr-evidence")]
         validate_import_evidence_references(&self.conn, archive)?;
+        #[cfg(feature = "legacy-pr-evidence")]
         let archive_artifacts = archive_artifacts_by_evidence(archive);
         let blob_dir = self.object_dir.clone();
         let tx = self.conn.transaction()?;
@@ -2772,6 +2671,7 @@ impl Store {
         for record in &archive.records {
             upsert_record_tx(&tx, record, None)?;
         }
+        #[cfg(feature = "legacy-pr-evidence")]
         for evidence in &archive.evidence {
             if let Some(artifacts) = archive_artifacts.get(&evidence.id) {
                 upsert_evidence_with_archive_artifacts_tx(
@@ -2787,6 +2687,7 @@ impl Store {
             }
         }
         import_rich_archive_entities_tx(&tx, &blob_dir, archive, &mut blob_guard)?;
+        #[cfg(feature = "legacy-pr-evidence")]
         for metadata in &archive.evidence_metadata {
             update_evidence_metadata_tx(&tx, metadata)?;
         }
@@ -2807,8 +2708,6 @@ impl Store {
     ) -> Result<()> {
         validate_archive_version(archive)?;
         reject_archive_event_internal_conflicts(archive)?;
-        validate_import_evidence_references(&self.conn, archive)?;
-        let archive_artifacts = archive_artifacts_by_evidence(archive);
         let blob_dir = self.object_dir.clone();
         let tx = self.conn.transaction()?;
         reject_import_invariant_conflicts(&tx, archive)?;
@@ -2821,24 +2720,7 @@ impl Store {
         for record in &archive.records {
             upsert_record_tx(&tx, record, Some(source_id))?;
         }
-        for evidence in &archive.evidence {
-            if let Some(artifacts) = archive_artifacts.get(&evidence.id) {
-                upsert_evidence_with_archive_artifacts_tx(
-                    &tx,
-                    &blob_dir,
-                    evidence,
-                    artifacts,
-                    Some(source_id),
-                    &mut blob_guard,
-                )?;
-            } else {
-                upsert_evidence_tx(&tx, &blob_dir, evidence, Some(source_id), &mut blob_guard)?;
-            }
-        }
         import_rich_archive_entities_tx(&tx, &blob_dir, archive, &mut blob_guard)?;
-        for metadata in &archive.evidence_metadata {
-            update_evidence_metadata_tx(&tx, metadata)?;
-        }
         tx.commit()?;
         blob_guard.commit();
         self.rebuild_search_projection()?;
@@ -2849,26 +2731,11 @@ impl Store {
         let integrity: String = self
             .conn
             .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-        let orphan_count: i64 = self.conn.query_row(
-            r#"
-            SELECT COUNT(*)
-            FROM evidence e
-            LEFT JOIN work_records r ON COALESCE(e.record_id, e.work_record_id) = r.id
-            WHERE COALESCE(e.record_id, e.work_record_id) IS NOT NULL AND r.id IS NULL
-            "#,
-            [],
-            |row| row.get(0),
-        )?;
         let foreign_key_failures = count_foreign_key_failures(&self.conn)?;
 
         let mut findings = Vec::new();
         if integrity != "ok" {
             findings.push(format!("sqlite integrity_check returned {integrity}"));
-        }
-        if orphan_count > 0 {
-            findings.push(format!(
-                "{orphan_count} evidence rows reference missing records"
-            ));
         }
         if foreign_key_failures > 0 {
             findings.push(format!(
@@ -2878,6 +2745,7 @@ impl Store {
         Ok(findings)
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     fn archive_artifacts(&self) -> Result<Vec<WorkRecordArchiveArtifact>> {
         let mut stmt = self.conn.prepare(
             r#"
@@ -2932,6 +2800,7 @@ impl Store {
         collect_rows(rows)
     }
 
+    #[cfg(feature = "legacy-pr-evidence")]
     fn absolute_blob_path(&self, blob_path: &str) -> Result<PathBuf> {
         let relative_path = blob_path
             .strip_prefix("objects/")
@@ -2992,11 +2861,6 @@ fn migrate_legacy_work_record_layout(data_root: &Path) -> Result<bool> {
         &mut moves,
         legacy_dir.join("config.toml"),
         data_root.join("config.toml"),
-    );
-    push_legacy_move(
-        &mut moves,
-        legacy_dir.join("shims"),
-        data_root.join("shims"),
     );
     push_legacy_move(&mut moves, legacy_dir.join("logs"), data_root.join("logs"));
     push_legacy_move(
@@ -3060,6 +2924,7 @@ fn object_relative_path(hash: &str) -> String {
     format!("{OBJECTS_DIR}/{shard}/{hash}")
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn expected_object_or_legacy_blob_path(hash: &str) -> (String, String) {
     let shard = &hash[..2];
     (
@@ -3090,11 +2955,10 @@ fn rebuild_search_projection(conn: &Connection) -> Result<()> {
     };
 
     for record in records {
-        let evidence_text = redacted_evidence_text(conn, record.id)?;
         conn.execute(
             r#"
             INSERT INTO work_record_search
-            (record_id, title, summary, primary_user_text, decision_text, evidence_text, tag_text)
+            (record_id, title, summary, primary_user_text, decision_text, context_text, tag_text)
             VALUES (?1, ?2, ?3, ?4, '', ?5, ?6)
             "#,
             params![
@@ -3102,43 +2966,9 @@ fn rebuild_search_projection(conn: &Connection) -> Result<()> {
                 redact_preview(&record.title, 512),
                 redact_preview(&record.body, 2048),
                 redact_preview(&record.body, 2048),
-                evidence_text,
+                "",
                 redact_preview(&record.tags.join(" "), 1024),
             ],
-        )?;
-    }
-
-    let mut stmt = conn.prepare(
-        r#"
-        SELECT a.id, ea.evidence_id, a.preview_text
-        FROM artifacts a
-        JOIN evidence_artifacts ea ON ea.artifact_id = a.id
-        WHERE a.preview_text IS NOT NULL
-        "#,
-    )?;
-    let artifacts = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-        ))
-    })?;
-    for artifact in artifacts {
-        let (artifact_id, evidence_id, preview) = artifact?;
-        let work_record_id = conn
-            .query_row(
-                "SELECT COALESCE(record_id, work_record_id) FROM evidence WHERE id = ?1",
-                params![evidence_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-        conn.execute(
-            r#"
-            INSERT INTO artifact_search (artifact_id, work_record_id, safe_preview_text)
-            VALUES (?1, ?2, ?3)
-            "#,
-            params![artifact_id, work_record_id, redact_preview(&preview, 2048)],
         )?;
     }
 
@@ -3182,16 +3012,8 @@ fn table_row_count(conn: &Connection, table: &str) -> Result<i64> {
 }
 
 fn linked_artifact_preview_count(conn: &Connection) -> Result<i64> {
-    Ok(conn.query_row(
-        r#"
-        SELECT COUNT(*)
-        FROM artifacts a
-        JOIN evidence_artifacts ea ON ea.artifact_id = a.id
-        WHERE a.preview_text IS NOT NULL
-        "#,
-        [],
-        |row| row.get(0),
-    )?)
+    let _ = conn;
+    Ok(0)
 }
 
 fn populate_event_search_projection(conn: &Connection) -> Result<()> {
@@ -3246,37 +3068,6 @@ fn populate_event_search_projection(conn: &Connection) -> Result<()> {
         )?;
     }
     Ok(())
-}
-
-fn redacted_evidence_text(conn: &Connection, record_id: Uuid) -> Result<String> {
-    let mut stmt = conn.prepare(
-        r#"
-        SELECT command, stdout, stderr
-        FROM evidence
-        WHERE record_id = ?1 OR work_record_id = ?1
-        ORDER BY started_at DESC
-        "#,
-    )?;
-    let rows = stmt.query_map(params![record_id.to_string()], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-        ))
-    })?;
-    let mut text = String::new();
-    for row in rows {
-        let (command, stdout, stderr) = row?;
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str(&command);
-        text.push('\n');
-        text.push_str(&stdout);
-        text.push('\n');
-        text.push_str(&stderr);
-    }
-    Ok(redact_preview(&text, 4096))
 }
 
 fn event_search_preview(payload_json: &str, redaction_state: &str) -> Result<String> {
@@ -3361,7 +3152,6 @@ fn migrate_to_v1(conn: &Connection) -> Result<()> {
     let migration = (|| -> Result<()> {
         conn.execute_batch(CREATE_TABLES_SQL)?;
         ensure_columns(conn, "work_records", WORK_RECORD_COLUMNS)?;
-        ensure_columns(conn, "evidence", EVIDENCE_COLUMNS)?;
         backfill_legacy_tables(conn)?;
         conn.execute_batch(INDEXES_SQL)?;
         conn.execute_batch("PRAGMA user_version = 1;")?;
@@ -3387,7 +3177,6 @@ fn migrate_to_v2(conn: &Connection) -> Result<()> {
     let migration = (|| -> Result<()> {
         conn.execute_batch(CREATE_TABLES_SQL)?;
         ensure_columns(conn, "work_records", WORK_RECORD_COLUMNS)?;
-        ensure_columns(conn, "evidence", EVIDENCE_COLUMNS)?;
         backfill_legacy_tables(conn)?;
         conn.execute_batch(INDEXES_SQL)?;
         conn.execute_batch("PRAGMA user_version = 2;")?;
@@ -3413,7 +3202,6 @@ fn migrate_to_v3(conn: &Connection) -> Result<()> {
     let migration = (|| -> Result<()> {
         conn.execute_batch(CREATE_TABLES_SQL)?;
         ensure_columns(conn, "work_records", WORK_RECORD_COLUMNS)?;
-        ensure_columns(conn, "evidence", EVIDENCE_COLUMNS)?;
         backfill_legacy_tables(conn)?;
         conn.execute_batch(INDEXES_SQL)?;
         conn.execute_batch("PRAGMA user_version = 3;")?;
@@ -3475,7 +3263,7 @@ fn rebuild_capture_sources_provider_check(conn: &Connection) -> Result<()> {
         DROP TABLE IF EXISTS capture_sources_new;
         CREATE TABLE capture_sources_new (
             id TEXT PRIMARY KEY NOT NULL,
-            kind TEXT NOT NULL CHECK (kind IN ('provider_import', 'provider_hook', 'shim', 'direct_cli', 'dashboard', 'hosted_sync', 'manual')),
+            kind TEXT NOT NULL CHECK (kind IN ('provider_import', 'provider_hook', 'direct_cli', 'manual')),
             provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude', 'pi', 'opencode', 'antigravity', 'gemini', 'cursor', 'shell', 'git', 'jj', 'gh', 'unknown')),
             machine_id TEXT NOT NULL,
             process_id INTEGER,
@@ -3659,30 +3447,6 @@ fn backfill_legacy_tables(conn: &Connection) -> Result<()> {
             ELSE last_activity_at_ms
         END
         WHERE last_activity_at_ms = 0;
-
-        UPDATE evidence
-        SET work_record_id = record_id
-        WHERE work_record_id IS NULL AND record_id IS NOT NULL;
-
-        UPDATE evidence
-        SET status = CASE WHEN exit_code = 0 THEN 'passed' ELSE 'failed' END
-        WHERE status = 'unknown';
-
-        UPDATE evidence
-        SET started_at_ms = COALESCE(CAST(strftime('%s', started_at) AS INTEGER) * 1000, started_at_ms)
-        WHERE started_at_ms IS NULL AND started_at IS NOT NULL;
-
-        UPDATE evidence
-        SET ended_at_ms = started_at_ms + duration_ms
-        WHERE ended_at_ms IS NULL AND started_at_ms IS NOT NULL;
-
-        UPDATE evidence
-        SET created_at_ms = COALESCE(started_at_ms, created_at_ms)
-        WHERE created_at_ms = 0;
-
-        UPDATE evidence
-        SET updated_at_ms = created_at_ms
-        WHERE updated_at_ms = 0;
         "#,
     )?;
     Ok(())
@@ -3706,6 +3470,7 @@ fn time_ms(value: i64) -> DateTime<Utc> {
     DateTime::<Utc>::from_timestamp_millis(value).unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn optional_time_ms(value: Option<i64>) -> Option<DateTime<Utc>> {
     value.map(time_ms)
 }
@@ -3718,6 +3483,7 @@ fn redacted_root_label(path: &Path) -> String {
         .unwrap_or_else(|| "[REDACTED_ROOT]".to_owned())
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn evidence_status(exit_code: i32) -> &'static str {
     if exit_code == 0 {
         "passed"
@@ -3726,6 +3492,7 @@ fn evidence_status(exit_code: i32) -> &'static str {
     }
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn output_preview(content: &str) -> String {
     const MAX_CHARS: usize = 4096;
     redact_preview(content, MAX_CHARS)
@@ -3753,6 +3520,7 @@ fn ensure_regular_blob_file(id: Uuid, path: &Path) -> Result<()> {
     }
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn ensure_existing_blob_content(
     id: Uuid,
     path: &Path,
@@ -3772,6 +3540,7 @@ fn ensure_existing_blob_content(
     Ok(())
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn store_blob_content_if_missing(
     id: Uuid,
     path: &Path,
@@ -3808,6 +3577,7 @@ struct BlobWriteGuard {
 }
 
 impl BlobWriteGuard {
+    #[cfg(feature = "legacy-pr-evidence")]
     fn track_created(&mut self, path: &Path, created: bool) {
         if created {
             self.created_paths.push(path.to_path_buf());
@@ -3863,6 +3633,7 @@ pub fn validate_archive_version(archive: &WorkRecordArchive) -> Result<()> {
     }
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn validate_import_evidence_references(
     conn: &Connection,
     archive: &WorkRecordArchive,
@@ -3896,6 +3667,7 @@ fn validate_import_evidence_references(
     Ok(())
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn archive_artifacts_by_evidence(
     archive: &WorkRecordArchive,
 ) -> HashMap<Uuid, Vec<&WorkRecordArchiveArtifact>> {
@@ -3918,6 +3690,7 @@ fn reject_import_conflicts(tx: &Transaction<'_>, archive: &WorkRecordArchive) ->
             });
         }
     }
+    #[cfg(feature = "legacy-pr-evidence")]
     for evidence in &archive.evidence {
         if row_exists(tx, "evidence", evidence.id)? {
             return Err(StoreError::ImportConflict {
@@ -4003,6 +3776,7 @@ fn reject_rich_import_conflicts(tx: &Transaction<'_>, archive: &WorkRecordArchiv
             workspace.id,
         )?;
     }
+    #[cfg(feature = "legacy-pr-evidence")]
     for artifact in &archive.artifacts {
         reject_archive_artifact_conflict(tx, artifact)?;
     }
@@ -4076,6 +3850,7 @@ fn reject_rich_import_conflicts(tx: &Transaction<'_>, archive: &WorkRecordArchiv
             change.id,
         )?;
     }
+    #[cfg(feature = "legacy-pr-evidence")]
     for pr in &archive.pull_requests {
         reject_entity_conflict(
             existing_pull_request_by_id(tx, pr.id)?,
@@ -4353,6 +4128,7 @@ fn existing_vcs_change_by_identity(
     .map_err(StoreError::from)
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn existing_pull_request_by_id(tx: &Transaction<'_>, id: Uuid) -> Result<Option<PullRequest>> {
     tx.query_row(
         pull_request_select_sql("WHERE id = ?1").as_str(),
@@ -4363,6 +4139,7 @@ fn existing_pull_request_by_id(tx: &Transaction<'_>, id: Uuid) -> Result<Option<
     .map_err(StoreError::from)
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn existing_pull_request_by_identity(
     tx: &Transaction<'_>,
     provider: work_record_core::PullRequestProvider,
@@ -4434,6 +4211,7 @@ fn existing_work_record_link_by_identity(
     .map_err(StoreError::from)
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn reject_archive_artifact_conflict(
     tx: &Transaction<'_>,
     artifact: &WorkRecordArchiveArtifact,
@@ -4484,16 +4262,12 @@ fn validate_archive_artifact_record_blobs(
     archive: &WorkRecordArchive,
 ) -> Result<()> {
     for artifact in &archive.artifact_records {
-        validate_archive_artifact_record_blob(blob_dir, archive, artifact)?;
+        validate_archive_artifact_record_blob(blob_dir, artifact)?;
     }
     Ok(())
 }
 
-fn validate_archive_artifact_record_blob(
-    blob_dir: &Path,
-    archive: &WorkRecordArchive,
-    artifact: &Artifact,
-) -> Result<()> {
+fn validate_archive_artifact_record_blob(blob_dir: &Path, artifact: &Artifact) -> Result<()> {
     let expected_path = expected_archive_blob_path(artifact.id, &artifact.blob_hash)?;
     let legacy_path = {
         let shard = &artifact.blob_hash[..2];
@@ -4501,18 +4275,6 @@ fn validate_archive_artifact_record_blob(
     };
     if artifact.blob_path != expected_path && artifact.blob_path != legacy_path {
         return Err(StoreError::ArchiveArtifactPathMismatch { id: artifact.id });
-    }
-
-    if archive.artifacts.iter().any(|content| {
-        content.kind == artifact.kind
-            && content.blob_hash == artifact.blob_hash
-            && content.blob_path == artifact.blob_path
-            && content.byte_size == artifact.byte_size
-            && content.media_type == artifact.media_type
-            && sha256_hex(content.content.as_bytes()) == artifact.blob_hash
-            && content.content.len() as u64 == artifact.byte_size
-    }) {
-        return Ok(());
     }
 
     let absolute_path = blob_dir
@@ -4533,6 +4295,7 @@ fn validate_archive_artifact_record_blob(
     Ok(())
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn record_exists(conn: &Connection, id: Uuid) -> Result<bool> {
     Ok(conn
         .query_row(
@@ -4592,7 +4355,7 @@ fn import_rich_archive_entities_tx(
     tx: &Transaction<'_>,
     blob_dir: &Path,
     archive: &WorkRecordArchive,
-    blob_guard: &mut BlobWriteGuard,
+    _blob_guard: &mut BlobWriteGuard,
 ) -> Result<()> {
     if archive.schema_version < 2 && archive.version < 2 {
         return Ok(());
@@ -4605,9 +4368,6 @@ fn import_rich_archive_entities_tx(
     }
     for workspace in &archive.vcs_workspaces {
         upsert_vcs_workspace_tx(tx, workspace)?;
-    }
-    for artifact in &archive.artifacts {
-        store_archive_artifact_tx(tx, blob_dir, artifact, blob_guard)?;
     }
     for artifact in &archive.artifact_records {
         upsert_artifact_tx(tx, artifact)?;
@@ -4623,9 +4383,6 @@ fn import_rich_archive_entities_tx(
     }
     for change in &archive.vcs_changes {
         upsert_vcs_change_tx(tx, change)?;
-    }
-    for pr in &archive.pull_requests {
-        upsert_pull_request_tx(tx, pr)?;
     }
     for summary in &archive.summaries {
         upsert_summary_tx(tx, summary)?;
@@ -5016,6 +4773,7 @@ fn upsert_vcs_change_tx(tx: &Transaction<'_>, change: &VcsChange) -> Result<Uuid
     .map_err(StoreError::from)
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn upsert_pull_request_tx(tx: &Transaction<'_>, pr: &PullRequest) -> Result<Uuid> {
     tx.execute(
         r#"
@@ -5234,9 +4992,9 @@ fn upsert_record_tx(
         (
             id, title, summary, status, started_at_ms, last_activity_at_ms,
             created_at_ms, updated_at_ms, source_id, body, tags_json, kind,
-            workspace, pr_url, created_at, updated_at
+            workspace, created_at, updated_at
         )
-        VALUES (?1, ?2, ?3, 'open', ?4, ?5, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        VALUES (?1, ?2, ?3, 'open', ?4, ?5, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
         ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
             summary = excluded.summary,
@@ -5250,7 +5008,6 @@ fn upsert_record_tx(
             tags_json = excluded.tags_json,
             kind = excluded.kind,
             workspace = excluded.workspace,
-            pr_url = excluded.pr_url,
             created_at = excluded.created_at,
             updated_at = excluded.updated_at
         "#,
@@ -5265,7 +5022,6 @@ fn upsert_record_tx(
             serde_json::to_string(&record.tags)?,
             record.kind,
             record.workspace,
-            record.pr_url,
             record.created_at.to_rfc3339(),
             record.updated_at.to_rfc3339(),
         ],
@@ -5273,6 +5029,7 @@ fn upsert_record_tx(
     Ok(())
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn upsert_evidence_tx(
     tx: &Transaction<'_>,
     blob_dir: &Path,
@@ -5347,6 +5104,7 @@ fn upsert_evidence_tx(
     Ok(())
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn upsert_evidence_with_archive_artifacts_tx(
     tx: &Transaction<'_>,
     blob_dir: &Path,
@@ -5440,6 +5198,7 @@ fn upsert_evidence_with_archive_artifacts_tx(
     Ok(())
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn update_evidence_metadata_tx(tx: &Transaction<'_>, metadata: &EvidenceMetadata) -> Result<()> {
     let changed = tx.execute(
         r#"
@@ -5497,6 +5256,7 @@ fn update_evidence_metadata_tx(tx: &Transaction<'_>, metadata: &EvidenceMetadata
     Ok(())
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn store_archive_artifact_tx(
     tx: &Transaction<'_>,
     blob_dir: &Path,
@@ -5561,6 +5321,7 @@ fn store_archive_artifact_tx(
     Ok(artifact_id)
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn store_output_artifact_tx(
     tx: &Transaction<'_>,
     blob_dir: &Path,
@@ -5620,6 +5381,7 @@ fn store_output_artifact_tx(
     Ok(Some(artifact_id))
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn replace_evidence_artifact_links_tx(
     tx: &Transaction<'_>,
     evidence_id: Uuid,
@@ -5639,6 +5401,7 @@ fn replace_evidence_artifact_links_tx(
     Ok(())
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn insert_evidence_artifact_link_tx(
     tx: &Transaction<'_>,
     evidence_id: Uuid,
@@ -5857,12 +5620,14 @@ fn vcs_change_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VcsChange> {
     })
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn pull_request_select_sql(tail: &str) -> String {
     format!(
         "SELECT id, vcs_workspace_id, provider, url, number, owner, repo, title, state, head_ref, base_ref, head_sha, confidence, link_source, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json FROM pull_requests {tail}"
     )
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn pull_request_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PullRequest> {
     Ok(PullRequest {
         id: parse_uuid(row.get::<_, String>(0)?)?,
@@ -6037,16 +5802,18 @@ fn parse_json(value: String) -> rusqlite::Result<serde_json::Value> {
 
 fn record_select_sql(tail: &str) -> String {
     format!(
-        "SELECT id, title, body, tags_json, kind, workspace, pr_url, created_at, updated_at FROM work_records {tail}"
+        "SELECT id, title, body, tags_json, kind, workspace, created_at, updated_at FROM work_records {tail}"
     )
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn evidence_select_sql(tail: &str) -> String {
     format!(
         "SELECT id, COALESCE(record_id, work_record_id), command, exit_code, stdout, stderr, started_at, duration_ms FROM evidence {tail}"
     )
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn evidence_metadata_select_sql(tail: &str) -> String {
     format!(
         "SELECT id, work_record_id, vcs_change_id, kind, status, freshness, command_run_id, artifact_id, observed_tree_hash, observed_head_sha, started_at_ms, ended_at_ms, stale_reason, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json FROM evidence {tail}"
@@ -6063,12 +5830,12 @@ fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkRecord> {
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?,
         kind: row.get(4)?,
         workspace: row.get(5)?,
-        pr_url: row.get(6)?,
-        created_at: parse_time(row.get::<_, String>(7)?)?,
-        updated_at: parse_time(row.get::<_, String>(8)?)?,
+        created_at: parse_time(row.get::<_, String>(6)?)?,
+        updated_at: parse_time(row.get::<_, String>(7)?)?,
     })
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn evidence_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Evidence> {
     let record_id: Option<String> = row.get(1)?;
     Ok(Evidence {
@@ -6086,6 +5853,7 @@ fn evidence_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Evidence> {
     })
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 fn evidence_metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvidenceMetadata> {
     let vcs_change_id: Option<String> = row.get(2)?;
     let command_run_id: Option<String> = row.get(6)?;
@@ -6191,7 +5959,7 @@ fn collect_rows<T>(
     Ok(values)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-pr-evidence"))]
 mod tests {
     use super::*;
     use work_record_core::{
@@ -6905,7 +6673,7 @@ mod tests {
     }
 
     #[test]
-    fn fts_projection_is_populated_with_redacted_evidence_text() {
+    fn fts_projection_does_not_index_legacy_evidence_text() {
         let temp = tempdir();
         let store = Store::open(temp.path().join("work.sqlite")).unwrap();
         let record = WorkRecord::new(
@@ -6928,8 +6696,7 @@ mod tests {
         store.insert_evidence(&evidence).unwrap();
 
         let records = store.search_records("needle-only-output", 10).unwrap();
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].id, record.id);
+        assert!(records.is_empty());
 
         if table_exists(&store.conn, "work_record_search").unwrap() {
             let evidence_text: String = store
@@ -6940,9 +6707,7 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert!(evidence_text.contains("needle-only-output"));
-            assert!(evidence_text.contains("password=[REDACTED_SECRET]"));
-            assert!(!evidence_text.contains("hunter2"));
+            assert!(evidence_text.is_empty());
         }
     }
 

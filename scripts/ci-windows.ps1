@@ -583,32 +583,34 @@ function Run-Platform-Smoke {
   $dataRoot = Join-PathSafe $env:TMPDIR ("ctx-records-smoke-" + [Guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
   $env:CTX_DATA_ROOT = $dataRoot
-  $env:CTX_DASHBOARD_IDLE_SECONDS = "1"
 
   Run-Ctx $bin @("setup")
-  $recordOutput = & $bin record --title "platform smoke" --body "platform smoke body" --tag "smoke" --json
+  Run-Ctx $bin @("sources", "--json")
+  $fixture = Join-PathSafe $script:RepoRoot "tests\fixtures\provider-history\codex-sessions"
+  Run-Ctx $bin @("import", "--provider", "codex", "--path", $fixture, "--json")
+  $listOutput = & $bin list --json
   if ($LASTEXITCODE -ne 0) {
-    throw "platform smoke failed to create a record"
+    throw "platform smoke failed to list imported history"
   }
   try {
-    $recordJson = ($recordOutput -join "`n") | ConvertFrom-Json
+    $recordJson = ($listOutput -join "`n") | ConvertFrom-Json
     $recordId = $null
-    if (($recordJson.PSObject.Properties.Name -contains "record") -and $recordJson.record) {
-      $recordId = $recordJson.record.id
-    } elseif ($recordJson.PSObject.Properties.Name -contains "id") {
-      $recordId = $recordJson.id
+    if (($recordJson.PSObject.Properties.Name -contains "items") -and $recordJson.items -and $recordJson.items.Count -gt 0) {
+      $recordId = $recordJson.items[0].id
     }
     if ([string]::IsNullOrWhiteSpace([string]$recordId)) {
       throw "missing id"
     }
-    Write-Host "platform smoke record: $recordId"
+    Write-Host "platform smoke item: $recordId"
   } catch {
-    throw "platform smoke failed to parse record id from: $recordOutput"
+    throw "platform smoke failed to parse item id from: $listOutput"
   }
-  Run-Ctx $bin @("search", "platform", "--json")
-  Run-Ctx $bin @("context", "platform", "--json")
-  Run-Ctx $bin @("dashboard", "export", "--output", (Join-PathSafe $dataRoot "dashboard"))
-  Run-Ctx $bin @("validate")
+  Run-Ctx $bin @("search", "onboarding", "--json")
+  Run-Ctx $bin @("show", $recordId, "--json")
+  Run-Ctx $bin @("context", "onboarding", "--json")
+  Run-Ctx $bin @("status", "--json")
+  Run-Ctx $bin @("doctor", "--json")
+  Run-Ctx $bin @("validate", "--json")
 }
 
 function Sha256-File {

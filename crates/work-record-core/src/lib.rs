@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use directories::BaseDirs;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -155,10 +156,7 @@ text_enum! {
     pub enum CaptureSourceKind {
         ProviderImport => "provider_import",
         ProviderHook => "provider_hook",
-        Shim => "shim",
         DirectCli => "direct_cli",
-        Dashboard => "dashboard",
-        HostedSync => "hosted_sync",
         Manual => "manual",
     }
     default Manual
@@ -237,7 +235,6 @@ text_enum! {
         ToolCall => "tool_call",
         Review => "review",
         Import => "import",
-        Evidence => "evidence",
         Summary => "summary",
     }
     default Command
@@ -265,8 +262,6 @@ text_enum! {
         CommandFinished => "command_finished",
         FileTouched => "file_touched",
         VcsChange => "vcs_change",
-        PrLink => "pr_link",
-        Evidence => "evidence",
         Artifact => "artifact",
         Summary => "summary",
         Notice => "notice",
@@ -318,36 +313,13 @@ text_enum! {
 }
 
 text_enum! {
-    pub enum PullRequestProvider {
-        Github => "github",
-        Gitlab => "gitlab",
-        Unknown => "unknown",
-    }
-    default Unknown
-}
-
-text_enum! {
-    pub enum PullRequestLinkSource {
-        Explicit => "explicit",
-        GhShim => "gh_shim",
-        CapturedUrl => "captured_url",
-        InferredBranch => "inferred_branch",
-        InferredCommit => "inferred_commit",
-        Manual => "manual",
-    }
-    default Manual
-}
-
-text_enum! {
     pub enum WorkRecordLinkTargetType {
         Session => "session",
         Run => "run",
         Event => "event",
         VcsWorkspace => "vcs_workspace",
         VcsChange => "vcs_change",
-        PullRequest => "pull_request",
         Artifact => "artifact",
-        Evidence => "evidence",
     }
     default Event
 }
@@ -357,8 +329,6 @@ text_enum! {
         Produced => "produced",
         Touched => "touched",
         References => "references",
-        EvidenceFor => "evidence_for",
-        PublishedTo => "published_to",
         LikelyRelated => "likely_related",
     }
     default References
@@ -378,42 +348,6 @@ text_enum! {
         Binary => "binary",
     }
     default Binary
-}
-
-text_enum! {
-    pub enum EvidenceKind {
-        Test => "test",
-        Lint => "lint",
-        Build => "build",
-        Typecheck => "typecheck",
-        Screenshot => "screenshot",
-        Review => "review",
-        Ci => "ci",
-        Manual => "manual",
-    }
-    default Manual
-}
-
-text_enum! {
-    pub enum EvidenceStatus {
-        Passed => "passed",
-        Failed => "failed",
-        Skipped => "skipped",
-        Stale => "stale",
-        Unknown => "unknown",
-    }
-    default Unknown
-}
-
-text_enum! {
-    pub enum EvidenceFreshness {
-        Fresh => "fresh",
-        ProbablyFresh => "probably_fresh",
-        Stale => "stale",
-        Unbound => "unbound",
-        Inferred => "inferred",
-    }
-    default Unbound
 }
 
 text_enum! {
@@ -492,7 +426,6 @@ text_enum! {
         Human => "human",
         Agent => "agent",
         System => "system",
-        Hosted => "hosted",
     }
     default System
 }
@@ -504,9 +437,7 @@ text_enum! {
         Run => "run",
         Event => "event",
         VcsChange => "vcs_change",
-        PullRequest => "pull_request",
         Artifact => "artifact",
-        Evidence => "evidence",
         Summary => "summary",
         File => "file",
     }
@@ -521,7 +452,6 @@ pub struct WorkRecord {
     pub tags: Vec<String>,
     pub kind: String,
     pub workspace: Option<String>,
-    pub pr_url: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -542,13 +472,13 @@ impl WorkRecord {
             tags,
             kind: kind.into(),
             workspace,
-            pr_url: None,
             created_at: now,
             updated_at: now,
         }
     }
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Evidence {
     pub id: Uuid,
@@ -561,6 +491,7 @@ pub struct Evidence {
     pub duration_ms: i64,
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 impl Evidence {
     pub fn new(
         record_id: Option<Uuid>,
@@ -591,9 +522,12 @@ pub struct WorkRecordArchive {
     #[serde(default = "legacy_archive_schema_version")]
     pub version: u32,
     pub records: Vec<WorkRecord>,
+    #[cfg(feature = "legacy-pr-evidence")]
     pub evidence: Vec<Evidence>,
+    #[cfg(feature = "legacy-pr-evidence")]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence_metadata: Vec<EvidenceMetadata>,
+    #[cfg(feature = "legacy-pr-evidence")]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<WorkRecordArchiveArtifact>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -610,6 +544,7 @@ pub struct WorkRecordArchive {
     pub vcs_workspaces: Vec<VcsWorkspace>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vcs_changes: Vec<VcsChange>,
+    #[cfg(feature = "legacy-pr-evidence")]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pull_requests: Vec<PullRequest>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -626,8 +561,11 @@ impl Default for WorkRecordArchive {
             schema_version: archive_schema_version(),
             version: archive_schema_version(),
             records: Vec::new(),
+            #[cfg(feature = "legacy-pr-evidence")]
             evidence: Vec::new(),
+            #[cfg(feature = "legacy-pr-evidence")]
             evidence_metadata: Vec::new(),
+            #[cfg(feature = "legacy-pr-evidence")]
             artifacts: Vec::new(),
             capture_sources: Vec::new(),
             sessions: Vec::new(),
@@ -636,6 +574,7 @@ impl Default for WorkRecordArchive {
             artifact_records: Vec::new(),
             vcs_workspaces: Vec::new(),
             vcs_changes: Vec::new(),
+            #[cfg(feature = "legacy-pr-evidence")]
             pull_requests: Vec::new(),
             work_record_links: Vec::new(),
             summaries: Vec::new(),
@@ -644,6 +583,7 @@ impl Default for WorkRecordArchive {
     }
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkRecordArchiveArtifact {
     pub id: Uuid,
@@ -666,6 +606,7 @@ pub struct WorkRecordArchiveArtifact {
 pub struct WorkContext {
     pub query: Option<String>,
     pub records: Vec<WorkRecord>,
+    #[cfg(feature = "legacy-pr-evidence")]
     pub evidence: Vec<Evidence>,
 }
 
@@ -911,6 +852,30 @@ pub struct VcsChange {
     pub sync: SyncMetadata,
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
+text_enum! {
+    pub enum PullRequestProvider {
+        Github => "github",
+        Gitlab => "gitlab",
+        Unknown => "unknown",
+    }
+    default Unknown
+}
+
+#[cfg(feature = "legacy-pr-evidence")]
+text_enum! {
+    pub enum PullRequestLinkSource {
+        Explicit => "explicit",
+        GhShim => "gh_shim",
+        CapturedUrl => "captured_url",
+        InferredBranch => "inferred_branch",
+        InferredCommit => "inferred_commit",
+        Manual => "manual",
+    }
+    default Manual
+}
+
+#[cfg(feature = "legacy-pr-evidence")]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PullRequest {
     pub id: Uuid,
@@ -983,6 +948,46 @@ pub struct Artifact {
     pub sync: SyncMetadata,
 }
 
+#[cfg(feature = "legacy-pr-evidence")]
+text_enum! {
+    pub enum EvidenceKind {
+        Test => "test",
+        Lint => "lint",
+        Build => "build",
+        Typecheck => "typecheck",
+        Screenshot => "screenshot",
+        Review => "review",
+        Ci => "ci",
+        Manual => "manual",
+    }
+    default Manual
+}
+
+#[cfg(feature = "legacy-pr-evidence")]
+text_enum! {
+    pub enum EvidenceStatus {
+        Passed => "passed",
+        Failed => "failed",
+        Skipped => "skipped",
+        Stale => "stale",
+        Unknown => "unknown",
+    }
+    default Unknown
+}
+
+#[cfg(feature = "legacy-pr-evidence")]
+text_enum! {
+    pub enum EvidenceFreshness {
+        Fresh => "fresh",
+        ProbablyFresh => "probably_fresh",
+        Stale => "stale",
+        Unbound => "unbound",
+        Inferred => "inferred",
+    }
+    default Unbound
+}
+
+#[cfg(feature = "legacy-pr-evidence")]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvidenceMetadata {
     pub id: Uuid,
@@ -1232,24 +1237,22 @@ pub struct ContextCitation {
     pub id: Uuid,
     pub label: String,
     pub time: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContextEvidence {
-    pub id: Uuid,
-    pub kind: EvidenceKind,
-    pub status: EvidenceStatus,
-    #[serde(default)]
-    pub freshness: EvidenceFreshness,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<CaptureProvider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_source_exists: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContextLinks {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dashboard: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pr: Option<String>,
-}
+pub struct ContextLinks {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextResult {
@@ -1262,8 +1265,6 @@ pub struct ContextResult {
     pub why_matched: Vec<String>,
     #[serde(default)]
     pub citations: Vec<ContextCitation>,
-    #[serde(default)]
-    pub evidence: Vec<ContextEvidence>,
     #[serde(default)]
     pub links: ContextLinks,
     #[serde(default)]
@@ -1284,8 +1285,6 @@ pub struct ContextTruncation {
     pub truncated: bool,
     #[serde(default)]
     pub omitted_results: u32,
-    #[serde(default)]
-    pub omitted_evidence: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -1295,6 +1294,8 @@ pub struct AgentContextPacket {
     pub schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub filters: Value,
     pub generated_at: DateTime<Utc>,
     pub budget: ContextBudget,
     #[serde(default)]
@@ -1322,17 +1323,6 @@ impl AgentContextPacket {
                 estimated_tokens = estimated_tokens
                     .saturating_add(estimate_tokens(&record.title))
                     .saturating_add(summary.as_deref().map(estimate_tokens).unwrap_or(0));
-                let evidence = context
-                    .evidence
-                    .iter()
-                    .filter(|evidence| evidence.record_id == Some(record.id))
-                    .map(|evidence| ContextEvidence {
-                        id: evidence.id,
-                        kind: evidence_kind_from_command(&evidence.command),
-                        status: evidence_status_from_exit(evidence.exit_code),
-                        freshness: EvidenceFreshness::Unbound,
-                    })
-                    .collect();
                 let mut why_matched = Vec::new();
                 if context
                     .query
@@ -1360,14 +1350,16 @@ impl AgentContextPacket {
                     citations: vec![ContextCitation {
                         citation_type: ContextCitationType::WorkRecord,
                         id: record.id,
-                        label: "work record".to_owned(),
+                        label: "session".to_owned(),
                         time: record.created_at,
+                        provider: None,
+                        session_id: None,
+                        event_seq: None,
+                        raw_source_path: None,
+                        raw_source_exists: None,
+                        cursor: None,
                     }],
-                    evidence,
-                    links: ContextLinks {
-                        dashboard: None,
-                        pr: record.pr_url.clone(),
-                    },
+                    links: ContextLinks {},
                     visibility: Visibility::LocalOnly,
                 }
             })
@@ -1376,6 +1368,7 @@ impl AgentContextPacket {
         Self {
             schema_version: 1,
             query: context.query.clone(),
+            filters: Value::Null,
             generated_at,
             budget: ContextBudget {
                 max_tokens,
@@ -1442,10 +1435,6 @@ pub fn spool_dir(root: PathBuf) -> PathBuf {
 
 pub fn inbox_dir(root: PathBuf) -> PathBuf {
     spool_dir(root)
-}
-
-pub fn shim_dir(root: PathBuf) -> PathBuf {
-    work_record_dir(root).join("shims")
 }
 
 pub fn config_path(root: PathBuf) -> PathBuf {
@@ -1654,27 +1643,6 @@ fn local_path_regexes() -> &'static [Regex] {
         .as_slice()
 }
 
-fn evidence_status_from_exit(exit_code: i32) -> EvidenceStatus {
-    if exit_code == 0 {
-        EvidenceStatus::Passed
-    } else {
-        EvidenceStatus::Failed
-    }
-}
-
-fn evidence_kind_from_command(command: &str) -> EvidenceKind {
-    let lower = command.to_ascii_lowercase();
-    if lower.contains("test") {
-        EvidenceKind::Test
-    } else if lower.contains("lint") || lower.contains("clippy") {
-        EvidenceKind::Lint
-    } else if lower.contains("build") {
-        EvidenceKind::Build
-    } else {
-        EvidenceKind::Manual
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1696,6 +1664,7 @@ mod tests {
         assert_eq!(SyncState::default(), SyncState::LocalOnly);
         assert_eq!(Confidence::default(), Confidence::Unknown);
         assert_eq!(RedactionState::default(), RedactionState::SafePreview);
+        #[cfg(feature = "legacy-pr-evidence")]
         assert_eq!(EvidenceFreshness::default(), EvidenceFreshness::Unbound);
 
         let sync: SyncMetadata = serde_json::from_value(json!({})).unwrap();
@@ -1780,6 +1749,7 @@ mod tests {
     #[test]
     fn generated_ids_are_uuid_v7_and_paths_are_centralized() {
         let record = WorkRecord::new("Task", "body", Vec::new(), "task", None);
+        #[cfg(feature = "legacy-pr-evidence")]
         let evidence = Evidence::new(
             Some(record.id),
             "cargo test",
@@ -1791,6 +1761,7 @@ mod tests {
         );
 
         assert_eq!(record.id.get_version_num(), 7);
+        #[cfg(feature = "legacy-pr-evidence")]
         assert_eq!(evidence.id.get_version_num(), 7);
     }
 
@@ -1821,7 +1792,6 @@ mod tests {
             inbox_dir(root.clone()),
             PathBuf::from("/tmp/ctx-root/spool")
         );
-        assert_eq!(shim_dir(root.clone()), PathBuf::from("/tmp/ctx-root/shims"));
         assert_eq!(
             config_path(root.clone()),
             PathBuf::from("/tmp/ctx-root/config.toml")
@@ -1870,11 +1840,16 @@ mod tests {
             .with_timezone(&Utc);
         let record_id = Uuid::parse_str("018f45d0-0000-7000-8000-000000000001").unwrap();
         let event_id = Uuid::parse_str("018f45d0-0000-7000-8000-000000000002").unwrap();
-        let evidence_id = Uuid::parse_str("018f45d0-0000-7000-8000-000000000003").unwrap();
 
         let packet = AgentContextPacket {
             schema_version: 1,
             query: Some("checkout retry".to_owned()),
+            filters: json!({
+                "provider": "codex",
+                "repo": "ctx",
+                "primary_only": false,
+                "include_subagents": true
+            }),
             generated_at,
             budget: ContextBudget {
                 max_tokens: 12_000,
@@ -1888,24 +1863,21 @@ mod tests {
                 why_matched: vec![
                     "title".to_owned(),
                     "primary_user_message".to_owned(),
-                    "failed_command".to_owned(),
+                    "command_event".to_owned(),
                 ],
                 citations: vec![ContextCitation {
                     citation_type: ContextCitationType::Event,
                     id: event_id,
                     label: "primary user prompt".to_owned(),
                     time: generated_at,
+                    provider: None,
+                    session_id: None,
+                    event_seq: None,
+                    raw_source_path: None,
+                    raw_source_exists: None,
+                    cursor: None,
                 }],
-                evidence: vec![ContextEvidence {
-                    id: evidence_id,
-                    kind: EvidenceKind::Test,
-                    status: EvidenceStatus::Passed,
-                    freshness: EvidenceFreshness::Fresh,
-                }],
-                links: ContextLinks {
-                    dashboard: Some(format!("http://127.0.0.1:3000/records/{record_id}")),
-                    pr: Some("https://github.com/org/repo/pull/123".to_owned()),
-                },
+                links: ContextLinks {},
                 visibility: Visibility::Reportable,
             }],
             pagination: ContextPagination {
@@ -1918,6 +1890,7 @@ mod tests {
         let value = serde_json::to_value(&packet).unwrap();
         assert_eq!(value["schema_version"], json!(1));
         assert_eq!(value["query"], json!("checkout retry"));
+        assert_eq!(value["filters"]["provider"], json!("codex"));
         assert_eq!(value["generated_at"], json!("2026-06-22T00:00:00Z"));
         assert_eq!(value["budget"]["max_tokens"], json!(12000));
         assert_eq!(
@@ -1925,19 +1898,13 @@ mod tests {
             json!(record_id.to_string())
         );
         assert_eq!(value["results"][0]["citations"][0]["type"], json!("event"));
-        assert_eq!(
-            value["results"][0]["evidence"][0]["freshness"],
-            json!("fresh")
-        );
+        assert!(value["results"][0].get("evidence").is_none());
         assert_eq!(value["results"][0]["visibility"], json!("reportable"));
         assert_eq!(value["pagination"]["cursor"], json!("opaque"));
 
         let decoded: AgentContextPacket = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.results[0].record_id, record_id);
-        assert_eq!(
-            decoded.results[0].evidence[0].status,
-            EvidenceStatus::Passed
-        );
+        assert_eq!(decoded.filters["repo"], json!("ctx"));
         assert_eq!(decoded.results[0].visibility, Visibility::Reportable);
     }
 
@@ -1947,6 +1914,7 @@ mod tests {
         let context = WorkContext {
             query: Some("local".to_owned()),
             records: vec![record],
+            #[cfg(feature = "legacy-pr-evidence")]
             evidence: Vec::new(),
         };
 

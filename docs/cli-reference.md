@@ -1,311 +1,131 @@
 # CLI Reference
 
-ctx is CLI-first. These examples match the public work records command surface.
+ctx is a local CLI for indexing and searching agent session history.
 
-The primary CLI uses root-level ctx work records commands. The older
-`ctx workspace ...` and `ctx work ...` forms remain as hidden compatibility
-aliases for the current local behavior.
-
-## Workspace
+## Setup And Health
 
 ```bash
 ctx setup
-ctx setup --no-open
-ctx setup --no-import
-ctx setup --no-shell-update
-ctx setup --service
-ctx setup --yes
-ctx setup --dry-run
 ctx status
 ctx status --json
-ctx dashboard
-ctx dashboard --no-open
-ctx service install
-ctx service status
-ctx service uninstall
-ctx uninstall
-ctx uninstall --delete-data --yes
-```
-
-- `setup` creates or updates the local ctx root, installs ctx-owned Git/jj/gh
-  passive capture shims under `shims/`, imports known supported provider
-  history, updates future shells with a managed rc block when safe, and
-  starts/opens the dashboard in interactive desktop/browser sessions.
-- `setup --no-open` keeps setup from opening a browser and prints the dashboard
-  URL/command instead. Headless, SSH, and CI sessions should behave the same
-  way by default.
-- `setup --no-import` skips provider-history import. `--no-shell-update` skips
-  shell rc edits. `--service` opts into the optional background service.
-  `--yes` accepts unambiguous prompts, and `--dry-run` reports intended changes.
-- `status` prints the ctx root, database path, shim status, dashboard
-  URL/running status, and capture spool pending count. `status --json` emits
-  the same health fields as stable local diagnostic JSON; it intentionally
-  includes local filesystem paths.
-- `dashboard` starts or reuses a small localhost dashboard server and opens it
-  when possible. The dashboard should live-update while open as new work is
-  recorded; with `--no-open` or in headless sessions, it prints the URL and
-  command instead.
-- `service install`, `service status`, and `service uninstall` manage the
-  optional always-running dashboard/background service. No service is installed
-  by default.
-- `uninstall` removes shims, the managed shell rc block, and the optional
-  service if installed, but keeps recorded data. `uninstall --delete-data`
-  deletes the local store, objects, spool, logs, and config after explicit
-  confirmation or `--yes`.
-
-## Schema
-
-```bash
-ctx schema
-```
-
-Prints the local SQLite schema.
-
-## Records
-
-```bash
-ctx record --title "task title" --body "prompt, note, or summary" --tag cli --kind task
-ctx record --title "long note" --body - --kind note
-ctx list
-ctx list --limit 50 --json
-ctx show <record-id>
-ctx show <record-id> --json
-ctx search checkout
-ctx search checkout --limit 10 --json
-```
-
-- `record` creates a work record.
-- `--title` is required.
-- `--body` accepts inline text. Use `--body -` to read from stdin.
-- `--tag` may be repeated.
-- `--kind` defaults to `note`.
-- `--workspace` can set an explicit workspace path.
-- `list`, `show`, and `search` read records back from the local store.
-- Human `list`, `show`, and `search` output plus `list --json`, `show --json`,
-  and `search --json` are share-safe by default: secret-like values, credential
-  URLs, and local paths are redacted.
-
-## Context and reports
-
-```bash
-ctx context
-ctx context checkout
-ctx context checkout --limit 20 --json
-ctx report
-ctx report --format json
-ctx dashboard
-ctx dashboard export --output ./ctx-dashboard
-```
-
-- `context` renders records and evidence for a query as Markdown by default.
-- `report` summarizes recent records and evidence as share-safe text or JSON.
-  Summary tags and report records are redacted by default.
-- `dashboard export` writes a local React/Vite dashboard to `index.html` in the
-  output directory, with bundled local assets. It includes summary metrics,
-  recent records, provider/session detail, transcript previews, tool-call
-  previews, PR links, evidence previews, tags, artifact metadata, freshness
-  state, redaction state, and capture/search cues.
-  The export has no hosted sync, tracking, or remote assets; review it before
-  sharing. Re-run `ctx dashboard export --output <dir>` to refresh the static
-  files after new capture/import activity.
-
-## Evidence
-
-```bash
-ctx evidence run cargo test
-ctx evidence run --record <record-id> cargo test -p checkout
-ctx evidence run --record <record-id> --timeout-seconds 30 --max-output-bytes 32768 cargo test -p checkout
-```
-
-`evidence run` executes the command and stores its command string, exit code,
-safe stdout/stderr previews, start time, and duration in SQLite. Full
-stdout/stderr content is stored as local-only object artifacts. Use
-`--record <record-id>` to attach the evidence to a specific record.
-
-- `--max-output-bytes` caps the stored stdout and stderr payloads per stream.
-- `--timeout-seconds` kills the command after the timeout and records exit code
-  `124`.
-
-If `--record` is omitted, ctx creates a small `evidence` work record for the
-captured command.
-
-## Local shims
-
-```bash
-ctx shim install --dir .ctx-shims
-ctx shim env --dir .ctx-shims
-ctx shim activate-shell --dir .ctx-shims --shell-rc ~/.zshrc
-ctx shim deactivate-shell --dir .ctx-shims --shell-rc ~/.zshrc
-ctx shim uninstall --dir .ctx-shims
-```
-
-- `shim install` writes local wrapper scripts for `git`, `jj`, and `gh` into
-  the chosen directory.
-- `shim env` prints a shell `PATH` export that places that directory before the
-  real tools.
-- `shim activate-shell` and `shim deactivate-shell` manage only the ctx
-  marker-bounded shell rc block and back up the file before changing it.
-- `shim uninstall` removes only wrapper scripts marked as ctx-created shims.
-
-The wrappers run the real command found later on `PATH`, preserve its exit code,
-and best-effort spool command metadata plus stdout/stderr into the local JSONL
-capture spool. They do not install repository hooks or start a daemon.
-
-## Capture spool
-
-```bash
-ctx capture import
-ctx capture import --json
-ctx capture import-provider --provider codex --input tests/fixtures/provider/codex.jsonl --json
-ctx capture import-provider --provider claude --input tests/fixtures/provider/claude.jsonl
-ctx capture import-provider --provider pi --input tests/fixtures/provider/pi.jsonl
-ctx capture import-provider --provider opencode --input tests/fixtures/provider/opencode.jsonl
-ctx capture import-provider --provider antigravity --input tests/fixtures/provider/antigravity.jsonl
-ctx capture import-provider --provider gemini --input tests/fixtures/provider/gemini.jsonl
-ctx capture import-provider --provider cursor --input tests/fixtures/provider/cursor.jsonl
-ctx capture import-codex-sessions --input ~/.codex/sessions --json
-ctx capture import-codex-history --input ~/.codex/history.jsonl --json
-ctx capture import-pi-session --input ~/.pi/agent/sessions/<session>.jsonl --json
-ctx capture import-local-providers --json
-```
-
-`capture import` imports pending JSONL capture envelope files from the local
-ctx spool. The spool path is printed by `ctx status`.
-
-- pending files end in `.jsonl`;
-- successfully imported files move to `.jsonl.done`;
-- failed imports move to `.jsonl.failed` and get a `.error.json` sidecar;
-- `ctx status` prints spool counts;
-- `ctx validate` reports failed or still-processing spool files.
-
-`capture import-provider` imports normalized provider fixture JSONL for
-`codex`, `claude`, `pi`, `opencode`, `antigravity`, `gemini`, or `cursor`. It
-stores provider sessions/events through the rich capture library path and
-creates a local summary work record when new sessions or events are imported, so
-`ctx search`, `ctx context`, `ctx report`, and `ctx dashboard export` have
-useful review material immediately. Re-running the same fixture is idempotent
-for the summary record.
-
-Malformed provider fixture JSONL and provider mismatches fail during CLI
-preflight before any provider summary record is created. Rows that pass CLI
-preflight but fail during the lower typed capture import are reported as failed
-in text or JSON output; that lower-import failure can leave the provisional
-local summary work record that links the attempted import.
-
-`capture import-codex-sessions` imports a Codex session JSONL tree only when you
-provide the input path explicitly. Imported sessions create stable per-session
-Work Records. Imported rows are marked with `source_format=codex_session_jsonl`
-and `fidelity=imported`. This path captures user and assistant messages, tool
-calls, command-output previews with exit/duration metadata when Codex records
-it, reasoning summaries, lifecycle notices, and parent/child session edges when
-Codex records them. Full raw tool arguments, complete stdout/stderr, encrypted
-reasoning content, bootstrap context, and binary/image artifacts remain in the
-raw transcript file referenced by the imported session unless they are available
-as safe bounded previews.
-
-`capture import-codex-history` imports a legacy Codex prompt-history JSONL file
-only when you provide the input path explicitly. The observed Codex history
-format contains `session_id`, unix `ts`, and prompt `text`; imported rows are
-marked with `source_format=codex_history_jsonl` and `fidelity=summary_only`.
-This path does not capture assistant replies, tool calls, command output,
-artifacts, or child session relationships.
-
-`capture import-pi-session` imports a Pi session JSONL file only when you
-provide the input path explicitly. Imported rows are marked with
-`source_format=pi_session_jsonl` and `fidelity=imported`. Pi message entry ids
-and parent ids are preserved in event metadata; message branches are not mapped
-to ctx subagent session edges, and raw image blocks are not expanded into
-artifacts.
-
-`capture import-local-providers` checks known local provider locations. It
-prefers Codex `~/.codex/sessions` when present, falls back to legacy
-`~/.codex/history.jsonl`, imports bounded Pi session JSONL files under
-`~/.pi/agent/sessions` when present, reports missing supported history
-otherwise, and reports discovered Claude/OpenCode/Antigravity/Gemini/Cursor
-surfaces as fixture-only blockers instead of importing unproven transcripts.
-Provider-native hooks are not implemented in this branch. See
-[provider-support.md](provider-support.md) for the current support matrix and
-native-history blockers.
-
-## VCS and pull request helpers
-
-```bash
-ctx vcs inspect
-ctx vcs inspect /path/to/repo --json
-ctx pr parse https://github.com/example/project/pull/42
-ctx pr parse https://gitlab.com/example/project/-/merge_requests/42 --json
-```
-
-- `vcs inspect` reports Git workspace metadata, redacted remotes, worktree
-  state, a stable repository fingerprint, and jj workspace metadata when `jj`
-  is installed.
-- `pr parse` parses supported GitHub pull request URLs and GitLab merge request
-  URLs into provider, owner, repo, number, normalized URL, and confidence.
-
-## Pull requests
-
-```bash
-ctx link-pr <record-id> https://github.com/example/project/pull/42
-ctx link-pr <record-id> https://github.com/example/project/pull/42 --json
-ctx publish pr-comment <record-id> --dry-run
-ctx publish pr-comment <record-id> --dry-run --json
-ctx publish pr-comment <record-id> --dry-run --include-raw-transcript
-ctx publish pr-comment <record-id>
-```
-
-- `link-pr` stores a local pull request URL string on a work record. Use
-  `ctx pr parse` first to validate and normalize the URL before attaching it.
-- `publish pr-comment --dry-run` renders the finished-product PR comment
-  Markdown for the linked GitHub pull request without mutating the network.
-  Add `--json` to wrap the rendered markdown with stable target and transcript
-  mode metadata.
-- `publish pr-comment` uses the authenticated `gh` CLI to create or update one
-  marker-bounded ctx comment on the linked GitHub pull request.
-- PR comment rendering redacts command output and secret-like content by
-  default.
-  `--include-raw-transcript` is an explicit opt-in for private PRs where raw
-  command stdout/stderr evidence is acceptable to share; publishing currently
-  supports GitHub PRs through `gh`.
-- GitLab publishing and hosted/team publishing remain outside this local
-  launch scope.
-
-## Export, import, and validate
-
-```bash
-ctx export
-ctx export --output ctx-records.json
-ctx import --input ctx-records.json
-cat ctx-records.json | ctx import
-ctx validate
-ctx validate --json
 ctx doctor
-ctx doctor --privacy
-ctx repair
-ctx repair --json
+ctx doctor --json
+ctx validate
 ```
 
-- `export` writes a JSON archive to stdout or `--output`, including local object
-  payloads needed to preserve evidence output.
-- `import` reads a JSON archive from `--input` or stdin.
-- `import` handles ctx JSON archives only; provider inputs use
-  `ctx capture import-provider`, `ctx capture import-codex-sessions`,
-  `ctx capture import-codex-history`, or `ctx capture import-pi-session`.
-- `validate` checks local ctx storage and prints `valid` when no findings are found.
-  `validate --json` emits stable local diagnostic JSON with `valid`, `findings`,
-  and capture spool counts.
-- `doctor` runs the same local health checks using the product-facing command name.
-- `doctor --privacy` prints local-only storage posture, validation state,
-  capture spool counts, and filesystem permission status for the ctx root,
-  database, and spool.
-- `repair` retries failed capture spool files and imports anything that succeeds.
+- `setup` creates `~/.ctx`, opens or creates the SQLite store, writes
+  `config.toml` when needed, discovers known provider history locations, and
+  prints next steps.
+- `status` prints the ctx root, database path, configured providers, indexed
+  counts, and last import status.
+- `doctor` performs environment and store checks intended for humans and agents.
+- `validate` checks local configuration, database readability, and imported
+  source references.
 
-Normal ctx work records commands import pending capture spool files before serving
-results. Failed imports are retained as `.failed` files for inspection and
-retry.
+Setup is local. It does not change shell startup files, install repository
+integrations, write into source repos, start background processes, call model
+APIs, make network calls, or require API keys.
 
-## Not yet implemented
+## Sources
 
-This branch does not include hosted sync, passive provider hooks beyond local
-Git/jj/gh wrapper shims, native Claude/OpenCode/Antigravity/Gemini/Cursor
-transcript import, public installer flow, hosted/team Option A, or hosted/team
-publishing; hosted/team pull request publishing remains outside launch.
+```bash
+ctx sources
+ctx sources --json
+```
+
+`sources` lists provider history locations ctx can import or has already
+indexed. A source row should include provider, path, detection status, last
+import cursor when known, and a clear unsupported reason when ctx can detect a
+tool but cannot safely parse its history yet.
+
+## Import
+
+```bash
+ctx import
+ctx import --all
+ctx import --provider codex
+ctx import --provider pi
+ctx import --path ~/.codex/sessions
+ctx import --resume
+ctx import --json
+```
+
+`import` indexes provider history into the local SQLite store. It is explicit
+and safe to re-run. Current adapters rescan sources idempotently and replace or
+skip unchanged indexed rows; adapters that expose stable cursors include them in
+source metadata. Import records source metadata, sessions, events, searchable
+text, bounded previews, cursors when available, and source paths. It reports
+files, bytes, sessions, and events processed so long imports are observable.
+
+The current import path is for provider history. It is not a general archive
+restore command.
+
+## List And Show
+
+```bash
+ctx list
+ctx list --json
+ctx show <session-or-record-id>
+ctx show <session-or-record-id> --json
+```
+
+`list` returns indexed sessions or records with IDs, provider, title or first
+message preview, timestamp, repository or working directory when known, and
+event counts. `show` expands one indexed item and includes event IDs suitable
+for citations and follow-up retrieval.
+
+## Search
+
+```bash
+ctx search "build failure"
+ctx search "sqlite storage" --provider codex
+ctx search "retry handling" --repo checkout --since 60d
+ctx search "Buildkite failure" --include-subagents --event-type command_output
+ctx search --file crates/foo/src/lib.rs
+ctx search "token budget" --json
+```
+
+`search` queries indexed sessions and events. Results should include title,
+snippet, provider, session ID, event ID or sequence, timestamp, repository or
+working directory when known, primary or subagent role when known, source path
+and cursor when available, match reason, and a stable ID for `ctx show`.
+
+## Context
+
+```bash
+ctx context "checkout retry"
+ctx context "checkout retry" --max-tokens 6000
+ctx context "checkout retry" --provider codex --since 30d
+ctx context "checkout retry" --json
+```
+
+`context` returns a deterministic retrieval bundle for agents. It includes the
+query, filters, selected sessions/events, snippets, command/tool events where
+relevant, provider and repository metadata, and citations back to raw sources.
+
+`context` does not call a model or infer decisions. If a provider transcript
+already contains a human- or provider-written synopsis, ctx may index and
+return it as quoted source material with citation.
+
+## JSON Contract
+
+JSON output is intended for agents and scripts. Fields should remain stable
+within the current CLI scope unless a command marks a nested object as
+provisional.
+
+Required JSON output paths:
+
+```text
+ctx status --json
+ctx sources --json
+ctx import --json
+ctx list --json
+ctx show <session-or-record-id> --json
+ctx search [query] --json
+ctx context <query> --json
+ctx doctor --json
+```
+
+JSON responses should include machine-readable IDs, provider names, timestamps
+in RFC 3339 when available, local path fields only when useful for citation or
+diagnostics, and explicit warnings when a source file has moved or disappeared.
