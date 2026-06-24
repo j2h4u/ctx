@@ -183,6 +183,25 @@ Buildkite #80 update:
   - `cargo-lowio test --locked -p work-record-core provider_support_matrix --
     --test-threads 1` passed.
   - `CTX_REQUIRE_BAZEL=1 bash scripts/check.sh bazel` passed locally.
+
+Buildkite #81 update:
+
+- Buildkite #81 was triggered for pushed head `7b6f4e8`. The Bazel lane passed,
+  confirming the provider matrix runfiles fix.
+- #81 then failed in `:clipboard: product decision regressions` because the
+  Buildkite worker for that lane did not have `rg`; the product-decision helper
+  used `rg` directly, causing every required-pattern assertion to look missing.
+- Remediation: `scripts/check.sh` now routes product-decision searches through a
+  helper that uses `rg` when available and falls back to `grep -R -E` on minimal
+  workers.
+- Validation after remediation:
+  - `CTX_ARTIFACT_DIR=target/ctx-artifacts/product-decision-debug
+    bash scripts/check.sh product-decisions` passed.
+  - `env PATH=/bin:/usr/sbin
+    CTX_ARTIFACT_DIR=target/ctx-artifacts/product-decision-grep-debug
+    bash scripts/check.sh product-decisions` passed, proving the no-`rg`
+    fallback.
+  - `git diff --check` passed.
   - `bash scripts/check.sh product-decisions` passed.
   - `CTX_ARTIFACT_DIR=target/ctx-artifacts/provider-live-e2e-skip
     ./scripts/release-provider-live-e2e-lanes.sh run-selected` passed and wrote

@@ -158,13 +158,31 @@ scan_public_product_text() {
   local output="$4"
 
   [[ -e "${search_root}" ]] || return 0
-  if rg -n --glob '!**/node_modules/**' --glob '!**/dist/**' --glob '!target/**' --glob '!Cargo.lock' \
-    --glob '!docs/provider-support-matrix.json' \
-    -e "${pattern}" "${search_root}" > "${output}" 2>/dev/null; then
+  if product_decision_search "${pattern}" "${search_root}" > "${output}" 2>/dev/null; then
     fail_product_decision "${description}; see ${output}"
   else
     rm -f "${output}"
   fi
+}
+
+product_decision_search() {
+  local pattern="$1"
+  shift
+
+  if command -v rg >/dev/null 2>&1; then
+    rg -n --glob '!**/node_modules/**' --glob '!**/dist/**' --glob '!target/**' --glob '!Cargo.lock' \
+      --glob '!docs/provider-support-matrix.json' \
+      -e "${pattern}" "$@"
+    return $?
+  fi
+
+  grep -R -n -E \
+    --exclude-dir=node_modules \
+    --exclude-dir=dist \
+    --exclude-dir=target \
+    --exclude=Cargo.lock \
+    --exclude=provider-support-matrix.json \
+    -e "${pattern}" "$@"
 }
 
 require_repo_pattern() {
@@ -172,7 +190,7 @@ require_repo_pattern() {
   local pattern="$2"
   shift 2
 
-  if rg -n --glob '!**/node_modules/**' --glob '!target/**' -e "${pattern}" "$@" > /dev/null 2>&1; then
+  if product_decision_search "${pattern}" "$@" > /dev/null 2>&1; then
     return 0
   fi
   fail_product_decision "${description} (${pattern})"
