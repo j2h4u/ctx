@@ -673,6 +673,10 @@ case "${mode}" in
     cargo_test_filter work-record-search rich_search_matches_typed_context_with_citations_and_redaction
     cargo_test_filter ctx fresh_home_search_mvp_flow
     ;;
+  search_perf_bench)
+    cargo_test_filter work-record-search rich_search_matches_typed_context_with_citations_and_redaction
+    run_timed "search-perf-bench-artifact" test -s "${CTX_ARTIFACT_DIR}/synthetic-search-smoke.json"
+    ;;
   release_dry_run_host)
     CARGO_TARGET_DIR="${CTX_REPO_ROOT}/target" \
     run_timed "release-dry-run-host" bash scripts/release-dry-run.sh
