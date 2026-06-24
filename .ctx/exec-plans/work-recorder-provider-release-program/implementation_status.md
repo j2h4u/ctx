@@ -1,6 +1,6 @@
 # Work Recorder Provider Release Implementation Status
 
-Last updated: 2026-06-24T00:34:41Z.
+Last updated: 2026-06-24T00:50:02Z.
 
 ## Current Integration Branch
 
@@ -259,17 +259,34 @@ Buildkite #82 update:
   in its local cache. The screenshot review command failed before it could
   produce `desktop-overview.png`, and the dashboard visual gate correctly
   rejected the missing screenshot artifact.
-- Remediation: the dashboard/report Buildkite lane now runs
-  `npm --prefix apps/ctx-dashboard exec playwright install chromium` after
-  `npm ci` and before `./scripts/check.sh dashboard-report-artifact-review`.
-  The pipeline contract now requires this install command so future edits do
-  not drop the browser dependency accidentally.
+- Initial remediation: the dashboard/report Buildkite lane was changed to
+  install Playwright Chromium after `npm ci` and before
+  `./scripts/check.sh dashboard-report-artifact-review`.
 - Local validation for this remediation:
-  - `bash scripts/check-buildkite-pipeline.sh` passed and now checks that the
-    dashboard/report lane installs Playwright Chromium.
+  - `bash scripts/check-buildkite-pipeline.sh` passed and checked that the
+    dashboard/report lane installed Playwright Chromium.
   - `git diff --check` passed.
   - `npm --prefix apps/ctx-dashboard exec playwright --version` passed
     (`9.2.0`), confirming the local project Playwright command is available.
+
+Buildkite #83 update:
+
+- Buildkite #83 was triggered for pushed head `97de373`. It passed the core
+  Rust/check/test/Bazel/product-decision/provider lanes that had exposed prior
+  regressions.
+- #83 failed in `:bar_chart: dashboard/report artifact review` after
+  Playwright Chromium was installed. The browser binary launched, then exited
+  with `libnspr4.so: cannot open shared object file`, so the worker is missing
+  Playwright's Linux runtime dependencies, not only the browser cache.
+- Remediation: the dashboard/report Buildkite lane now runs
+  `npm --prefix apps/ctx-dashboard exec playwright install --with-deps chromium`
+  after `npm ci` and before the screenshot review. The pipeline contract now
+  requires this dependency-aware install command so future edits do not
+  accidentally drop it.
+- Local validation for this remediation:
+  - `bash scripts/check-buildkite-pipeline.sh` passed and now checks for the
+    dependency-aware Playwright install command.
+  - `git diff --check` passed.
 
 Private hosted checkpoint:
 

@@ -198,7 +198,7 @@ validate_contract() {
   require_text "provider live E2E run-selected skips without global opt-in" "${provider_live_script}" 'CTX_LIVE_PROVIDER_E2E:-0'
   require_text "rich search/context command wired" "${pipeline}" './scripts/check.sh rich-search-context'
   require_text "dashboard/report command wired" "${pipeline}" './scripts/check.sh dashboard-report-artifact-review'
-  require_text "dashboard/report installs Playwright Chromium" "${pipeline}" 'npm --prefix apps/ctx-dashboard exec playwright install chromium'
+  require_text "dashboard/report installs Playwright Chromium with Linux dependencies" "${pipeline}" 'npm --prefix apps/ctx-dashboard exec playwright install --with-deps chromium'
   require_text "PR publish dry-run command wired" "${pipeline}" './scripts/check.sh pr-publish-dry-run'
   require_text "security archive fixtures command wired" "${pipeline}" './scripts/check.sh security-archive-fixtures'
   require_text "jj e2e blocker command wired" "${pipeline}" './scripts/check.sh jj-e2e-blocker-status'
