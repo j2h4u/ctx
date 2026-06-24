@@ -292,3 +292,20 @@ Final local validation after dashboard reconciliation:
   regeneration. Reviewer verified the old dashboard UI remains gone and rich
   command, PR evidence, artifacts, Setup Health, transcript/tool events,
   child-session labels, and share-safe/redacted status remain visible.
+
+### Buildkite Certificate Follow-Up
+
+- Buildkite #92 ran against `e2e2751` and passed the dashboard/report artifact
+  review lane plus the platform/release dry-run lanes, but failed the final
+  completion certificate because `scripts/release-completion-certificate.sh`
+  still expected the old six-screenshot manifest and removed
+  `desktop_providers` / `desktop_evidence` keys.
+- Patched the certificate validator to require the final 12-screenshot
+  manifest contract: Overview, Records/detail, Timeline, PR Evidence, Search,
+  and Setup Health on desktop and mobile.
+- Local targeted validation passed:
+  - `bash -n scripts/release-completion-certificate.sh scripts/check.sh
+    scripts/dashboard-review-dogfood.sh`
+  - `git diff --check`
+  - direct `validate_dashboard_visual_evidence` invocation against a synthetic
+    12-screenshot evidence root.

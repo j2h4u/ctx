@@ -444,8 +444,20 @@ validate_dashboard_visual_evidence() {
   status="$(manifest_value "${manifest}" ".visual_status")"
   case "${status}" in
     captured)
-      require_manifest_value "${manifest}" ".screenshot_count" "6" "dashboard visual evidence records screenshot count"
-      for key in desktop_overview desktop_providers desktop_evidence mobile_overview mobile_providers mobile_evidence; do
+      require_manifest_value "${manifest}" ".screenshot_count" "12" "dashboard visual evidence records screenshot count"
+      for key in \
+        desktop_overview \
+        desktop_record_detail \
+        desktop_timeline \
+        desktop_evidence_failure \
+        desktop_search_timeline \
+        desktop_setup_health \
+        mobile_overview \
+        mobile_record_detail \
+        mobile_timeline \
+        mobile_evidence_failure \
+        mobile_search_timeline \
+        mobile_setup_health; do
         screenshot_path="$(manifest_value "${manifest}" ".${key}")"
         if [[ -z "${screenshot_path}" || "${screenshot_path}" = /* || "${screenshot_path}" == *..* ]]; then
           fail_certificate "dashboard visual evidence ${key} must be a safe relative screenshot path"
