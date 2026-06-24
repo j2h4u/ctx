@@ -13,30 +13,56 @@ if command -v ruby >/dev/null 2>&1; then
     abort "missing search-mvp step" unless keys.include?("search-mvp")
     search = data["steps"].find { |step| step["key"] == "search-mvp" }
     command = search["command"].to_s
-    install_idx = command.index("apt-get install -y zip")
-    verify_idx = command.index("command -v zip")
     check_idx = command.index("./scripts/check.sh --mode=ci")
-    abort "search-mvp must install zip before Bazel tests" unless install_idx
-    abort "search-mvp must verify zip before Bazel tests" unless verify_idx
     abort "search-mvp must run scripts/check.sh --mode=ci" unless check_idx
-    abort "search-mvp zip install must run before scripts/check.sh --mode=ci" unless install_idx < check_idx
-    abort "search-mvp zip verification must run before scripts/check.sh --mode=ci" unless verify_idx < check_idx
-    abort "search-mvp must explain zip is required for Bazel undeclared test output packaging" unless command.include?("zip is required for Bazel undeclared test output packaging")
+    abort "search-mvp must install missing Ubuntu runner packages before Bazel tests" unless command.include?("apt-get install -y")
+    abort "search-mvp must verify runner tools before Bazel tests" unless command.include?("command -v \"${tool_binary}\"")
+
+    {
+      "zip" => {
+        "package" => "zip",
+        "message" => "zip is required for Bazel undeclared test output packaging",
+      },
+      "rg" => {
+        "package" => "ripgrep",
+        "message" => "ripgrep (rg) is required for CI static and package audits",
+      },
+    }.each do |binary, spec|
+      ensure_idx = command.index("ensure_runner_tool #{binary} #{spec.fetch("package")}")
+      abort "search-mvp must install and verify #{binary} before Bazel tests" unless ensure_idx
+      abort "search-mvp #{binary} preflight must run before scripts/check.sh --mode=ci" unless ensure_idx < check_idx
+      abort "search-mvp must explain #{binary} runner requirement" unless command.include?(spec.fetch("message"))
+    end
   ' "${pipeline}"
 fi
 
-if ! grep -F -q 'apt-get install -y zip' "${pipeline}"; then
-  printf 'pipeline must install zip before Bazel tests\n' >&2
+if ! grep -F -q 'apt-get install -y "$1"' "${pipeline}"; then
+  printf 'pipeline must install missing Ubuntu runner packages before Bazel tests\n' >&2
   exit 1
 fi
 
-if ! grep -F -q 'command -v zip' "${pipeline}"; then
-  printf 'pipeline must verify zip before Bazel tests\n' >&2
+if ! grep -F -q 'command -v "${tool_binary}"' "${pipeline}"; then
+  printf 'pipeline must verify runner tools before Bazel tests\n' >&2
+  exit 1
+fi
+
+if ! grep -F -q 'ensure_runner_tool zip zip' "${pipeline}"; then
+  printf 'pipeline must install and verify zip before Bazel tests\n' >&2
   exit 1
 fi
 
 if ! grep -F -q 'zip is required for Bazel undeclared test output packaging' "${pipeline}"; then
   printf 'pipeline must fail clearly when zip is unavailable\n' >&2
+  exit 1
+fi
+
+if ! grep -F -q 'ensure_runner_tool rg ripgrep' "${pipeline}"; then
+  printf 'pipeline must install and verify ripgrep/rg before Bazel tests\n' >&2
+  exit 1
+fi
+
+if ! grep -F -q 'ripgrep (rg) is required for CI static and package audits' "${pipeline}"; then
+  printf 'pipeline must fail clearly when ripgrep/rg is unavailable\n' >&2
   exit 1
 fi
 
