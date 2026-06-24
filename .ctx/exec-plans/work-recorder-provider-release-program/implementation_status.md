@@ -1,6 +1,6 @@
 # Work Recorder Provider Release Implementation Status
 
-Last updated: 2026-06-23T23:40:03Z.
+Last updated: 2026-06-24T00:34:41Z.
 
 ## Current Integration Branch
 
@@ -248,6 +248,28 @@ Buildkite #81 update:
   - `bash scripts/check-docs.sh` passed.
   - `bash scripts/check.sh product-decisions` passed.
   - `bash scripts/check-buildkite-pipeline.sh` passed.
+
+Buildkite #82 update:
+
+- Buildkite #82 was triggered for pushed head `1cfe797`. The Rust tests,
+  examples, Bazel, provider fixture, provider live lane definition, product
+  decision, and rich search/context lanes passed.
+- #82 failed in `:bar_chart: dashboard/report artifact review` after `npm ci`
+  because the managed Linux worker did not have the Playwright Chromium binary
+  in its local cache. The screenshot review command failed before it could
+  produce `desktop-overview.png`, and the dashboard visual gate correctly
+  rejected the missing screenshot artifact.
+- Remediation: the dashboard/report Buildkite lane now runs
+  `npm --prefix apps/ctx-dashboard exec playwright install chromium` after
+  `npm ci` and before `./scripts/check.sh dashboard-report-artifact-review`.
+  The pipeline contract now requires this install command so future edits do
+  not drop the browser dependency accidentally.
+- Local validation for this remediation:
+  - `bash scripts/check-buildkite-pipeline.sh` passed and now checks that the
+    dashboard/report lane installs Playwright Chromium.
+  - `git diff --check` passed.
+  - `npm --prefix apps/ctx-dashboard exec playwright --version` passed
+    (`9.2.0`), confirming the local project Playwright command is available.
 
 Private hosted checkpoint:
 
