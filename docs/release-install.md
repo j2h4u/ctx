@@ -7,5 +7,5 @@ cargo build -p ctx
 cargo install --path crates/ctx-cli
 ```
 
-Do not document a remote install command until release artifacts, checksums,
-and verification instructions exist.
+Do not document a public install command until release artifacts, checksums, and
+verification instructions exist.

@@ -12,9 +12,13 @@ The current CLI protects a local search index for developer agent history.
 
 ## Boundaries
 
-ctx reads provider history and writes only to the ctx data root during normal
-setup, import, search, and context commands. Source repositories and provider
-homes remain outside ctx ownership.
+ctx reads provider history and writes only to the configured ctx data root
+during normal setup and import commands. Search, context, list, show, sources,
+status, doctor, and validate read local data and should not write outside the
+ctx data root.
+
+Source repositories and provider homes remain outside ctx ownership. Provider
+files are read as import sources, not modified.
 
 ## Risks
 
@@ -23,13 +27,16 @@ homes remain outside ctx ownership.
 - copied JSON output may leave the machine;
 - stale citations may point to moved or deleted raw files;
 - unsupported provider formats may be parsed incorrectly if adapters are too
-  permissive.
+  permissive;
+- compatibility JSON fields may expose more local store detail than an agent
+  needs.
 
 ## Mitigations
 
-- keep imports explicit and resumable;
+- keep imports explicit and repeatable;
 - reject unknown provider formats;
 - store bounded previews for large outputs;
-- preserve citations and source availability warnings;
+- preserve citations and source availability flags;
 - keep setup local and side-effect-limited;
-- document that searchable text is copied into SQLite.
+- document that searchable text is copied into SQLite;
+- treat JSON output as private until reviewed.

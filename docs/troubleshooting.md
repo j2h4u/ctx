@@ -20,9 +20,12 @@ ctx import --path ~/.codex/sessions
 Re-run import:
 
 ```bash
-ctx import --resume
+ctx import --all
 ctx search "the missing phrase"
 ```
+
+Use `ctx import --resume --json` when you want output to mark the run as an
+idempotent rescan.
 
 If the raw provider file moved, indexed text may still be searchable, but source
 citations should report that the raw path is unavailable.

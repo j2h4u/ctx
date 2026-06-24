@@ -20,21 +20,26 @@ generated conclusion.
 
    ```bash
    ctx sources --json
-   ctx import --resume --json
+   ctx import --all --json
    ```
+
+   Use `ctx import --resume --json` only as an idempotent rescan marker; it is
+   not a guarantee that every provider has native cursor resume.
 
 3. Search with tight filters whenever possible:
 
    ```bash
-   ctx search "<query>" --repo <repo> --json
    ctx search "<query>" --provider codex --json
-   ctx search --file <path> --json
+   ctx search "<query>" --repo <repo> --json
+   ctx search "<query>" --file <path> --json
+   ctx search "<query>" --since 30d --json
    ```
 
 4. Build deterministic context for the best query:
 
    ```bash
    ctx context "<query>" --max-tokens 6000
+   ctx context "<query>" --max-tokens 6000 --json
    ```
 
 5. Cite ctx material when it affects your answer or implementation. Include the
@@ -43,7 +48,7 @@ generated conclusion.
 
 ## Rules
 
-- Do not state that the ctx CLI wrote a model analysis.
+- Do not state that ctx wrote model analysis.
 - Do not say ctx inferred a decision unless the cited text explicitly states
   that decision.
 - If you synthesize across multiple snippets, label it as your synthesis and

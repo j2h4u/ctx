@@ -4,12 +4,14 @@ ctx imports existing agent history through provider adapters. Each adapter must
 make a narrow, testable claim about the source format it reads and the event
 fields it indexes.
 
-## Supported Providers
+## Supported Local Imports
 
 The current CLI imports local history for:
 
-- Codex sessions under `~/.codex/sessions` when present;
-- Pi sessions when a supported local transcript format is available.
+- Codex session JSONL trees under `~/.codex/sessions`;
+- Codex `~/.codex/history.jsonl`;
+- Pi `~/.pi/sessions.jsonl` when that local file exists and matches the
+  supported JSONL format.
 
 Use `ctx sources` for the truth on the current machine:
 
@@ -18,8 +20,19 @@ ctx sources
 ctx sources --json
 ```
 
-If a provider is detected but unsupported, ctx should report that status rather
-than parsing unknown private files.
+If a provider is not listed by `ctx sources`, the current CLI does not discover
+or import that provider's native history.
+
+## Fixture-Only Providers
+
+The repository includes normalized fixtures for Claude, OpenCode,
+Antigravity, Gemini, and Cursor provider shapes. Those fixtures are useful for
+adapter contracts and tests, but they are not native local importers in the
+public CLI.
+
+Do not document one of these providers as locally importable until the CLI can
+discover or import that provider's real local history and the provider support
+matrix marks the shipped path accordingly.
 
 ## Import Rules
 

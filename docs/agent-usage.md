@@ -5,7 +5,7 @@ Agents should query ctx before repeating investigation work.
 ## Recommended Flow
 
 1. Run `ctx status --json` to confirm the local store is readable.
-2. Run `ctx sources --json` when source freshness matters.
+2. Run `ctx sources --json` to see which local provider paths currently exist.
 3. Search narrowly with provider, repository, file, or date filters.
 4. Use `ctx context` for the best matching query before changing code.
 5. Cite ctx material in notes or final answers when it influenced the work.
@@ -26,12 +26,15 @@ cite the snippets that support it.
 
 ## When To Re-Import
 
-Run `ctx import` when:
+Run `ctx import --all` when:
 
-- `ctx sources` shows provider history newer than the last cursor;
+- `ctx sources` shows supported provider history on this machine;
 - a search misses something you know happened recently;
 - the current task depends on a previous session from another provider;
-- a raw provider path was configured after setup.
+- you have an explicit supported provider path to import.
+
+Use `ctx import --resume --json` as an idempotent-rescan marker. It is not a
+guarantee that every provider has native cursor resume.
 
 ## JSON For Harnesses
 

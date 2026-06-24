@@ -14,22 +14,22 @@ Default root:
   logs/
 ```
 
-`CTX_DATA_ROOT` or a command-specific data-root option may point ctx somewhere
-else. The configured root is the root itself; ctx does not append another
-product directory.
+`CTX_DATA_ROOT` or `--data-root` may point ctx somewhere else. The configured
+root is used directly; ctx does not append another directory.
 
 ## What SQLite Stores
 
 The SQLite store may contain:
 
 - provider and source metadata;
-- source file paths and import cursors;
+- source file paths and import cursors when available;
 - session IDs and event IDs;
-- timestamps and working-directory or repository metadata when known;
+- timestamps and working-directory metadata when known;
 - normalized user, assistant, tool, command, and lifecycle event text;
 - bounded command or tool-output previews;
 - FTS-indexable text required for search;
-- citations and offsets or line/cursor metadata when available.
+- citations and offsets or line/cursor metadata when available;
+- compatibility rows used by the current search implementation.
 
 If text is searchable, assume a copy or normalized form exists in SQLite. Raw
 provider transcript files may still remain in provider-owned locations such as
@@ -46,8 +46,27 @@ the raw source path when available.
 
 ctx does not own provider homes. Import reads from configured or discovered
 locations and records enough information to search and cite imported material.
-If a raw source path moves or is deleted, `ctx show` and `ctx context` should
-still return indexed text and clearly mark the source as unavailable.
+If a raw source path moves or is deleted, `ctx show`, `ctx search`, and
+`ctx context` can still return indexed text and should mark source availability
+when that information is known.
+
+## Command Read/Write Behavior
+
+| Command | Reads | Writes |
+| --- | --- | --- |
+| `ctx setup` | home path metadata for source discovery | data root, `work.sqlite`, `config.toml` |
+| `ctx status` | data root metadata, existing SQLite store | nothing intentional |
+| `ctx sources` | known provider paths under the user's home | nothing |
+| `ctx import` | provider transcript files and path metadata | data root, `config.toml` if missing, SQLite index |
+| `ctx list` | SQLite index | nothing |
+| `ctx show` | SQLite index | nothing |
+| `ctx search` | SQLite index | nothing |
+| `ctx context` | SQLite index | nothing |
+| `ctx doctor` | SQLite index and data root metadata | nothing intentional |
+| `ctx validate` | SQLite index | nothing intentional |
+
+Setup, import, search, and context do not require network access or source
+repository writes.
 
 ## Index Lifecycle
 
@@ -57,8 +76,8 @@ Find the active ctx root before destructive maintenance:
 ctx status
 ```
 
-The default root is `~/.ctx`. If you set `CTX_DATA_ROOT` or pass a data-root
-option, use that root in the commands below instead.
+The default root is `~/.ctx`. If you set `CTX_DATA_ROOT` or pass `--data-root`,
+use that root in the commands below instead.
 
 Re-import or update the index:
 
@@ -71,7 +90,7 @@ ctx import --path ~/.codex/sessions
 Current adapters are safe to re-run. They rescan sources idempotently and keep
 source paths or cursors when available.
 
-Remove a source:
+Remove a source from future imports:
 
 ```bash
 $EDITOR ~/.ctx/config.toml
@@ -79,9 +98,8 @@ $EDITOR ~/.ctx/config.toml
 
 The current CLI does not add provider source entries to `config.toml`; default
 provider locations are discovered each time and explicit `--path` imports are
-not remembered as future defaults. If you maintain local source entries in the
-config, remove those entries. To remove data already indexed from that source,
-rebuild the index and import only the sources you still want.
+not remembered as future defaults. To remove already indexed data, rebuild the
+index and import only the sources you still want.
 
 Reset and rebuild the index:
 
@@ -108,8 +126,8 @@ Delete all ctx data:
 rm -rf ~/.ctx
 ```
 
-This removes ctx's local index, config, objects, and logs for the default root.
-It does not remove provider-owned history such as `~/.codex/sessions`.
+This removes ctx's local index, config, and logs for the default root. It does
+not remove provider-owned history such as `~/.codex/sessions`.
 
 ## Privacy Truth
 
@@ -119,7 +137,7 @@ customer data, private repository names, or proprietary design notes.
 
 Recommended handling:
 
-- keep `~/.ctx` out of source repos;
+- keep `~/.ctx` out of source repositories;
 - do not share SQLite databases or logs;
 - review JSON output before sharing it outside the machine;
 - delete or reinitialize the local store when working on shared machines;
@@ -129,6 +147,6 @@ Recommended handling:
 ## Network Behavior
 
 Core setup, source discovery, import, search, and context commands are local
-filesystem operations. The tools you ran inside the original agent sessions may
-have used the network according to their own configuration; ctx indexing those
-sessions does not change that history.
+filesystem operations. The tools that originally produced provider transcripts
+may have used the network according to their own configuration; ctx indexing
+those transcripts does not repeat that behavior.

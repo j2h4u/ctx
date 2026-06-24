@@ -1,39 +1,27 @@
 # ctx
 
-Search your agent history.
+Search local agent history.
 
-ctx makes local agent session history searchable.
+ctx indexes existing local agent transcripts into a local SQLite store so a
+future agent can search prior sessions and retrieve deterministic context with
+citations. The first user is an agent calling the CLI; humans can use the same
+commands to inspect the index.
 
-It indexes existing provider transcripts into a local SQLite store so future
-agents can find prior discussions, commands, attempts, files, and notes that
-may explain earlier decisions instead of starting from zero. The first user is
-an agent calling the CLI, with humans using the same commands when they need to
-inspect the store.
+## Product Boundary
 
-## Scope
+The current production surface is intentionally narrow:
 
-The current CLI scope is deliberately narrow:
+- discover local provider history locations;
+- explicitly import supported local transcripts;
+- store a searchable local SQLite index under `~/.ctx` by default;
+- search indexed sessions and events;
+- render deterministic context bundles with citations;
+- return JSON for agent-facing workflows;
+- keep setup, import, search, and context local to this machine.
 
-- local agent history indexing under `~/.ctx`;
-- read-only discovery of provider history locations;
-- explicit imports into SQLite;
-- search over indexed sessions and events;
-- deterministic context bundles with citations back to source records;
-- JSON output for agent-facing commands;
-- no writes into source repositories during setup or import;
-- no account, service, UI server, shell integration, or background process.
-
-ctx does not infer conclusions for you. `ctx context` returns selected matches,
-metadata, snippets, and citations. An agent may use that material to write its
-own synthesis, but ctx itself is a retrieval tool.
-
-## What ctx Is Not
-
-- Not an autonomous memory system.
-- Not an LLM summarizer.
-- Not a git or GitHub wrapper.
-- Not a browser UI product.
-- Not a remote sync service in this release.
+ctx does not run model inference, install shell integration, modify source
+repositories, start background processes, require API keys, or use a remote
+account for setup, import, search, or context.
 
 ## Install Or Run
 
@@ -51,9 +39,12 @@ cargo run -p ctx -- status
 cargo run -p ctx -- search "retry handling"
 ```
 
-## Quick Start
+Published install commands are intentionally absent until release artifacts and
+verification instructions exist.
 
-Create the local store and discover provider history:
+## First 10 Minutes
+
+Create local storage and discover provider history:
 
 ```bash
 ctx setup
@@ -64,8 +55,9 @@ ctx sources
 Index local history explicitly:
 
 ```bash
-ctx import
+ctx import --all
 ctx import --provider codex
+ctx import --provider pi
 ctx import --path ~/.codex/sessions
 ```
 
@@ -74,7 +66,7 @@ Search and inspect results:
 ```bash
 ctx list
 ctx search "checkout retry"
-ctx show <session-or-record-id>
+ctx show <item-uuid>
 ctx context "checkout retry"
 ```
 
@@ -88,55 +80,70 @@ ctx context "sqlite migration" --json
 
 ## Public CLI
 
-The current CLI command surface is:
+The current command surface is:
 
 ```text
 ctx setup
 ctx status
-ctx import
 ctx sources
+ctx import
 ctx list
-ctx show <session-or-record-id>
-ctx search <query>
+ctx show <item-uuid>
+ctx search [query]
 ctx context <query>
 ctx doctor
 ctx validate
 ```
 
+All commands accept the global data-root override:
+
+```bash
+ctx --data-root /tmp/ctx status
+CTX_DATA_ROOT=/tmp/ctx ctx status
+```
+
 Agent-facing commands support `--json` where structured output is useful:
 
 ```text
+ctx setup --json
 ctx status --json
 ctx sources --json
 ctx import --json
 ctx list --json
-ctx show <session-or-record-id> --json
-ctx search <query> --json
+ctx show <item-uuid> --json
+ctx search [query] --json
 ctx context <query> --json
 ctx doctor --json
+ctx validate --json
 ```
 
-## Data Model
+## Search Data
 
 ctx indexes provider history as sessions and events. An event may be a user
 message, assistant message, tool call, command, command output preview, file
 reference, lifecycle marker, or provider-specific metadata.
 
-Search results include stable IDs for `ctx show`, provider names, timestamps,
-repository or working-directory metadata when known, snippets, match reasons,
-and source citations. Raw provider transcript files stay in provider-owned
-locations such as `~/.codex/sessions`; ctx stores the searchable metadata and
-text it needs in SQLite under `~/.ctx`.
-
-See [docs/storage.md](docs/storage.md) for exact storage and privacy behavior.
+Search results include opaque IDs for `ctx show`, provider names, timestamps,
+working-directory metadata when known, snippets, match reasons, and citations.
+Raw provider transcript files remain in provider-owned locations such as
+`~/.codex/sessions`; ctx stores the searchable text and metadata it needs in
+SQLite.
 
 ## Docs
 
+- [Product contract](docs/product-contract.md)
+- [First 10 minutes](docs/first-10-minutes.md)
 - [Getting started](docs/getting-started.md)
 - [CLI reference](docs/cli-reference.md)
+- [Search and context](docs/search.md)
+- [JSON contracts](docs/contracts/json.md)
 - [Storage and privacy](docs/storage.md)
 - [Providers](docs/providers.md)
-- [Search and context](docs/search.md)
+- [Provider support matrix](docs/provider-support.md)
+- [Limitations](docs/limitations.md)
+- [Security checks](docs/security-checks.md)
+- [Production readiness](docs/production-readiness.md)
+- [Threat model](docs/threat-model.md)
 - [Agent usage](docs/agent-usage.md)
 - [Troubleshooting](docs/troubleshooting.md)
 
@@ -145,5 +152,5 @@ See [docs/storage.md](docs/storage.md) for exact storage and privacy behavior.
 - Prefer explicit imports over ambient collection.
 - Keep raw provider ownership clear.
 - Preserve citations so agents can verify retrieved material.
-- Keep output deterministic for the same database, query, and options.
+- Keep output deterministic for the same database, query, filters, and limits.
 - Treat the local ctx data root as private developer history.
