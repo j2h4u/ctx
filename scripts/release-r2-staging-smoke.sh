@@ -77,7 +77,7 @@ write_r2_staging_smoke() {
   require_file "${commands}"
   require_contains "${metadata}" "CTX_RELEASE_VERSION=0.1.0" "R2 smoke metadata records 0.1.0"
   require_contains "${metadata}" "CTX_RELEASE_CHANNEL=release-candidate" "R2 smoke metadata records release-candidate channel"
-  require_contains "${metadata}" "CTX_RELEASE_R2_PREFIX=ctx/records/release-candidate/v0.1.0/" "R2 smoke metadata records ctx records prefix"
+  require_contains "${metadata}" "CTX_RELEASE_R2_PREFIX=ctx/releases/release-candidate/v0.1.0/" "R2 smoke metadata records ctx release prefix"
   require_contains "${manifest}" '"publishing": false' "R2 smoke manifest records non-publishing status"
   require_contains "${manifest}" '"package": "ctx"' "R2 smoke manifest records ctx package"
   require_contains "${manifest}" '"installers"' "R2 smoke manifest records installer artifacts"
@@ -93,14 +93,14 @@ write_r2_staging_smoke() {
   if [[ -z "${bucket}" ]]; then
     fail_smoke "R2 bucket is missing from release metadata"
   fi
-  if [[ "${prefix}" != ctx/records/release-candidate/v0.1.0/* ]]; then
-    fail_smoke "R2 prefix must use ctx/records/release-candidate/v0.1.0/<commit>: ${prefix:-<missing>}"
+  if [[ "${prefix}" != ctx/releases/release-candidate/v0.1.0/* ]]; then
+    fail_smoke "R2 prefix must use ctx/releases/release-candidate/v0.1.0/<commit>: ${prefix:-<missing>}"
   fi
   if [[ "${prefix}" == *work-record* || "${prefix}" == *work-recorder* ]]; then
     fail_smoke "R2 prefix must not use stale public product naming: ${prefix}"
   fi
-  if [[ "${public_base_url}" != https://*/ctx/records/release-candidate/v0.1.0/* ]]; then
-    fail_smoke "public base URL must be an HTTPS ctx/records candidate URL: ${public_base_url:-<missing>}"
+  if [[ "${public_base_url}" != https://*/ctx/releases/release-candidate/v0.1.0/* ]]; then
+    fail_smoke "public base URL must be an HTTPS ctx/releases candidate URL: ${public_base_url:-<missing>}"
   fi
   if [[ "${public_base_url}" == *work-record* || "${public_base_url}" == *work-recorder* ]]; then
     fail_smoke "public base URL must not use stale public product naming: ${public_base_url}"

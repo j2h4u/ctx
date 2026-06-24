@@ -348,14 +348,14 @@ validate_release_candidate_metadata() {
   require_env_present "${metadata}" "CTX_RELEASE_R2_PREFIX" "release candidate metadata records R2 prefix"
   r2_prefix="$(env_value "${metadata}" CTX_RELEASE_R2_PREFIX)"
   public_base_url="$(env_value "${metadata}" CTX_RELEASE_BASE_URL)"
-  if [[ "${r2_prefix}" != ctx/records/* ]]; then
-    fail_certificate "release candidate R2 prefix must use ctx/records public artifact layout"
+  if [[ "${r2_prefix}" != ctx/releases/* ]]; then
+    fail_certificate "release candidate R2 prefix must use ctx/releases public artifact layout"
   fi
   if [[ "${r2_prefix}" == *work-recorder* || "${r2_prefix}" == *work-record* ]]; then
     fail_certificate "release candidate R2 prefix must not brand public artifact paths around work-record"
   fi
-  if [[ "${public_base_url}" != */ctx/records/* ]]; then
-    fail_certificate "release candidate public base URL must use ctx/records artifact layout"
+  if [[ "${public_base_url}" != */ctx/releases/* ]]; then
+    fail_certificate "release candidate public base URL must use ctx/releases artifact layout"
   fi
   if [[ "${public_base_url}" == *work-recorder* || "${public_base_url}" == *work-record* ]]; then
     fail_certificate "release candidate public base URL must not brand public artifact URLs around work-record"
@@ -506,7 +506,7 @@ write_certificate() {
 # ctx Completion Certificate
 
 - Schema version: \`1\`
-- Program: \`ctx-records-release-candidate\`
+- Program: \`ctx-release-candidate\`
 - Release candidate status: \`blocked-staging-plan-only\`
 - Launch ready: \`false\`
 - Evidence verification scope: \`non-publishing CI scaffolding and blocker evidence only\`
@@ -560,7 +560,7 @@ EOF
 {
   "schema_version": 1,
   "kind": "ctx_completion_certificate",
-  "program": "ctx-records-release-candidate",
+  "program": "ctx-release-candidate",
   "release_candidate_status": "blocked-staging-plan-only",
   "launch_ready": false,
   "release_approval": false,

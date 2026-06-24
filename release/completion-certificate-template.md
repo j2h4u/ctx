@@ -1,7 +1,7 @@
 # ctx Completion Certificate
 
 - Schema version: `1`
-- Program: `ctx-records-release-candidate`
+- Program: `ctx-release-candidate`
 - Release candidate status: `${release_candidate_status}`
 - Launch ready: `${launch_ready}`
 - Evidence verification scope: `${evidence_verification_scope}`

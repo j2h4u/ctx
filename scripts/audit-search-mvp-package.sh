@@ -48,8 +48,25 @@ if [[ -d apps/ctx-dashboard ]]; then
   fail 'dashboard app directory exists in the checkout'
 fi
 
+if tracked_files | grep -E '^crates/work-record-(publish|report|vcs)(/|$)' >/dev/null; then
+  fail 'legacy publish/report/vcs crates are present in the package-visible source tree'
+fi
+
+if tracked_files | grep -E '^\.ctx/exec-plans/work-recorder-' >/dev/null; then
+  fail 'old Work Recorder execution plans are present in package-visible .ctx metadata'
+fi
+
 if tracked_files | grep -E '^(examples|assets)/' | grep -E -i 'dashboard|work-record|ctx-records|capture-spool|evidence|link-pr|publish|shim' >/dev/null; then
   fail 'tracked examples or assets contain removed product-surface material'
+fi
+
+if grep_files 'ctx/records|ctx-records' release scripts/release-* >/dev/null 2>&1; then
+  fail 'release package path still uses stale ctx records naming'
+fi
+
+if grep_files 'Work Recorder|work recorder|ctx publish|ctx evidence|ctx pr|ctx link-pr|dashboard export|gh CLI|GhCli|upsert_github|write-shim-command|write_shim_command|capture_shim_command|shim_command_envelope' \
+  README.md SECURITY.md docs skills release scripts/release-* crates/ctx-cli/src >/dev/null 2>&1; then
+  fail 'public docs/help/release path contains removed Work Recorder, dashboard, shim, PR, or gh surface text'
 fi
 
 if grep_files 'work-record-(publish|report|vcs)[[:space:]]*=' \
