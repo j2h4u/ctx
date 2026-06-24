@@ -6,6 +6,7 @@ sh_test(
         "Cargo.toml",
         "apps/ctx-dashboard/dist/**",
         "crates/**",
+        "docs/provider-support-matrix.json",
         "tests/**",
     ]),
 )

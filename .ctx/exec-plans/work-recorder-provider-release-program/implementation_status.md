@@ -168,6 +168,21 @@ Buildkite #79 update:
     --test-threads 1` passed.
   - `cargo-lowio test --locked -p ctx --test cli -- --test-threads 2` passed,
     61 tests.
+
+Buildkite #80 update:
+
+- Buildkite #80 was triggered for pushed head `3b2f1fc`, and Rust tests passed,
+  including the previously failing `installed_gh_shim_falls_back_to_spool...`
+  case.
+- #80 then failed in the Bazel lane because the Bazel `cargo_tests` runfiles did
+  not include `docs/provider-support-matrix.json`, while
+  `work-record-core` tests validate that provider matrix file.
+- Remediation: `BUILD.bazel` now includes
+  `docs/provider-support-matrix.json` in the `cargo_tests` data runfiles.
+- Validation after remediation:
+  - `cargo-lowio test --locked -p work-record-core provider_support_matrix --
+    --test-threads 1` passed.
+  - `CTX_REQUIRE_BAZEL=1 bash scripts/check.sh bazel` passed locally.
   - `bash scripts/check.sh product-decisions` passed.
   - `CTX_ARTIFACT_DIR=target/ctx-artifacts/provider-live-e2e-skip
     ./scripts/release-provider-live-e2e-lanes.sh run-selected` passed and wrote
