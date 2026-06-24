@@ -1,6 +1,6 @@
 # Work Recorder Provider Release Implementation Status
 
-Last updated: 2026-06-24T02:12:19Z.
+Last updated: 2026-06-24T02:32:23Z.
 
 ## Current Integration Branch
 
@@ -422,6 +422,48 @@ Buildkite #88 update:
   - `bash -n scripts/check.sh` passed.
   - `CTX_ARTIFACT_DIR=target/ctx-artifacts/platform-smoke-idle-fix
     bash scripts/check.sh platform-smoke` passed.
+
+Buildkite #89 final implementation verification:
+
+- Buildkite #89 was triggered for pushed head
+  `8e8e322f53351971b7fde086cdf3724160057350`.
+- Result: passed 30/30 jobs at `2026-06-24T02:30:45.553Z`.
+- URL:
+  `https://buildkite.com/luca-king/ctx-public-release-verification/builds/89`.
+- Passed jobs:
+  - `:pipeline: ctx public release verification`
+  - `:buildkite: pipeline contract`
+  - `:rust: fmt`
+  - `:memo: docs`
+  - `:rust: check`
+  - `:rust: clippy`
+  - `:rust: test`
+  - `:test_tube: examples`
+  - `:bazel: bazel`
+  - `:clipboard: product decision regressions`
+  - `:package: provider fixture import`
+  - `:satellite: provider live E2E lane definitions`
+  - `:mag: rich search/context`
+  - `:bar_chart: dashboard/report artifact review`
+  - `:github: PR publish dry-run`
+  - `:lock: security archive fixtures`
+  - `:twisted_rightwards_arrows: jj e2e blocker status`
+  - `:package: installer dry-run smoke`
+  - `:linux: smoke linux-x64`
+  - `:mac: smoke macos-arm64`
+  - `:mac: smoke macos-x64`
+  - `:windows: smoke windows-x64`
+  - `:linux: release dry-run linux-x64`
+  - `:mac: release dry-run macos-arm64`
+  - `:mac: release dry-run macos-x64`
+  - `:windows: release dry-run windows-x64`
+  - `:freebsd: release blocker freebsd-x64`
+  - `:package: release candidate metadata`
+  - `:cloudflare: R2 staging smoke`
+  - `:clipboard: completion certificate`
+- Because this status section itself is committed after #89, a follow-up
+  Buildkite run for the status checkpoint head is required before final
+  completion is claimed.
 
 Private hosted checkpoint:
 
