@@ -1,6 +1,6 @@
 # Work Recorder Provider Release Implementation Status
 
-Last updated: 2026-06-24T00:50:02Z.
+Last updated: 2026-06-24T01:04:31Z.
 
 ## Current Integration Branch
 
@@ -287,6 +287,29 @@ Buildkite #83 update:
   - `bash scripts/check-buildkite-pipeline.sh` passed and now checks for the
     dependency-aware Playwright install command.
   - `git diff --check` passed.
+
+Buildkite #84 update:
+
+- Buildkite #84 was triggered for pushed head `25a9659`. The same
+  dashboard/report lane failed with the same `libnspr4.so` missing-library
+  error.
+- The #84 log showed the command
+  `npm --prefix apps/ctx-dashboard exec playwright install --with-deps chromium`
+  running, but no Playwright dependency-install output appeared before the
+  dashboard review. The likely cause is npm argument parsing: without `--`,
+  `npm exec` can consume option-looking arguments before they reach
+  Playwright.
+- Remediation: the dashboard/report Buildkite lane now runs
+  `npm --prefix apps/ctx-dashboard exec -- playwright install --with-deps chromium`
+  so `--with-deps` is unambiguously passed to Playwright. The pipeline contract
+  now requires the exact `npm exec --` invocation.
+- Local validation for this remediation:
+  - `bash scripts/check-buildkite-pipeline.sh` passed and now checks for the
+    exact `npm exec --` invocation.
+  - `git diff --check` passed.
+  - `npm --prefix apps/ctx-dashboard exec -- playwright --version` passed
+    (`Version 1.61.0`), confirming the argument separator form works with the
+    local npm/Playwright toolchain.
 
 Private hosted checkpoint:
 
