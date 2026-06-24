@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
 import * as Tabs from "@radix-ui/react-tabs";
-import { ColumnDef, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import {
   Activity,
   AlertTriangle,
@@ -152,20 +151,6 @@ function Tab({ value, icon, label }: { value: string; icon: React.ReactNode; lab
       <span>{label}</span>
     </Tabs.Trigger>
   );
-}
-
-function useMediaQuery(query: string) {
-  const [matches, setMatches] = React.useState(false);
-
-  React.useEffect(() => {
-    const mediaQuery = window.matchMedia(query);
-    const update = () => setMatches(mediaQuery.matches);
-    update();
-    mediaQuery.addEventListener("change", update);
-    return () => mediaQuery.removeEventListener("change", update);
-  }, [query]);
-
-  return matches;
 }
 
 function Overview({ data }: { data: DashboardData }) {
@@ -453,6 +438,13 @@ function SessionDetailPanel({
             <KeyValue label="Started" value={valueText(session.started_at, "unknown")} />
           </div>
 
+          <DetailSection icon={<Activity className="size-4" />} title="Chronological Timeline">
+            <EventList
+              events={events}
+              emptyText="No redacted chronological event timeline is available for this session."
+            />
+          </DetailSection>
+
           <DetailSection icon={<MessageSquareText className="size-4" />} title="Prompts and Messages">
             <EventList
               events={messages}
@@ -690,8 +682,24 @@ function SearchView({ data, query, setQuery }: { data: DashboardData; query: str
         ].filter(Boolean).join(" "),
         id: sessionId(session)
       })),
-      ...data.commands.map((command) => ({ type: "command", title: command.command, body: command.output_preview ?? "", id: command.id })),
-      ...data.events.map((event) => ({ type: "event", title: String(event.event_type), body: String(event.preview ?? ""), id: String(event.id) })),
+      ...data.commands.map((command) => ({
+        type: "command",
+        title: command.command,
+        body: [`exit ${command.exit_code}`, `${command.duration_ms}ms`, command.output_preview ?? ""].join(" · "),
+        id: command.id
+      })),
+      ...data.events.map((event) => ({
+        type: "event",
+        title: `${String(event.event_type)} #${valueText(event.seq, "0")}`,
+        body: [
+          event.role ? `role ${event.role}` : null,
+          event.session_id ? `session ${shortId(String(event.session_id))}` : null,
+          event.run_id ? `run ${shortId(String(event.run_id))}` : null,
+          event.occurred_at ? `at ${event.occurred_at}` : null,
+          eventPreviewText(event)
+        ].filter(Boolean).join(" · "),
+        id: String(event.id)
+      })),
       ...data.artifacts.map((artifact) => ({ type: "artifact", title: String(artifact.kind), body: String(artifact.preview ?? ""), id: String(artifact.id) })),
       ...data.summaries.map((summary) => ({ type: "summary", title: String(summary.kind), body: String(summary.text ?? ""), id: String(summary.id) }))
     ];
@@ -750,72 +758,27 @@ function SettingsView({ data }: { data: DashboardData }) {
 }
 
 function CommandTable({ commands }: { commands: EvidenceCommand[] }) {
-  const isMobile = useMediaQuery("(max-width: 640px)");
-  const columns = useMemo<ColumnDef<EvidenceCommand>[]>(
-    () => [
-      { accessorKey: "command", header: "Command", cell: (info) => <code>{String(info.getValue())}</code> },
-      {
-        accessorKey: "exit_code",
-        header: "Exit",
-        cell: (info) => {
-          const exitCode = Number(info.getValue());
-          return <ExitBadge exitCode={exitCode} />;
-        }
-      },
-      { accessorKey: "duration_ms", header: "Duration" },
-      { accessorKey: "output_preview", header: "Preview" }
-    ],
-    []
-  );
-  const table = useReactTable({ data: commands, columns, getCoreRowModel: getCoreRowModel() });
   if (commands.length === 0) return <EmptyState text="No evidence has been captured yet." />;
-  if (isMobile) {
-    return (
-      <div className="command-card-list">
-        {commands.map((command) => (
-          <article className={clsx("command-card", command.exit_code !== 0 && "command-card-danger")} key={command.id}>
-            <div className="command-card-command">
-              <span>Command</span>
-              <code>{command.command}</code>
-            </div>
-            <div className="command-card-meta">
-              <KeyValue label="Exit" value={<ExitBadge exitCode={command.exit_code} />} />
-              <KeyValue label="Duration" value={`${command.duration_ms}ms`} />
-            </div>
-            {command.output_preview ? (
-              <div className="command-card-preview">
-                <span>Preview</span>
-                <p>{command.output_preview}</p>
-              </div>
-            ) : null}
-          </article>
-        ))}
-      </div>
-    );
-  }
-
   return (
-    <div className="table-scroll">
-      <table className="data-table">
-        <thead>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <tr key={headerGroup.id}>
-              {headerGroup.headers.map((header) => (
-                <th key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</th>
-              ))}
-            </tr>
-          ))}
-        </thead>
-        <tbody>
-          {table.getRowModel().rows.map((row) => (
-            <tr className={row.original.exit_code !== 0 ? "data-row-danger" : undefined} key={row.id}>
-              {row.getVisibleCells().map((cell) => (
-                <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="command-card-list">
+      {commands.map((command) => (
+        <article className={clsx("command-card", command.exit_code !== 0 && "command-card-danger")} key={command.id}>
+          <div className="command-card-command">
+            <span>Command</span>
+            <code>{command.command}</code>
+          </div>
+          <div className="command-card-meta">
+            <KeyValue label="Exit" value={<ExitBadge exitCode={command.exit_code} />} />
+            <KeyValue label="Duration" value={`${command.duration_ms}ms`} />
+          </div>
+          {command.output_preview ? (
+            <div className="command-card-preview">
+              <span>Preview</span>
+              <p>{command.output_preview}</p>
+            </div>
+          ) : null}
+        </article>
+      ))}
     </div>
   );
 }
@@ -949,6 +912,10 @@ function addUnique(values: string[], value: string) {
 
 function sessionId(session: DashboardSession | undefined) {
   return session ? String(session.id ?? "") : "";
+}
+
+function shortId(value: string) {
+  return value.length > 12 ? `${value.slice(0, 8)}...` : value;
 }
 
 function relatedBySession<T extends Record<string, unknown>>(items: T[], id: string) {

@@ -30,7 +30,9 @@ test("desktop dark provider session detail and commands", async ({ page }, testI
   await expect(page.getByText("Support status")).toBeVisible();
   await expect(page.getByText("prompt preview redacted; raw history withheld")).toBeVisible();
   await expect(page.getByText("Prompts and Messages")).toBeVisible();
-  await expect(page.getByText("exec_command npm run build")).toBeVisible();
+  await expect(
+    page.locator(".detail-section").filter({ hasText: "Tool Calls and Output" }).getByText("exec_command npm run build")
+  ).toBeVisible();
   await expect(page.getByText("ctx capture import-local-providers --json")).toBeVisible();
   await assertNonBlank(page);
   await screenshot(page, testInfo.project.name, "desktop-dark-providers");

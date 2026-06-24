@@ -343,7 +343,8 @@ pre {
 }
 
 .command-card-list {
-  display: none;
+  display: grid;
+  gap: 10px;
 }
 
 .command-card {
@@ -569,8 +570,10 @@ pre {
   }
 
   .tab-list {
+    flex-wrap: wrap;
     gap: 6px;
     margin-inline: -16px;
+    overflow-x: visible;
     padding-inline: 16px;
     scroll-padding-inline: 16px;
   }

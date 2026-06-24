@@ -1188,6 +1188,18 @@ impl Store {
         Ok(())
     }
 
+    pub fn session_edge_exists(&self, edge_id: Uuid) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM session_edges WHERE id = ?1",
+                params![edge_id.to_string()],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
     pub fn upsert_run(&self, run: &Run) -> Result<()> {
         self.conn.execute(
             r#"

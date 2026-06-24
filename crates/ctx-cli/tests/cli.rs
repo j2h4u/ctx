@@ -1279,6 +1279,8 @@ fn provider_fixture_import_json_reports_counts_and_summary_record() {
     let second_payload = json_output(&mut second);
     assert_eq!(second_payload["import"]["imported_sessions"], 0);
     assert_eq!(second_payload["import"]["imported_events"], 0);
+    assert_eq!(second_payload["import"]["imported_edges"], 0);
+    assert_eq!(second_payload["import"]["skipped_edges"], 1);
     assert_eq!(second_payload["record"], Value::Null);
 }
 

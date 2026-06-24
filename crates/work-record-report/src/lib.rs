@@ -239,16 +239,16 @@ pub fn render_dashboard_html_report(report: &DashboardReport<'_>) -> String {
 pub fn dashboard_static_assets() -> Vec<(&'static str, &'static [u8])> {
     vec![
         (
-            "assets/dashboard-FLgGhyh1.js",
-            include_bytes!("../../../apps/ctx-dashboard/dist/assets/dashboard-FLgGhyh1.js"),
+            "assets/dashboard-Bia-bAEO.js",
+            include_bytes!("../../../apps/ctx-dashboard/dist/assets/dashboard-Bia-bAEO.js"),
         ),
         (
-            "assets/styles-D-8XnUVV.js",
-            include_bytes!("../../../apps/ctx-dashboard/dist/assets/styles-D-8XnUVV.js"),
+            "assets/styles-Bv3y7hLt.js",
+            include_bytes!("../../../apps/ctx-dashboard/dist/assets/styles-Bv3y7hLt.js"),
         ),
         (
-            "assets/styles-saCrjsu1.css",
-            include_bytes!("../../../apps/ctx-dashboard/dist/assets/styles-saCrjsu1.css"),
+            "assets/styles-DWraSZJM.css",
+            include_bytes!("../../../apps/ctx-dashboard/dist/assets/styles-DWraSZJM.css"),
         ),
     ]
 }

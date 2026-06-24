@@ -2606,7 +2606,7 @@ fn import_provider_capture_line(
     if let Some(parent_id) = parent_session_id {
         let edge_id = provider_edge_uuid(provider, &session.provider_session_id, "parent_child");
         if caches.processed_edges.insert(edge_id) {
-            let is_new_edge = caches.imported_edges.insert(edge_id);
+            let was_present = store.session_edge_exists(edge_id)?;
             let edge = SessionEdge {
                 id: edge_id,
                 from_session_id: parent_id,
@@ -2627,7 +2627,7 @@ fn import_provider_capture_line(
                 ),
             };
             store.upsert_session_edge(&edge)?;
-            if is_new_edge {
+            if !was_present && caches.imported_edges.insert(edge_id) {
                 summary.imported_edges += 1;
                 summary.imported += 1;
             } else {
@@ -3887,8 +3887,10 @@ mod tests {
         .unwrap();
         assert_eq!(second.failed, 0);
         assert_eq!(second.imported_events, 0);
+        assert_eq!(second.imported_edges, 0);
         assert_eq!(second.skipped_events, 3);
         assert_eq!(second.skipped_sessions, 2);
+        assert_eq!(second.skipped_edges, 1);
 
         let parent_id = provider_session_uuid(CaptureProvider::Codex, "codex-session-1");
         let child_id = provider_session_uuid(CaptureProvider::Codex, "codex-session-1-subagent-a");
@@ -4038,7 +4040,9 @@ mod tests {
         .unwrap();
         assert_eq!(second.failed, 0);
         assert_eq!(second.imported_events, 0);
+        assert_eq!(second.imported_edges, 0);
         assert_eq!(second.skipped_events, 8);
+        assert_eq!(second.skipped_edges, 1);
 
         let parent_id = provider_session_uuid(CaptureProvider::Codex, "codex-session-root");
         let child_id = provider_session_uuid(CaptureProvider::Codex, "codex-session-child");
