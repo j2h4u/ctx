@@ -27,6 +27,11 @@ PROVIDER_ALIASES = {
     "antigravity-cli": "antigravity",
     "gemini_cli": "gemini",
     "gemini-cli": "gemini",
+    "copilot-cli": "copilot_cli",
+    "copilot": "copilot_cli",
+    "factory-ai-droid": "factory_ai_droid",
+    "factoryai-droid": "factory_ai_droid",
+    "factory-droid": "factory_ai_droid",
 }
 
 DEFAULT_FREE_MODEL = "meta-llama/llama-3.1-8b-instruct:free"
@@ -426,7 +431,18 @@ def main() -> int:
     args = parser.parse_args()
 
     provider = PROVIDER_ALIASES.get(args.provider, args.provider)
-    if provider not in {"codex", "pi", "claude", "opencode", "antigravity", "gemini", "cursor"}:
+    if provider not in {
+        "codex",
+        "pi",
+        "claude",
+        "opencode",
+        "antigravity",
+        "gemini",
+        "cursor",
+        "copilot_cli",
+        "factory_ai_droid",
+        "amp",
+    }:
         raise SystemExit(f"unsupported generated provider: {args.provider}")
 
     model = model_for(provider, args.model)

@@ -30,6 +30,9 @@ is:
 | Antigravity | `normalized_import_only` | Explicit normalized provider JSONL path only; no native local-history discovery. | Manual opt-in generated-history smoke. |
 | Gemini | `normalized_import_only` | Explicit normalized provider JSONL path only; no native local-history discovery. | Manual opt-in generated-history smoke. |
 | Cursor | `normalized_import_only` | Explicit normalized provider JSONL path only; no native local-history discovery. | Manual opt-in generated-history smoke. |
+| Copilot CLI | `normalized_import_only` | Explicit normalized provider JSONL path only; no native local-history discovery or parser. | Manual opt-in generated-history smoke. |
+| Factory AI Droid | `normalized_import_only` | Explicit normalized provider JSONL path only; no native local-history discovery or parser. | Manual opt-in generated-history smoke. |
+| Amp | `normalized_import_only` | Explicit normalized provider JSONL path only; no native local-history discovery or parser. | Manual opt-in generated-history smoke. |
 
 Fidelity fields in the machine-readable matrix describe the default public CLI
 import behavior and normalized ctx storage fields. Codex command, patch, output,
@@ -72,9 +75,10 @@ The generated OpenRouter lane is separate from native local-history proof. It
 uses `scripts/run-openrouter-provider-e2e-infisical.sh` to hydrate OpenRouter
 credential and endpoint configuration from Infisical before the Bazel target
 generates temporary synthetic histories for Codex, Pi, Claude, OpenCode,
-Antigravity, Gemini, and Cursor. On Buildkite runners where the agent hook has
-already hydrated OpenRouter env from Infisical, the same wrapper uses that
-pre-hydrated environment instead of requiring an `infisical` binary on `PATH`.
+Antigravity, Gemini, Cursor, Copilot CLI, Factory AI Droid, and Amp. On
+Buildkite runners where the agent hook has already hydrated OpenRouter env from
+Infisical, the same wrapper uses that pre-hydrated environment instead of
+requiring an `infisical` binary on `PATH`.
 Buildkite invokes the Bazel target through `scripts/check.sh -- test`, so the
 same Bazel/Bazelisk bootstrap path is used as the main CI gate. The lane passes
 a deterministic non-secret OpenRouter model override to the Bazel test

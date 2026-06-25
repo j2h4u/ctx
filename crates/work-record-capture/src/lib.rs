@@ -4558,6 +4558,39 @@ mod tests {
         }
     }
 
+    fn write_minimal_provider_fixture(
+        temp: &TempDir,
+        provider: CaptureProvider,
+        external_session_id: &str,
+    ) -> PathBuf {
+        let provider_name = provider.as_str();
+        let path = temp.path().join(format!("{provider_name}.jsonl"));
+        let line = json!({
+            "provider": provider_name,
+            "session": {
+                "provider_session_id": external_session_id,
+                "agent_type": "primary",
+                "role_hint": "primary",
+                "is_primary": true,
+                "status": "imported",
+                "started_at": "2026-06-23T17:00:00Z",
+                "cwd": "/workspace/example",
+                "metadata": {"source": "temp-fixture", "provider": provider_name}
+            },
+            "event": {
+                "provider_event_index": 0,
+                "cursor": format!("{provider_name}-cursor-0"),
+                "event_type": "message",
+                "role": "user",
+                "occurred_at": "2026-06-23T17:00:01Z",
+                "payload": {"text": format!("{provider_name} normalized import smoke")},
+                "metadata": {"source": "temp-fixture"}
+            }
+        });
+        fs::write(&path, format!("{line}\n")).unwrap();
+        path
+    }
+
     #[test]
     fn spool_writer_closes_tmp_file_atomically_to_jsonl() {
         let temp = tempdir();
@@ -5411,6 +5444,74 @@ mod tests {
             assert_eq!(second.skipped_edges, edges, "{name}");
 
             let session_id = provider_session_uuid(provider, external_session_id);
+            assert!(!store.events_for_session(session_id).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn provider_fixture_replay_supports_search_only_temp_fixtures() {
+        let temp = tempdir();
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+
+        for (
+            fixture_name,
+            provider,
+            external_session_id,
+            fixture_sessions,
+            fixture_events,
+            fixture_edges,
+        ) in [
+            (
+                "copilot_cli.jsonl",
+                CaptureProvider::CopilotCli,
+                "copilot-cli-session-1",
+                1,
+                2,
+                0,
+            ),
+            (
+                "factory_ai_droid.jsonl",
+                CaptureProvider::FactoryAiDroid,
+                "factory-ai-droid-session-1",
+                2,
+                3,
+                1,
+            ),
+            ("amp.jsonl", CaptureProvider::Amp, "amp-session-1", 1, 2, 0),
+        ] {
+            let fixture = provider_fixture(fixture_name);
+            let (fixture, sessions, events, edges) = if fixture.exists() {
+                (fixture, fixture_sessions, fixture_events, fixture_edges)
+            } else {
+                (
+                    write_minimal_provider_fixture(&temp, provider, external_session_id),
+                    1,
+                    1,
+                    0,
+                )
+            };
+            let mut options = fixed_import_options(fixture.clone());
+            options.expected_provider = Some(provider);
+
+            let first =
+                import_provider_fixture_jsonl(&fixture, &mut store, options.clone()).unwrap();
+            assert_eq!(first.failed, 0, "{provider}: {:?}", first.failures);
+            assert_eq!(first.imported_sessions, sessions, "{provider}");
+            assert_eq!(first.imported_events, events, "{provider}");
+            assert_eq!(first.imported_edges, edges, "{provider}");
+
+            let second = import_provider_fixture_jsonl(&fixture, &mut store, options).unwrap();
+            assert_eq!(second.failed, 0, "{provider}: {:?}", second.failures);
+            assert_eq!(second.imported_sessions, 0, "{provider}");
+            assert_eq!(second.imported_events, 0, "{provider}");
+            assert_eq!(second.imported_edges, 0, "{provider}");
+            assert_eq!(second.skipped_sessions, sessions, "{provider}");
+            assert_eq!(second.skipped_events, events, "{provider}");
+            assert_eq!(second.skipped_edges, edges, "{provider}");
+
+            let session_id = provider_session_uuid(provider, external_session_id);
+            let session = store.get_session(session_id).unwrap();
+            assert_eq!(session.provider, provider);
             assert!(!store.events_for_session(session_id).unwrap().is_empty());
         }
     }

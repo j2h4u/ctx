@@ -112,7 +112,7 @@ pub fn classify_evidence_freshness(
     EvidenceFreshness::Fresh
 }
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const BUSY_TIMEOUT: Duration = Duration::from_millis(5_000);
 const OBJECTS_DIR: &str = "objects";
 const SPOOL_DIR: &str = "spool";
@@ -395,7 +395,7 @@ const CREATE_TABLES_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS capture_sources (
     id TEXT PRIMARY KEY NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('provider_import', 'provider_hook', 'direct_cli', 'manual')),
-    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude', 'pi', 'opencode', 'antigravity', 'gemini', 'cursor', 'shell', 'git', 'jj', 'gh', 'unknown')),
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude', 'pi', 'opencode', 'antigravity', 'gemini', 'cursor', 'copilot_cli', 'factory_ai_droid', 'amp', 'shell', 'git', 'jj', 'gh', 'unknown')),
     machine_id TEXT NOT NULL,
     process_id INTEGER,
     cwd TEXT,
@@ -412,7 +412,7 @@ CREATE TABLE IF NOT EXISTS capture_sources (
 
 CREATE TABLE IF NOT EXISTS catalog_sessions (
     source_path TEXT PRIMARY KEY NOT NULL,
-    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude', 'pi', 'opencode', 'antigravity', 'gemini', 'cursor', 'shell', 'git', 'jj', 'gh', 'unknown')),
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude', 'pi', 'opencode', 'antigravity', 'gemini', 'cursor', 'copilot_cli', 'factory_ai_droid', 'amp', 'shell', 'git', 'jj', 'gh', 'unknown')),
     source_format TEXT NOT NULL,
     source_root TEXT NOT NULL,
     external_session_id TEXT,
@@ -1031,6 +1031,9 @@ impl Store {
         }
         if user_version < 6 {
             migrate_to_v6(&self.conn)?;
+        }
+        if user_version < 7 {
+            migrate_to_v7(&self.conn)?;
         }
         create_fts_tables_if_supported(&self.conn)?;
         Ok(())
@@ -4039,6 +4042,37 @@ fn migrate_to_v6(conn: &Connection) -> Result<()> {
     }
 }
 
+fn migrate_to_v7(conn: &Connection) -> Result<()> {
+    let foreign_keys_enabled: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+    conn.execute_batch("PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE;")?;
+    let migration = (|| -> Result<()> {
+        rebuild_capture_sources_provider_check(conn)?;
+        rebuild_catalog_sessions_provider_check(conn)?;
+        conn.execute_batch(INDEXES_SQL)?;
+        conn.execute_batch("PRAGMA user_version = 7;")?;
+        Ok(())
+    })();
+
+    match migration {
+        Ok(()) => {
+            conn.execute_batch("COMMIT;")?;
+            if foreign_keys_enabled != 0 {
+                conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            }
+            Ok(())
+        }
+        Err(err) => {
+            if let Err(rollback_err) = conn.execute_batch("ROLLBACK;") {
+                return Err(StoreError::Sql(rollback_err));
+            }
+            if foreign_keys_enabled != 0 {
+                conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            }
+            Err(err)
+        }
+    }
+}
+
 fn rebuild_capture_sources_provider_check(conn: &Connection) -> Result<()> {
     if !table_exists(conn, "capture_sources")? {
         conn.execute_batch(CREATE_TABLES_SQL)?;
@@ -4051,7 +4085,7 @@ fn rebuild_capture_sources_provider_check(conn: &Connection) -> Result<()> {
         CREATE TABLE capture_sources_new (
             id TEXT PRIMARY KEY NOT NULL,
             kind TEXT NOT NULL CHECK (kind IN ('provider_import', 'provider_hook', 'direct_cli', 'manual')),
-            provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude', 'pi', 'opencode', 'antigravity', 'gemini', 'cursor', 'shell', 'git', 'jj', 'gh', 'unknown')),
+            provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude', 'pi', 'opencode', 'antigravity', 'gemini', 'cursor', 'copilot_cli', 'factory_ai_droid', 'amp', 'shell', 'git', 'jj', 'gh', 'unknown')),
             machine_id TEXT NOT NULL,
             process_id INTEGER,
             cwd TEXT,
@@ -4071,6 +4105,50 @@ fn rebuild_capture_sources_provider_check(conn: &Connection) -> Result<()> {
         FROM capture_sources;
         DROP TABLE capture_sources;
         ALTER TABLE capture_sources_new RENAME TO capture_sources;
+        "#,
+    )?;
+    Ok(())
+}
+
+fn rebuild_catalog_sessions_provider_check(conn: &Connection) -> Result<()> {
+    if !table_exists(conn, "catalog_sessions")? {
+        conn.execute_batch(CREATE_TABLES_SQL)?;
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        r#"
+        DROP TABLE IF EXISTS catalog_sessions_new;
+        CREATE TABLE catalog_sessions_new (
+            source_path TEXT PRIMARY KEY NOT NULL,
+            provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude', 'pi', 'opencode', 'antigravity', 'gemini', 'cursor', 'copilot_cli', 'factory_ai_droid', 'amp', 'shell', 'git', 'jj', 'gh', 'unknown')),
+            source_format TEXT NOT NULL,
+            source_root TEXT NOT NULL,
+            external_session_id TEXT,
+            parent_external_session_id TEXT,
+            agent_type TEXT NOT NULL CHECK (agent_type IN ('primary', 'subagent', 'agent_team_member', 'reviewer', 'implementer', 'unknown')),
+            role_hint TEXT,
+            external_agent_id TEXT,
+            cwd TEXT,
+            session_started_at_ms INTEGER,
+            file_size_bytes INTEGER NOT NULL,
+            file_modified_at_ms INTEGER NOT NULL,
+            cataloged_at_ms INTEGER NOT NULL,
+            is_stale INTEGER NOT NULL DEFAULT 0,
+            indexed_at_ms INTEGER,
+            indexed_file_size_bytes INTEGER,
+            indexed_file_modified_at_ms INTEGER,
+            indexed_status TEXT NOT NULL DEFAULT 'pending' CHECK (indexed_status IN ('pending', 'indexed', 'failed')),
+            indexed_error TEXT,
+            indexed_event_count INTEGER,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        INSERT INTO catalog_sessions_new
+        (source_path, provider, source_format, source_root, external_session_id, parent_external_session_id, agent_type, role_hint, external_agent_id, cwd, session_started_at_ms, file_size_bytes, file_modified_at_ms, cataloged_at_ms, is_stale, indexed_at_ms, indexed_file_size_bytes, indexed_file_modified_at_ms, indexed_status, indexed_error, indexed_event_count, metadata_json)
+        SELECT source_path, provider, source_format, source_root, external_session_id, parent_external_session_id, agent_type, role_hint, external_agent_id, cwd, session_started_at_ms, file_size_bytes, file_modified_at_ms, cataloged_at_ms, is_stale, indexed_at_ms, indexed_file_size_bytes, indexed_file_modified_at_ms, indexed_status, indexed_error, indexed_event_count, metadata_json
+        FROM catalog_sessions;
+        DROP TABLE catalog_sessions;
+        ALTER TABLE catalog_sessions_new RENAME TO catalog_sessions;
         "#,
     )?;
     Ok(())
@@ -7277,6 +7355,63 @@ mod catalog_tests {
         assert!(schema.contains("indexed_status TEXT NOT NULL DEFAULT 'pending'"));
         assert!(schema.contains("indexed_error TEXT"));
         assert!(schema.contains("indexed_event_count INTEGER"));
+    }
+
+    #[test]
+    fn provider_check_constraints_accept_search_only_providers() {
+        let temp = tempdir();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        rebuild_capture_sources_provider_check(&store.conn).unwrap();
+        rebuild_catalog_sessions_provider_check(&store.conn).unwrap();
+
+        let schema = store.schema().unwrap();
+        for provider in ["copilot_cli", "factory_ai_droid", "amp"] {
+            assert!(
+                schema.contains(provider),
+                "schema provider checks should include {provider}"
+            );
+            store
+                .conn
+                .execute(
+                    r#"
+                    INSERT INTO capture_sources
+                    (id, kind, provider, machine_id, started_at_ms, fidelity)
+                    VALUES (?1, 'provider_import', ?2, 'test-machine', 0, 'partial')
+                    "#,
+                    params![new_id().to_string(), provider],
+                )
+                .unwrap();
+            store
+                .conn
+                .execute(
+                    r#"
+                    INSERT INTO catalog_sessions
+                    (source_path, provider, source_format, source_root, agent_type, file_size_bytes, file_modified_at_ms, cataloged_at_ms)
+                    VALUES (?1, ?2, 'normalized_provider_jsonl', '/tmp/provider', 'primary', 1, 0, 0)
+                    "#,
+                    params![format!("/tmp/provider/{provider}.jsonl"), provider],
+                )
+                .unwrap();
+        }
+
+        let source_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM capture_sources WHERE provider IN ('copilot_cli', 'factory_ai_droid', 'amp')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let catalog_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM catalog_sessions WHERE provider IN ('copilot_cli', 'factory_ai_droid', 'amp')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(source_count, 3);
+        assert_eq!(catalog_count, 3);
     }
 }
 

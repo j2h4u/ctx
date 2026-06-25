@@ -13,7 +13,8 @@ usage: scripts/release-provider-live-e2e-lanes.sh definitions
 
 Writes non-publishing Buildkite lane definitions for opt-in live provider E2E.
 Codex and Pi can run an explicit local-history import/search smoke.
-Fixture-only providers record blockers. Missing opt-in records skipped artifacts.
+Providers without native local importers record blockers. Missing opt-in records
+skipped artifacts.
 
 Required live env for Codex:
   CTX_LIVE_PROVIDER_E2E=1
@@ -52,6 +53,9 @@ provider_env_name() {
     antigravity_cli) printf 'CTX_LIVE_PROVIDER_ANTIGRAVITY_CLI' ;;
     gemini_cli) printf 'CTX_LIVE_PROVIDER_GEMINI_CLI' ;;
     cursor) printf 'CTX_LIVE_PROVIDER_CURSOR' ;;
+    copilot_cli) printf 'CTX_LIVE_PROVIDER_COPILOT_CLI' ;;
+    factory_ai_droid) printf 'CTX_LIVE_PROVIDER_FACTORY_AI_DROID' ;;
+    amp) printf 'CTX_LIVE_PROVIDER_AMP' ;;
     openrouter) printf 'CTX_LIVE_PROVIDER_OPENROUTER' ;;
     *) return 1 ;;
   esac
@@ -68,6 +72,9 @@ provider_display_name() {
     antigravity_cli) printf 'Antigravity CLI' ;;
     gemini_cli) printf 'Gemini CLI' ;;
     cursor) printf 'Cursor' ;;
+    copilot_cli) printf 'Copilot CLI' ;;
+    factory_ai_droid) printf 'Factory AI Droid' ;;
+    amp) printf 'Amp' ;;
     openrouter) printf 'OpenRouter Generated Harness' ;;
     *) return 1 ;;
   esac
@@ -91,6 +98,9 @@ provider_ids() {
     antigravity_cli \
     gemini_cli \
     cursor \
+    copilot_cli \
+    factory_ai_droid \
+    amp \
     openrouter
 }
 
@@ -142,7 +152,20 @@ openrouter_generated_provider_ids() {
     opencode \
     antigravity \
     gemini \
-    cursor
+    cursor \
+    copilot_cli \
+    factory_ai_droid \
+    amp
+}
+
+openrouter_generated_provider_cli_arg() {
+  local provider="$1"
+
+  case "${provider}" in
+    copilot_cli) printf 'copilot-cli' ;;
+    factory_ai_droid) printf 'factory-ai-droid' ;;
+    *) printf '%s' "${provider}" ;;
+  esac
 }
 
 openrouter_generated_provider_output_path() {
@@ -581,7 +604,7 @@ write_lane_definitions() {
         printf '      "infisical_project_env": "CTX_OPENROUTER_INFISICAL_PROJECT_ID",\n'
         printf '      "infisical_env_env": "CTX_OPENROUTER_INFISICAL_ENV",\n'
         printf '      "infisical_path_env": "CTX_OPENROUTER_INFISICAL_PATH",\n'
-        printf '      "generated_provider_count": 7,\n'
+        printf '      "generated_provider_count": 10,\n'
         printf '      "per_provider_evidence_root": "generated-providers",\n'
         printf '      "ctx_network_required": false,\n'
         printf '      "credential_used_before_ctx_import": true,\n'
@@ -636,7 +659,7 @@ write_lane_definitions() {
           "${secret_scope}" \
           "${provider//_/-}"
       else
-        printf '| %s | `%s=1`, `%s=1` | fixture-only blocker | `%s` | `live-provider-e2e-%s` |\n' \
+        printf '| %s | `%s=1`, `%s=1` | native-import blocker | `%s` | `live-provider-e2e-%s` |\n' \
           "${display}" \
           "CTX_LIVE_PROVIDER_E2E" \
           "${env_name}" \
@@ -647,7 +670,7 @@ write_lane_definitions() {
     printf '\n'
     printf 'Codex and Pi lanes use only explicit local-history paths, a temporary `CTX_DATA_ROOT`, and redacted aggregate/oracle-count artifacts.\n'
     printf 'The OpenRouter generated lane uses `scripts/run-openrouter-provider-e2e-infisical.sh` to hydrate OpenRouter credential and endpoint configuration from Infisical only before `ctx import` creates temporary synthetic histories, then runs `ctx` with a scrubbed environment.\n'
-    printf 'Fixture-only providers remain blockers until the public CLI ships a native local importer.\n'
+    printf 'Providers without native local importers remain blockers for native local-history proof until the public CLI ships a native importer.\n'
   } > "${markdown}"
 
   printf 'provider live E2E lane definitions: %s\n' "${json}"
@@ -846,7 +869,7 @@ write_provider_blocker() {
   "provider_command_execution": false,
   "api_key_env_passed_to_ctx": false,
   "artifact_redaction": "aggregate_counts_only_no_raw_transcripts_snippets_queries_or_source_paths",
-  "blocker": "Provider is fixture-only in the public CLI and has no native local-history importer.",
+  "blocker": "Provider has no native local-history importer in the public CLI; normalized provider JSONL import is not native local-history proof.",
   "next_action": "Add a public read-only native local-history importer, update docs/provider-support-matrix.json, and produce a redacted local-history live E2E artifact before this provider can be treated as live-supported.",
   "git_commit": "$(ctx_json_escape "${commit}")",
   "git_branch": "$(ctx_json_escape "${branch}")",
@@ -865,7 +888,7 @@ EOF
 - Provider command execution: false
 - API key environment passed to ctx: false
 - Artifact redaction: aggregate counts only; no raw transcripts, snippets, queries, or source paths.
-- Blocker: provider is fixture-only in the public CLI and has no native local-history importer.
+- Blocker: provider has no native local-history importer in the public CLI; normalized provider JSONL import is not native local-history proof.
 - Next action: add a public read-only native local-history importer, update \`docs/provider-support-matrix.json\`, and produce a redacted local-history live E2E artifact before this provider can be treated as live-supported.
 EOF
 
@@ -1464,7 +1487,7 @@ run_openrouter_generated_provider() {
   local env_name display ctx_bin tmp_root data_root safe_home generator provider_results_jsonl
   local setup_json status_json doctor_json validate_json generated_at commit branch json markdown
   local selected=0 passed=0 failed=0 total_sessions=0 total_events=0 total_edges=0
-  local generated_provider generated_output generated_json generated_source_path generated_source_format
+  local generated_provider generated_provider_cli_arg generated_output generated_json generated_source_path generated_source_format
   local query import_json search_json oracle_json oracle_pass
   local imported_sessions imported_events imported_edges import_failed search_results
   local status_status doctor_status validate_status setup_status generator_status import_status search_status
@@ -1537,6 +1560,7 @@ run_openrouter_generated_provider() {
   while IFS= read -r generated_provider; do
     selected=$(( selected + 1 ))
     query="$(openrouter_query_marker "${generated_provider}")"
+    generated_provider_cli_arg="$(openrouter_generated_provider_cli_arg "${generated_provider}")"
     raw_query_guards+=("${query}")
     generated_output="$(openrouter_generated_provider_output_path "${tmp_root}" "${generated_provider}")"
     generated_json="${tmp_root}/generated-${generated_provider}.json"
@@ -1568,7 +1592,7 @@ run_openrouter_generated_provider() {
     oracle_json="${tmp_root}/oracle-${generated_provider}.json"
 
     set +e
-    run_ctx_json "${ctx_bin}" "${data_root}" "${safe_home}" "${import_json}" import --provider "${generated_provider}" --path "${generated_source_path}" --json
+    run_ctx_json "${ctx_bin}" "${data_root}" "${safe_home}" "${import_json}" import --provider "${generated_provider_cli_arg}" --path "${generated_source_path}" --json
     import_status=$?
     set -e
     if (( import_status != 0 )); then
@@ -1592,7 +1616,7 @@ run_openrouter_generated_provider() {
 
     set +e
     failed_stderr_summary=""
-    run_ctx_json "${ctx_bin}" "${data_root}" "${safe_home}" "${search_json}" search "${query}" --provider "${generated_provider}" --limit 5 --json
+    run_ctx_json "${ctx_bin}" "${data_root}" "${safe_home}" "${search_json}" search "${query}" --provider "${generated_provider_cli_arg}" --limit 5 --json
     search_status=$?
     if (( search_status != 0 )); then
       failed_stderr_summary="${CTX_LIVE_LAST_STDERR_SUMMARY}"

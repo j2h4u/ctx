@@ -59,6 +59,7 @@ pub enum ProviderId {
     Gemini,
     CopilotCli,
     Copilot,
+    FactoryAiDroid,
     FactoryDroid,
     DroidFactoryAi,
     Goose,
@@ -79,7 +80,7 @@ pub enum ProviderId {
 }
 
 impl ProviderId {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::Codex,
         Self::ClaudeCode,
         Self::ClaudeCliCrp,
@@ -91,6 +92,7 @@ impl ProviderId {
         Self::Gemini,
         Self::CopilotCli,
         Self::Copilot,
+        Self::FactoryAiDroid,
         Self::FactoryDroid,
         Self::DroidFactoryAi,
         Self::Goose,
@@ -406,6 +408,9 @@ mod tests {
             ProviderId::ClaudeCode,
             ProviderId::Codex,
             ProviderId::Cursor,
+            ProviderId::CopilotCli,
+            ProviderId::FactoryAiDroid,
+            ProviderId::Amp,
             ProviderId::GeminiCli,
             ProviderId::OpenCode,
             ProviderId::Pi,

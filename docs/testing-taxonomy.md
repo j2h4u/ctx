@@ -50,8 +50,9 @@ when needed.
 - Generated OpenRouter provider-live validation uses
   `scripts/run-openrouter-provider-e2e-infisical.sh` to hydrate OpenRouter
   credential and endpoint configuration from Infisical before import to create
-  temporary synthetic histories. On runners where agent hooks already hydrate
-  OpenRouter env from Infisical, the wrapper uses that pre-hydrated environment.
+  temporary synthetic histories for 10 generated providers. On runners where
+  agent hooks already hydrate OpenRouter env from Infisical, the wrapper uses
+  that pre-hydrated environment.
   Buildkite invokes the target through `scripts/check.sh -- test` so runner
   Bazel/Bazelisk bootstrap stays identical to the main CI gate. The live lane
   passes a deterministic non-secret OpenRouter model override to the test

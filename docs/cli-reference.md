@@ -65,6 +65,7 @@ ctx import --provider codex
 ctx import --provider pi
 ctx import --path ~/.codex/sessions
 ctx import --provider pi --path ~/.pi/sessions.jsonl
+ctx import --provider copilot-cli --path ./copilot_cli.normalized.jsonl
 ctx import --resume
 ctx import --json
 ```
@@ -80,9 +81,9 @@ Import selection rules:
 - with `--provider`, import discovered sources for that provider;
 - with `--path`, import exactly that path;
 - with `--path` and no provider, parse the path as Codex format;
-- with Claude, OpenCode, Antigravity, Gemini, or Cursor, `--path` is required
-  and must point to normalized provider JSONL rather than native provider
-  history.
+- with Claude, OpenCode, Antigravity, Gemini, Cursor, Copilot CLI, Factory AI
+  Droid, or Amp, `--path` is required and must point to normalized provider
+  JSONL rather than native provider history.
 
 The current `--resume` flag is an idempotent-rescan mode marker. JSON reports
 `resume: true` and `resume_mode: "idempotent_rescan"`, but provider-native
@@ -125,7 +126,8 @@ pagination/truncation fields.
 
 Filters:
 
-- `--provider codex|pi`;
+- `--provider
+  codex|pi|claude|opencode|antigravity|gemini|cursor|copilot-cli|factory-ai-droid|amp`;
 - `--repo <name-or-path>`;
 - `--since <rfc3339-or-days>d`, for example `2026-06-01T00:00:00Z` or `30d`;
 - `--event-type <event-type>`;

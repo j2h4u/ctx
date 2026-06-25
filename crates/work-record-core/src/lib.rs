@@ -170,6 +170,9 @@ text_enum! {
         Antigravity => "antigravity",
         Gemini => "gemini",
         Cursor => "cursor",
+        CopilotCli => "copilot_cli",
+        FactoryAiDroid => "factory_ai_droid",
+        Amp => "amp",
         Shell => "shell",
         Git => "git",
         Jj => "jj",
@@ -1714,6 +1717,18 @@ mod tests {
         assert_eq!(RedactionState::default(), RedactionState::SafePreview);
         #[cfg(feature = "legacy-pr-evidence")]
         assert_eq!(EvidenceFreshness::default(), EvidenceFreshness::Unbound);
+        assert_eq!(
+            serde_json::from_str::<CaptureProvider>("\"copilot_cli\"").unwrap(),
+            CaptureProvider::CopilotCli
+        );
+        assert_eq!(
+            serde_json::from_str::<CaptureProvider>("\"factory_ai_droid\"").unwrap(),
+            CaptureProvider::FactoryAiDroid
+        );
+        assert_eq!(
+            serde_json::from_str::<CaptureProvider>("\"amp\"").unwrap(),
+            CaptureProvider::Amp
+        );
 
         let sync: SyncMetadata = serde_json::from_value(json!({})).unwrap();
         assert_eq!(sync.visibility, Visibility::LocalOnly);

@@ -508,6 +508,9 @@ fn provider_help_matches_implemented_importers() {
         "antigravity",
         "gemini",
         "cursor",
+        "copilot-cli",
+        "factory-ai-droid",
+        "amp",
     ] {
         assert!(help.contains(value), "provider {value} missing in\n{help}");
     }
@@ -525,7 +528,7 @@ fn public_subcommand_help_is_golden_enough_for_search_mvp() {
             vec![
                 "Usage: ctx import",
                 "--provider <PROVIDER>",
-                "[possible values: codex, pi, claude, opencode, antigravity, gemini, cursor]",
+                "[possible values: codex, pi, claude, opencode, antigravity, gemini, cursor, copilot-cli, factory-ai-droid, amp]",
                 "--path <PATH>",
                 "--resume",
                 "--json",
@@ -981,6 +984,9 @@ fn normalized_provider_cli_flow_covers_all_harness_providers_with_multiple_sessi
         ("antigravity", "antigravity"),
         ("gemini", "gemini"),
         ("cursor", "cursor"),
+        ("copilot-cli", "copilot_cli"),
+        ("factory-ai-droid", "factory_ai_droid"),
+        ("amp", "amp"),
     ] {
         let temp = tempdir();
         let query = format!("{stored_provider}-multi-session-oracle");
@@ -1063,14 +1069,25 @@ fn normalized_provider_cli_flow_covers_all_harness_providers_with_multiple_sessi
 
 #[test]
 fn normalized_provider_cli_requires_explicit_path_for_non_discovered_providers() {
-    let temp = tempdir();
-    ctx(&temp)
-        .args(["import", "--provider", "claude", "--json"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "claude imports require an explicit --path to normalized provider JSONL",
-        ));
+    for (cli_provider, stored_provider) in [
+        ("claude", "claude"),
+        ("opencode", "opencode"),
+        ("antigravity", "antigravity"),
+        ("gemini", "gemini"),
+        ("cursor", "cursor"),
+        ("copilot-cli", "copilot_cli"),
+        ("factory-ai-droid", "factory_ai_droid"),
+        ("amp", "amp"),
+    ] {
+        let temp = tempdir();
+        ctx(&temp)
+            .args(["import", "--provider", cli_provider, "--json"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!(
+                "{stored_provider} imports require an explicit --path to normalized provider JSONL",
+            )));
+    }
 }
 
 #[test]

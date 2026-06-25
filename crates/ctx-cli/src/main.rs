@@ -152,6 +152,11 @@ enum ProviderArg {
     #[value(alias = "gemini-cli")]
     Gemini,
     Cursor,
+    #[value(alias = "copilot")]
+    CopilotCli,
+    #[value(alias = "factoryai-droid", alias = "factory-droid")]
+    FactoryAiDroid,
+    Amp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -172,6 +177,9 @@ impl ProviderArg {
             Self::Antigravity => CaptureProvider::Antigravity,
             Self::Gemini => CaptureProvider::Gemini,
             Self::Cursor => CaptureProvider::Cursor,
+            Self::CopilotCli => CaptureProvider::CopilotCli,
+            Self::FactoryAiDroid => CaptureProvider::FactoryAiDroid,
+            Self::Amp => CaptureProvider::Amp,
         }
     }
 
@@ -1650,7 +1658,10 @@ fn import_one_source_inner(
         | ProviderArg::OpenCode
         | ProviderArg::Antigravity
         | ProviderArg::Gemini
-        | ProviderArg::Cursor => import_provider_fixture_jsonl(
+        | ProviderArg::Cursor
+        | ProviderArg::CopilotCli
+        | ProviderArg::FactoryAiDroid
+        | ProviderArg::Amp => import_provider_fixture_jsonl(
             &source.path,
             store,
             ProviderFixtureImportOptions {

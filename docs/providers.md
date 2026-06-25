@@ -26,9 +26,9 @@ or import that provider's native history.
 ## Normalized Harness Imports
 
 The CLI also accepts explicit normalized provider JSONL for Claude, OpenCode,
-Antigravity, Gemini, and Cursor. This path is for adapter harnesses, generated
-test histories, and future native importer development. It is not native
-provider history discovery.
+Antigravity, Gemini, Cursor, Copilot CLI, Factory AI Droid, and Amp. This path
+is for adapter harnesses, generated test histories, and future native importer
+development. It is not native provider history discovery.
 
 If one of these providers is selected without `--path`, `ctx import` returns an
 error explaining that an explicit normalized provider JSONL path is required.
@@ -42,8 +42,9 @@ Live provider E2E is opt-in proof, not a provider runner. The lane never
 executes provider CLIs, never passes credential environment variables to `ctx`,
 and runs `ctx` with a temporary `CTX_DATA_ROOT`.
 
-Only Codex and Pi have live E2E lanes because those are the providers with
-native local import paths in the public CLI. A live run requires
+Only Codex and Pi have native local-history live E2E lanes because those are
+the providers with native local import paths in the public CLI. A live run
+requires
 `CTX_LIVE_PROVIDER_E2E=1`, `CTX_LIVE_PROVIDER_ACCEPT_LOCAL_HISTORY=1`, the
 provider selector (`CTX_LIVE_PROVIDER_CODEX=1` or `CTX_LIVE_PROVIDER_PI=1`),
 an explicit local history path, and a deterministic retrieval query through
@@ -74,9 +75,10 @@ local-history importers produce blocked artifacts instead of passing live proof.
 There is also a default-off generated OpenRouter lane. That lane uses
 `scripts/run-openrouter-provider-e2e-infisical.sh` to hydrate OpenRouter
 credential and endpoint configuration from Infisical before `ctx import` creates
-temporary synthetic multi-session histories for every harness provider. If the
-Buildkite agent hook already hydrated OpenRouter env from Infisical, the wrapper
-uses that pre-hydrated environment without requiring an `infisical` binary.
+temporary synthetic multi-session histories for the 10 generated providers. If
+the Buildkite agent hook already hydrated OpenRouter env from Infisical, the
+wrapper uses that pre-hydrated environment without requiring an `infisical`
+binary.
 Buildkite invokes the target through `scripts/check.sh -- test`, so Bazel
 bootstrap is the same as the main CI gate. The lane passes a deterministic
 non-secret OpenRouter model override to the Bazel test environment because
@@ -86,8 +88,8 @@ provider policy permits free aliases. It then runs the
 same scrubbed `ctx setup`, `ctx import`, `ctx search`, `ctx status`, `ctx
 doctor`, and `ctx validate` flow and writes redacted per-provider evidence
 under `generated-providers/<provider>/` plus an aggregate summary. It proves ctx
-retrieval over generated provider histories; it does not prove native vendor
-transcript discovery.
+retrieval over generated provider histories for the normalized-only providers;
+it does not prove native vendor transcript discovery.
 
 Bazel provider-live targets skip the `ctx` build when the lane is skipped or
 only writes native-import blocker artifacts. When a real Codex, Pi, or generated

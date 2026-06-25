@@ -619,6 +619,267 @@
       "tests": [
         "crates/ctx-cli/tests/cli.rs"
       ]
+    },
+    {
+      "id": "copilot_cli",
+      "display_name": "Copilot CLI",
+      "priority": "p1",
+      "status": "normalized_import_only",
+      "capture_provider": "copilot_cli",
+      "implemented_paths": [
+        {
+          "kind": "normalized_import",
+          "source_format": "normalized_provider_jsonl",
+          "fidelity": "partial",
+          "proof": [
+            "ctx import --provider copilot-cli --path <normalized-provider-jsonl>",
+            "tests/fixtures/provider/copilot_cli.jsonl"
+          ],
+          "notes": [
+            "Explicit normalized provider JSONL only; no native Copilot CLI local-history discovery or native transcript parser is shipped.",
+            "Used for adapter harnesses, generated provider E2E, and future native importer development."
+          ]
+        }
+      ],
+      "imports_existing_history": false,
+      "captures_new_runs_passively": false,
+      "child_sessions_supported": false,
+      "fidelity": {
+        "user_prompts": true,
+        "assistant_messages": true,
+        "tool_calls": false,
+        "tool_output": false,
+        "command_output": false,
+        "files_touched": false,
+        "artifacts": false,
+        "model_identity": true,
+        "costs": false,
+        "token_usage": false,
+        "parent_child_session_edges": false
+      },
+      "blockers": [
+        "No native Copilot CLI local-history importer, transcript parser, or discovery is shipped."
+      ],
+      "live_e2e": {
+        "status": "manual_opt_in_generated_history",
+        "default_enabled": false,
+        "provider_command_execution": false,
+        "api_key_env_passed_to_ctx": false,
+        "credential_used_before_ctx_import": true,
+        "ctx_network_required": false,
+        "temporary_ctx_data_root": true,
+        "script": "scripts/release-provider-live-e2e-lanes.sh run openrouter",
+        "required_env": [
+          "CTX_LIVE_PROVIDER_E2E=1",
+          "CTX_LIVE_PROVIDER_OPENROUTER=1",
+          "CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1",
+          "scripts/run-openrouter-provider-e2e-infisical.sh",
+          "CTX_OPENROUTER_INFISICAL_PROJECT_ID or CTX_INFISICAL_PROJECT_ID",
+          "CTX_OPENROUTER_INFISICAL_ENV=prod",
+          "CTX_OPENROUTER_INFISICAL_PATH=/",
+          "OpenRouter credential and endpoint configuration hydrated from Infisical or pre-hydrated by the Buildkite agent hook",
+          "Infisical-hydrated OpenRouter model configuration or explicit free-model fallback"
+        ],
+        "artifacts": [
+          "live-e2e.json",
+          "live-e2e.md",
+          "generated-providers/copilot_cli/live-e2e.json",
+          "generated-providers/copilot_cli/live-e2e.md"
+        ],
+        "redaction": [
+          "aggregate and oracle counts only",
+          "per-provider generated evidence contains aggregate counts only",
+          "no raw generated histories",
+          "no raw transcripts",
+          "no raw snippets",
+          "no raw queries",
+          "no raw source paths",
+          "provider-filter, citation, and retrieval oracle counts only",
+          "source_exists counts are not required because generated histories are temporary and are not persisted as artifacts"
+        ],
+        "native_import_blocker": "Generated-history proof does not claim native local-history import support."
+      },
+      "public_docs": "docs/provider-support.md",
+      "fixture_paths": [
+        "tests/fixtures/provider/copilot_cli.jsonl"
+      ],
+      "tests": [
+        "crates/ctx-cli/tests/cli.rs"
+      ]
+    },
+    {
+      "id": "factory_ai_droid",
+      "display_name": "Factory AI Droid",
+      "priority": "p1",
+      "status": "normalized_import_only",
+      "capture_provider": "factory_ai_droid",
+      "implemented_paths": [
+        {
+          "kind": "normalized_import",
+          "source_format": "normalized_provider_jsonl",
+          "fidelity": "partial",
+          "proof": [
+            "ctx import --provider factory-ai-droid --path <normalized-provider-jsonl>",
+            "tests/fixtures/provider/factory_ai_droid.jsonl"
+          ],
+          "notes": [
+            "Explicit normalized provider JSONL only; no native Factory AI Droid local-history discovery or native transcript parser is shipped.",
+            "Used for adapter harnesses, generated provider E2E, and future native importer development."
+          ]
+        }
+      ],
+      "imports_existing_history": false,
+      "captures_new_runs_passively": false,
+      "child_sessions_supported": true,
+      "fidelity": {
+        "user_prompts": true,
+        "assistant_messages": true,
+        "tool_calls": true,
+        "tool_output": false,
+        "command_output": false,
+        "files_touched": false,
+        "artifacts": false,
+        "model_identity": true,
+        "costs": false,
+        "token_usage": false,
+        "parent_child_session_edges": true
+      },
+      "blockers": [
+        "No native Factory AI Droid local-history importer, transcript parser, or discovery is shipped."
+      ],
+      "live_e2e": {
+        "status": "manual_opt_in_generated_history",
+        "default_enabled": false,
+        "provider_command_execution": false,
+        "api_key_env_passed_to_ctx": false,
+        "credential_used_before_ctx_import": true,
+        "ctx_network_required": false,
+        "temporary_ctx_data_root": true,
+        "script": "scripts/release-provider-live-e2e-lanes.sh run openrouter",
+        "required_env": [
+          "CTX_LIVE_PROVIDER_E2E=1",
+          "CTX_LIVE_PROVIDER_OPENROUTER=1",
+          "CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1",
+          "scripts/run-openrouter-provider-e2e-infisical.sh",
+          "CTX_OPENROUTER_INFISICAL_PROJECT_ID or CTX_INFISICAL_PROJECT_ID",
+          "CTX_OPENROUTER_INFISICAL_ENV=prod",
+          "CTX_OPENROUTER_INFISICAL_PATH=/",
+          "OpenRouter credential and endpoint configuration hydrated from Infisical or pre-hydrated by the Buildkite agent hook",
+          "Infisical-hydrated OpenRouter model configuration or explicit free-model fallback"
+        ],
+        "artifacts": [
+          "live-e2e.json",
+          "live-e2e.md",
+          "generated-providers/factory_ai_droid/live-e2e.json",
+          "generated-providers/factory_ai_droid/live-e2e.md"
+        ],
+        "redaction": [
+          "aggregate and oracle counts only",
+          "per-provider generated evidence contains aggregate counts only",
+          "no raw generated histories",
+          "no raw transcripts",
+          "no raw snippets",
+          "no raw queries",
+          "no raw source paths",
+          "provider-filter, citation, and retrieval oracle counts only",
+          "source_exists counts are not required because generated histories are temporary and are not persisted as artifacts"
+        ],
+        "native_import_blocker": "Generated-history proof does not claim native local-history import support."
+      },
+      "public_docs": "docs/provider-support.md",
+      "fixture_paths": [
+        "tests/fixtures/provider/factory_ai_droid.jsonl"
+      ],
+      "tests": [
+        "crates/ctx-cli/tests/cli.rs"
+      ]
+    },
+    {
+      "id": "amp",
+      "display_name": "Amp",
+      "priority": "p1",
+      "status": "normalized_import_only",
+      "capture_provider": "amp",
+      "implemented_paths": [
+        {
+          "kind": "normalized_import",
+          "source_format": "normalized_provider_jsonl",
+          "fidelity": "partial",
+          "proof": [
+            "ctx import --provider amp --path <normalized-provider-jsonl>",
+            "tests/fixtures/provider/amp.jsonl"
+          ],
+          "notes": [
+            "Explicit normalized provider JSONL only; no native Amp local-history discovery or native transcript parser is shipped.",
+            "Used for adapter harnesses, generated provider E2E, and future native importer development."
+          ]
+        }
+      ],
+      "imports_existing_history": false,
+      "captures_new_runs_passively": false,
+      "child_sessions_supported": false,
+      "fidelity": {
+        "user_prompts": true,
+        "assistant_messages": true,
+        "tool_calls": true,
+        "tool_output": false,
+        "command_output": false,
+        "files_touched": false,
+        "artifacts": false,
+        "model_identity": true,
+        "costs": false,
+        "token_usage": false,
+        "parent_child_session_edges": false
+      },
+      "blockers": [
+        "No native Amp local-history importer, transcript parser, or discovery is shipped."
+      ],
+      "live_e2e": {
+        "status": "manual_opt_in_generated_history",
+        "default_enabled": false,
+        "provider_command_execution": false,
+        "api_key_env_passed_to_ctx": false,
+        "credential_used_before_ctx_import": true,
+        "ctx_network_required": false,
+        "temporary_ctx_data_root": true,
+        "script": "scripts/release-provider-live-e2e-lanes.sh run openrouter",
+        "required_env": [
+          "CTX_LIVE_PROVIDER_E2E=1",
+          "CTX_LIVE_PROVIDER_OPENROUTER=1",
+          "CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1",
+          "scripts/run-openrouter-provider-e2e-infisical.sh",
+          "CTX_OPENROUTER_INFISICAL_PROJECT_ID or CTX_INFISICAL_PROJECT_ID",
+          "CTX_OPENROUTER_INFISICAL_ENV=prod",
+          "CTX_OPENROUTER_INFISICAL_PATH=/",
+          "OpenRouter credential and endpoint configuration hydrated from Infisical or pre-hydrated by the Buildkite agent hook",
+          "Infisical-hydrated OpenRouter model configuration or explicit free-model fallback"
+        ],
+        "artifacts": [
+          "live-e2e.json",
+          "live-e2e.md",
+          "generated-providers/amp/live-e2e.json",
+          "generated-providers/amp/live-e2e.md"
+        ],
+        "redaction": [
+          "aggregate and oracle counts only",
+          "per-provider generated evidence contains aggregate counts only",
+          "no raw generated histories",
+          "no raw transcripts",
+          "no raw snippets",
+          "no raw queries",
+          "no raw source paths",
+          "provider-filter, citation, and retrieval oracle counts only",
+          "source_exists counts are not required because generated histories are temporary and are not persisted as artifacts"
+        ],
+        "native_import_blocker": "Generated-history proof does not claim native local-history import support."
+      },
+      "public_docs": "docs/provider-support.md",
+      "fixture_paths": [
+        "tests/fixtures/provider/amp.jsonl"
+      ],
+      "tests": [
+        "crates/ctx-cli/tests/cli.rs"
+      ]
     }
   ]
 }
