@@ -5,14 +5,12 @@ use ctx_history_core::{CaptureProvider, ProviderRawRetention, ProviderRedactionB
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderSourceKind {
     NativeHistory,
-    NormalizedDeveloperInput,
     DetectionOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderImportSupport {
     Native,
-    NormalizedDeveloperOnly,
     Unsupported,
 }
 
@@ -286,19 +284,13 @@ pub fn provider_source_for_path(provider: CaptureProvider, path: PathBuf) -> Pro
         CaptureProvider::Cursor => "cursor_agent_transcript_jsonl_tree",
         CaptureProvider::CopilotCli => "copilot_cli_session_events_jsonl",
         CaptureProvider::FactoryAiDroid => "factory_ai_droid_sessions_jsonl",
-        _ => "normalized_provider_jsonl",
+        _ => "unsupported",
     };
-    let explicit_import_support = if matches!(spec.import_support, ProviderImportSupport::Native) {
-        ProviderImportSupport::Native
-    } else if source_format == "normalized_provider_jsonl" {
-        ProviderImportSupport::NormalizedDeveloperOnly
-    } else {
-        spec.import_support
-    };
+    let explicit_import_support = spec.import_support;
     let source_kind = if matches!(explicit_import_support, ProviderImportSupport::Native) {
         ProviderSourceKind::NativeHistory
     } else {
-        ProviderSourceKind::NormalizedDeveloperInput
+        ProviderSourceKind::DetectionOnly
     };
 
     ProviderSource {

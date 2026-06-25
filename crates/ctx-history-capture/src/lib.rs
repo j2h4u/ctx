@@ -6880,7 +6880,7 @@ mod tests {
                 "event_type": "message",
                 "role": "user",
                 "occurred_at": "2026-06-23T17:00:01Z",
-                "payload": {"text": format!("{provider_name} normalized import smoke")},
+                "payload": {"text": format!("{provider_name} provider fixture smoke")},
                 "metadata": {"source": "temp-fixture"}
             }
         });
@@ -8126,7 +8126,7 @@ mod tests {
     }
 
     #[test]
-    fn fixture_only_provider_replay_is_idempotent_for_major_providers() {
+    fn provider_fixture_replay_is_idempotent_for_native_supported_providers() {
         for (name, provider, external_session_id, sessions, events, edges) in [
             (
                 "claude.jsonl",

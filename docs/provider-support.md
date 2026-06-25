@@ -10,7 +10,6 @@ that provider.
 | --- | --- |
 | `local_import` | The CLI can import an existing local history source for this provider. |
 | `local_import_when_supported` | The CLI has an importer for a specific local format, but support depends on that file existing and matching the documented format. |
-| `normalized_import_only` | Developer/test-only normalized provider JSONL exists, but this is not user-facing provider support. |
 | `fixture_only` | The repository has sanitized fixture coverage, but the public CLI does not discover or import native local history for that provider. |
 | `detected_unsupported` | The CLI can detect something about the provider but intentionally does not import it. |
 | `blocked` | No shipped discovery or import path exists. |
@@ -54,9 +53,8 @@ bazel test //:provider_fixture_e2e --config=ci
 
 ## Required Evidence For Promotion
 
-Before a provider moves beyond `fixture_only`, `normalized_import_only`,
-`detected_unsupported`, or `blocked` into native local-history support, the
-change needs:
+Before a provider moves beyond `fixture_only`, `detected_unsupported`, or
+`blocked` into native local-history support, the change needs:
 
 - a documented local source format;
 - read-only source discovery or an explicit `--path` contract;

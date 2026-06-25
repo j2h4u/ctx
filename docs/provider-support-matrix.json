@@ -145,17 +145,6 @@
           "notes": [
             "Reads Claude Code project JSONL transcripts under ~/.claude/projects, including nested subagent transcripts when present."
           ]
-        },
-        {
-          "kind": "normalized_import",
-          "source_format": "normalized_provider_jsonl",
-          "fidelity": "partial",
-          "proof": [
-            "CTX_PROVIDER_NORMALIZED_IMPORT_DEV=1 ctx import --provider <provider> --path <normalized-provider-jsonl>"
-          ],
-          "notes": [
-            "Developer/test-only normalized JSONL input; not user-facing provider support and not native local-history proof."
-          ]
         }
       ],
       "imports_existing_history": true,
@@ -199,17 +188,6 @@
           ],
           "notes": [
             "Reads OpenCode SQLite history from ~/.local/share/opencode/opencode.db using a read-only connection."
-          ]
-        },
-        {
-          "kind": "normalized_import",
-          "source_format": "normalized_provider_jsonl",
-          "fidelity": "partial",
-          "proof": [
-            "CTX_PROVIDER_NORMALIZED_IMPORT_DEV=1 ctx import --provider <provider> --path <normalized-provider-jsonl>"
-          ],
-          "notes": [
-            "Developer/test-only normalized JSONL input; not user-facing provider support and not native local-history proof."
           ]
         }
       ],
@@ -255,17 +233,6 @@
           "notes": [
             "Reads Antigravity transcript JSONL mirrors under ~/.gemini/antigravity-cli/brain/*/.system_generated/logs, preferring transcript_full.jsonl when present.",
             "Preserves typed tool call arguments as bounded, redacted JSON previews."
-          ]
-        },
-        {
-          "kind": "normalized_import",
-          "source_format": "normalized_provider_jsonl",
-          "fidelity": "partial",
-          "proof": [
-            "CTX_PROVIDER_NORMALIZED_IMPORT_DEV=1 ctx import --provider <provider> --path <normalized-provider-jsonl>"
-          ],
-          "notes": [
-            "Developer/test-only normalized JSONL input; not user-facing provider support and not native local-history proof."
           ]
         }
       ],
@@ -318,17 +285,6 @@
           "notes": [
             "Reads Gemini CLI chat JSONL records under ~/.gemini, including nested subagent chats when present."
           ]
-        },
-        {
-          "kind": "normalized_import",
-          "source_format": "normalized_provider_jsonl",
-          "fidelity": "partial",
-          "proof": [
-            "CTX_PROVIDER_NORMALIZED_IMPORT_DEV=1 ctx import --provider <provider> --path <normalized-provider-jsonl>"
-          ],
-          "notes": [
-            "Developer/test-only normalized JSONL input; not user-facing provider support and not native local-history proof."
-          ]
         }
       ],
       "imports_existing_history": true,
@@ -373,17 +329,6 @@
           "notes": [
             "Reads Cursor CLI agent transcript JSONL files under ~/.cursor/projects/*/agent-transcripts/*/*.jsonl.",
             "Cursor auth stores and ai-tracking code metadata are not imported."
-          ]
-        },
-        {
-          "kind": "normalized_import",
-          "source_format": "normalized_provider_jsonl",
-          "fidelity": "partial",
-          "proof": [
-            "CTX_PROVIDER_NORMALIZED_IMPORT_DEV=1 ctx import --provider <provider> --path <normalized-provider-jsonl>"
-          ],
-          "notes": [
-            "Developer/test-only normalized JSONL input; not user-facing provider support and not native local-history proof."
           ]
         }
       ],
@@ -432,17 +377,6 @@
           "notes": [
             "Reads Copilot CLI session event logs under ~/.copilot/session-state."
           ]
-        },
-        {
-          "kind": "normalized_import",
-          "source_format": "normalized_provider_jsonl",
-          "fidelity": "partial",
-          "proof": [
-            "CTX_PROVIDER_NORMALIZED_IMPORT_DEV=1 ctx import --provider <provider> --path <normalized-provider-jsonl>"
-          ],
-          "notes": [
-            "Developer/test-only normalized JSONL input; not user-facing provider support and not native local-history proof."
-          ]
         }
       ],
       "imports_existing_history": true,
@@ -486,17 +420,6 @@
           ],
           "notes": [
             "Reads Factory AI Droid session JSONL files under ~/.factory/sessions, including worker session linkage when present."
-          ]
-        },
-        {
-          "kind": "normalized_import",
-          "source_format": "normalized_provider_jsonl",
-          "fidelity": "partial",
-          "proof": [
-            "CTX_PROVIDER_NORMALIZED_IMPORT_DEV=1 ctx import --provider <provider> --path <normalized-provider-jsonl>"
-          ],
-          "notes": [
-            "Developer/test-only normalized JSONL input; not user-facing provider support and not native local-history proof."
           ]
         }
       ],

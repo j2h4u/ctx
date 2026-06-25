@@ -32,20 +32,6 @@ ctx sources --json
 and `native_import` fields. Sources with `import_support: "unsupported"` are
 detections or blockers, not importable native history.
 
-## Developer Normalized Inputs
-
-The CLI has a developer/test-only normalized provider JSONL input. Set
-`CTX_PROVIDER_NORMALIZED_IMPORT_DEV=1` when using that input. It is for adapter
-harnesses, generated static fixture drafting, and future native importer
-development. It is not native provider history discovery or user-facing
-provider support.
-
-If a provider is selected without a proven native importer, `ctx import`
-returns a provider-specific native-history blocker. Do not document a provider
-as natively locally importable until the CLI can discover or parse that
-provider's real local history and the provider support matrix marks the shipped
-path accordingly.
-
 ## Provider Smoke
 
 Public provider smoke coverage uses static local-history fixtures. It verifies

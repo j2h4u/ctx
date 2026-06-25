@@ -12,8 +12,6 @@ shipped.
 - Antigravity, Claude, OpenCode, Gemini, Cursor, Copilot CLI, and Factory AI
   Droid local import is supported only when their documented local history
   paths exist and match the supported native formats in the provider matrix.
-- Developer/test harnesses can import normalized provider JSONL only with
-  `CTX_PROVIDER_NORMALIZED_IMPORT_DEV=1`; this is not native provider support.
 - Unknown provider formats should not be parsed optimistically.
 
 ## Import Semantics

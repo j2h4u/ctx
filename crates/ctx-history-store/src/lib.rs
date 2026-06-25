@@ -5891,7 +5891,10 @@ mod catalog_tests {
         rebuild_catalog_sessions_provider_check(&store.conn).unwrap();
 
         let schema = store.schema().unwrap();
-        for provider in ["copilot_cli", "factory_ai_droid"] {
+        for (provider, source_format) in [
+            ("copilot_cli", "copilot_cli_session_events_jsonl"),
+            ("factory_ai_droid", "factory_ai_droid_sessions_jsonl"),
+        ] {
             assert!(
                 schema.contains(provider),
                 "schema provider checks should include {provider}"
@@ -5913,9 +5916,9 @@ mod catalog_tests {
                     r#"
                     INSERT INTO catalog_sessions
                     (source_path, provider, source_format, source_root, agent_type, file_size_bytes, file_modified_at_ms, cataloged_at_ms)
-                    VALUES (?1, ?2, 'normalized_provider_jsonl', '/tmp/provider', 'primary', 1, 0, 0)
+                    VALUES (?1, ?2, ?3, '/tmp/provider', 'primary', 1, 0, 0)
                     "#,
-                    params![format!("/tmp/provider/{provider}.jsonl"), provider],
+                    params![format!("/tmp/provider/{provider}.jsonl"), provider, source_format],
                 )
                 .unwrap();
         }

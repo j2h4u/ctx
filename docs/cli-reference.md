@@ -96,10 +96,6 @@ Import selection rules:
 - with `--path`, import exactly that path;
 - with `--path` and no provider, parse the path as Codex format.
 
-Developer/test fixtures may be imported from normalized provider JSONL only
-when `CTX_PROVIDER_NORMALIZED_IMPORT_DEV=1` is set. That input is not native
-provider support and is not used by default discovery or `--all`.
-
 The current `--resume` flag is an idempotent-rescan mode marker. JSON reports
 `resume: true` and `resume_mode: "idempotent_rescan"`, but provider-native
 cursor resume is not a universal contract yet.

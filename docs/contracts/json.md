@@ -64,9 +64,9 @@ Each source includes:
 - `unsupported_reason`.
 
 `status` is `available`, `missing`, or `unsupported`. `import_support` is
-`native`, `normalized_developer_only`, or `unsupported`. `native_import` is a
-boolean derived from `import_support == "native"`. `unsupported_reason` is a
-string for unsupported rows and otherwise null.
+`native` or `unsupported`. `native_import` is a boolean derived from
+`import_support == "native"`. `unsupported_reason` is a string for unsupported
+rows and otherwise null.
 
 ## Import
 
