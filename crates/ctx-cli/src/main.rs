@@ -1017,7 +1017,12 @@ struct ImportSourceOutcome {
 }
 
 fn should_parallelize_import(planned_sources: &[(SourceInfo, SourceStats)]) -> bool {
-    planned_sources.len() > 1
+    let Some((first, _)) = planned_sources.first() else {
+        return false;
+    };
+    planned_sources
+        .iter()
+        .any(|(source, _)| source.provider.as_str() != first.provider.as_str())
 }
 
 fn source_import_json(
