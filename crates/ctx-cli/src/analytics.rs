@@ -38,7 +38,7 @@ fn send_cli_event_inner(
     let duration_ms = event.duration.as_millis().min(i64::MAX as u128) as i64;
     let payload = json!({
         "broker_install_id": install_id,
-        "broker_runtime": "daemon",
+        "broker_runtime": "cli",
         "broker_app_version": env!("CARGO_PKG_VERSION"),
         "broker_os": std::env::consts::OS,
         "broker_arch": std::env::consts::ARCH,
@@ -49,7 +49,7 @@ fn send_cli_event_inner(
             "occurred_at": Utc::now(),
             "plane": "product",
             "delivery": "remote",
-            "origin_runtime": "daemon",
+            "origin_runtime": "cli",
             "origin_install_id": install_id,
             "app_version": env!("CARGO_PKG_VERSION"),
             "os": std::env::consts::OS,

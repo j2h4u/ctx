@@ -749,9 +749,9 @@ fn analytics_sends_coarse_cli_metadata_when_enabled() {
 
     let body = fs::read_to_string(&events_path).unwrap();
     let event: Value = serde_json::from_str(body.lines().next().unwrap()).unwrap();
-    assert_eq!(event["broker_runtime"], "daemon");
+    assert_eq!(event["broker_runtime"], "cli");
     assert_eq!(event["events"][0]["event_name"], "cli_invocation");
-    assert_eq!(event["events"][0]["origin_runtime"], "daemon");
+    assert_eq!(event["events"][0]["origin_runtime"], "cli");
     assert_eq!(event["events"][0]["surface"], "cli");
     assert_eq!(event["events"][0]["properties"]["action"], "status");
     assert!(event["events"][0]["properties"].get("command").is_none());
