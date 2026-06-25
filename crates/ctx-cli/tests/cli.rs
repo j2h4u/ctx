@@ -1,4 +1,6 @@
 use assert_cmd::Command;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use ed25519_dalek::{Signer, SigningKey};
 use predicates::prelude::*;
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -192,10 +194,7 @@ fn write_update_manifest(
         .map(str::to_owned)
         .unwrap_or_else(|| hex_sha256(&artifact_bytes));
     let manifest = temp.path().join("latest.json");
-    fs::write(
-        &manifest,
-        serde_json::to_vec_pretty(&json!({
-            "schema_version": 1,
+    let signed = json!({
             "version": version,
             "platforms": {
                 (platform_key()): {
@@ -206,11 +205,36 @@ fn write_update_manifest(
                     }
                 }
             }
+    });
+    let signature = test_update_signing_key()
+        .sign(&serde_json::to_vec(&signed).unwrap())
+        .to_bytes();
+    fs::write(
+        &manifest,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "signed": signed,
+            "signatures": [{
+                "key_id": TEST_UPDATE_KEY_ID,
+                "algorithm": "ed25519",
+                "signature": BASE64.encode(signature),
+            }]
         }))
         .unwrap(),
     )
     .unwrap();
     manifest
+}
+
+const TEST_UPDATE_KEY_ID: &str = "ctx-test";
+
+fn test_update_signing_key() -> SigningKey {
+    SigningKey::from_bytes(&[7u8; 32])
+}
+
+fn trusted_update_keys_env() -> String {
+    let public_key = test_update_signing_key().verifying_key().to_bytes();
+    format!("{TEST_UPDATE_KEY_ID}:{}", BASE64.encode(public_key))
 }
 
 fn hex_sha256(bytes: &[u8]) -> String {
@@ -698,7 +722,8 @@ fn update_check_uses_local_manifest_without_touching_binary() {
     let update = json_output(
         ctx(&temp)
             .args(["update", "--check-only", "--json"])
-            .env("CTX_UPDATE_MANIFEST_URL", file_url(&manifest)),
+            .env("CTX_UPDATE_MANIFEST_URL", file_url(&manifest))
+            .env("CTX_UPDATE_TRUSTED_PUBKEYS", trusted_update_keys_env()),
     );
 
     assert_eq!(update["schema_version"], 1);
@@ -710,7 +735,7 @@ fn update_check_uses_local_manifest_without_touching_binary() {
 }
 
 #[test]
-fn update_default_is_check_only() {
+fn update_default_applies_signed_manifest_and_keeps_previous_backup() {
     let temp = tempdir();
     let artifact = temp.path().join("ctx-new");
     fs::write(&artifact, b"new ctx binary").unwrap();
@@ -723,45 +748,77 @@ fn update_default_is_check_only() {
         ctx(&temp)
             .args(["update", "--json"])
             .env("CTX_UPDATE_MANIFEST_URL", file_url(&manifest))
+            .env("CTX_UPDATE_TRUSTED_PUBKEYS", trusted_update_keys_env())
             .env("CTX_UPDATE_TARGET", &target),
     );
 
-    assert_eq!(update["action"], "check_only");
-    assert_eq!(update["applied"], false);
-    assert_eq!(fs::read(&target).unwrap(), b"old ctx binary");
+    assert_eq!(update["action"], "applied");
+    assert_eq!(update["applied"], true);
+    assert_eq!(fs::read(&target).unwrap(), b"new ctx binary");
+    assert_eq!(
+        fs::read(target.with_file_name("ctx.ctx-previous")).unwrap(),
+        b"old ctx binary"
+    );
 }
 
 #[test]
-fn update_apply_is_blocked_until_signed_manifest_verification() {
+fn update_apply_rejects_bad_signature_and_preserves_target() {
     let temp = tempdir();
-    let events_path = temp.path().join("analytics.jsonl");
+    let artifact = temp.path().join("ctx-new");
+    fs::write(&artifact, b"new ctx binary").unwrap();
+    let manifest = write_update_manifest(&temp, "9.9.9", &artifact, None);
+    let mut manifest_value: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    manifest_value["signatures"][0]["signature"] = Value::String(BASE64.encode([0u8; 64]));
+    fs::write(
+        &manifest,
+        serde_json::to_vec_pretty(&manifest_value).unwrap(),
+    )
+    .unwrap();
     let target = temp.path().join("bin").join("ctx");
     fs::create_dir_all(target.parent().unwrap()).unwrap();
     fs::write(&target, b"old ctx binary").unwrap();
 
     ctx(&temp)
         .args(["update", "--apply", "--json"])
-        .env_remove("CTX_ANALYTICS_OFF")
-        .env("CTX_ANALYTICS_ENDPOINT", file_url(&events_path))
-        .env(
-            "CTX_UPDATE_MANIFEST_URL",
-            file_url(&temp.path().join("missing-latest.json")),
-        )
+        .env("CTX_UPDATE_MANIFEST_URL", file_url(&manifest))
+        .env("CTX_UPDATE_TRUSTED_PUBKEYS", trusted_update_keys_env())
         .env("CTX_UPDATE_TARGET", &target)
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "ctx update --apply is disabled until signed release manifest verification ships",
+            "update manifest signature could not be verified",
         ));
 
     assert_eq!(fs::read(&target).unwrap(), b"old ctx binary");
     assert!(!temp.path().join("update-state.json").exists());
-    assert!(!temp.path().join("install.json").exists());
-    assert!(!events_path.exists());
 }
 
 #[test]
-fn auto_update_status_check_is_notice_only() {
+fn update_apply_rejects_bad_checksum_and_preserves_target() {
+    let temp = tempdir();
+    let artifact = temp.path().join("ctx-new");
+    fs::write(&artifact, b"new ctx binary").unwrap();
+    let manifest = write_update_manifest(&temp, "9.9.9", &artifact, Some(&"0".repeat(64)));
+    let target = temp.path().join("bin").join("ctx");
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&target, b"old ctx binary").unwrap();
+
+    ctx(&temp)
+        .args(["update", "--json"])
+        .env("CTX_UPDATE_MANIFEST_URL", file_url(&manifest))
+        .env("CTX_UPDATE_TRUSTED_PUBKEYS", trusted_update_keys_env())
+        .env("CTX_UPDATE_TARGET", &target)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "update artifact checksum mismatch",
+        ));
+
+    assert_eq!(fs::read(&target).unwrap(), b"old ctx binary");
+}
+
+#[test]
+fn auto_update_status_applies_signed_update_by_default() {
     let temp = tempdir();
     let artifact = temp.path().join("ctx-new");
     fs::write(&artifact, b"new ctx binary").unwrap();
@@ -774,19 +831,18 @@ fn auto_update_status_check_is_notice_only() {
         .arg("status")
         .env_remove("CTX_DISABLE_AUTO_UPDATE")
         .env("CTX_UPDATE_MANIFEST_URL", file_url(&manifest))
+        .env("CTX_UPDATE_TRUSTED_PUBKEYS", trusted_update_keys_env())
         .env("CTX_UPDATE_TARGET", &target)
         .assert()
         .success()
-        .stderr(predicate::str::contains(
-            "install is disabled until signed release manifests are supported",
-        ));
+        .stderr(predicate::str::contains("ctx updated to 9.9.9"));
 
     let state: Value =
         serde_json::from_slice(&fs::read(temp.path().join("update-state.json")).unwrap()).unwrap();
-    assert_eq!(state["last_result"], "check_only");
+    assert_eq!(state["last_result"], "applied");
     assert_eq!(state["update_available"], true);
-    assert_eq!(state["applied"], false);
-    assert_eq!(fs::read(&target).unwrap(), b"old ctx binary");
+    assert_eq!(state["applied"], true);
+    assert_eq!(fs::read(&target).unwrap(), b"new ctx binary");
 }
 
 #[test]

@@ -55,14 +55,14 @@ is known.
 | Command | Reads | Writes |
 | --- | --- | --- |
 | `ctx setup` | home path metadata for source discovery | data root, `work.sqlite`, `config.toml`, and possibly `install.json` for analytics |
-| `ctx status` | data root metadata, existing SQLite store | possibly `install.json` for analytics and `update-state.json` for throttled update checks |
+| `ctx status` | data root metadata, existing SQLite store | possibly `install.json` for analytics and `update-state.json` for throttled updates |
 | `ctx sources` | known provider paths under the user's home | possibly `install.json` for analytics |
 | `ctx import` | provider transcript files and path metadata | data root, `config.toml` if missing, SQLite index, and possibly `install.json` for analytics |
 | `ctx list` | SQLite index | possibly `install.json` for analytics |
 | `ctx show` | SQLite index | possibly `install.json` for analytics |
 | `ctx search` | SQLite index | possibly `install.json` for analytics |
-| `ctx doctor` | SQLite index and data root metadata | possibly `install.json` for analytics and `update-state.json` for throttled update checks |
-| `ctx validate` | SQLite index | possibly `install.json` for analytics and `update-state.json` for throttled update checks |
+| `ctx doctor` | SQLite index and data root metadata | possibly `install.json` for analytics and `update-state.json` for throttled updates |
+| `ctx validate` | SQLite index | possibly `install.json` for analytics and `update-state.json` for throttled updates |
 
 Setup, import, and search do not require source repository writes, model APIs,
 API keys, or remote accounts. First-party analytics and update checks are the
@@ -91,8 +91,11 @@ enabled = false
 ```
 
 Automatic update checks use the `stable` channel by default. These checks report
-availability only; ctx does not replace its own binary until signed release
-manifest verification ships. To disable the checks, add:
+availability in JSON mode and install verified updates in interactive status,
+doctor, and validate runs. ctx verifies the signed release manifest, artifact
+size, and SHA-256 digest before replacing its own binary, and keeps the previous
+binary next to the install target with a `.ctx-previous` suffix. To disable the
+checks, add:
 
 ```toml
 [updates]
@@ -181,5 +184,5 @@ Core setup, source discovery, import, and search commands are local filesystem
 operations. The tools that originally produced provider transcripts may have
 used the network according to their own configuration; ctx indexing those
 transcripts does not repeat that behavior. Analytics sends coarse command
-metadata unless disabled. Update checks use the release endpoint only for
-`ctx update` and the throttled status/doctor/validate auto-update path.
+metadata unless disabled. Updates use the release endpoint only for `ctx update`
+and the throttled status/doctor/validate auto-update path.

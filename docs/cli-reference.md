@@ -39,8 +39,8 @@ Setup and health checks do not change shell startup files, install repository
 integrations, write into source repositories, call model APIs, require API keys,
 or start background processes. Core storage checks are local. Analytics and
 updates are first-party network features: analytics can be disabled with
-`[analytics] enabled = false`, and update checks are explicit via `ctx update`
-plus the throttled status/doctor/validate auto-update path. JSON stdout remains
+`[analytics] enabled = false`, and updates run through `ctx update` plus the
+throttled status/doctor/validate auto-update path. JSON stdout remains
 structured; update notices use stderr.
 
 ## Updates
@@ -48,14 +48,17 @@ structured; update notices use stderr.
 ```bash
 ctx update
 ctx update --check-only
+ctx update --apply
 ctx update --json
 ```
 
-`ctx update` reads the configured release channel and downloads the matching
-manifest. It reports available versions but does not replace the current binary
-until signed release manifest verification ships. The `--apply` flag is
-reserved and currently fails closed. Set `[updates] auto_update = false` to
-disable the throttled background availability checks.
+`ctx update` reads the configured release channel, verifies the signed release
+manifest, downloads the matching artifact, checks its size and SHA-256 digest,
+then stages and replaces the current binary. The previous binary is kept beside
+the install target with a `.ctx-previous` suffix. Use `--check-only` to report
+availability without installing. `--apply` is accepted for explicit install
+commands, but install is already the default. Set `[updates] auto_update =
+false` to disable the throttled background install checks.
 
 ## Sources
 
