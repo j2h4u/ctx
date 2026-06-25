@@ -162,7 +162,7 @@ struct UpdateArgs {
     json: bool,
     #[arg(long, conflicts_with = "apply")]
     check_only: bool,
-    /// Reserved until signed release manifest verification ships.
+    /// Install an available update. This is the default unless --check-only is set.
     #[arg(long)]
     apply: bool,
     #[arg(long)]
@@ -205,7 +205,7 @@ impl CommandRoot {
     }
 
     fn sends_analytics(&self) -> bool {
-        !matches!(self, Self::Update(args) if args.apply)
+        true
     }
 }
 
@@ -1562,8 +1562,8 @@ fn run_update(args: UpdateArgs, data_root: PathBuf, config: &AppConfig) -> Resul
         &data_root,
         config,
         updates::UpdateOptions {
-            apply: args.apply,
-            check_only: args.check_only || !args.apply,
+            apply: !args.check_only,
+            check_only: args.check_only,
             force: args.force,
         },
     )?;

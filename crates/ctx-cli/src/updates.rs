@@ -1,15 +1,22 @@
 use std::{
     env, fs,
+    io::Write,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::{config::AppConfig, net};
 
 const UPDATE_STATE_FILE: &str = "update-state.json";
+const UPDATE_KEY_ID_ENV: &str = "CTX_UPDATE_PUBLIC_KEY_ID";
+const UPDATE_KEY_B64_ENV: &str = "CTX_UPDATE_PUBLIC_KEY_B64";
+const UPDATE_TRUSTED_KEYS_ENV: &str = "CTX_UPDATE_TRUSTED_PUBKEYS";
 
 #[derive(Debug, Clone)]
 pub struct UpdateOptions {
@@ -55,6 +62,8 @@ impl UpdateOutcome {
 #[derive(Debug, Clone)]
 struct Artifact {
     url: String,
+    sha256: String,
+    bytes: Option<u64>,
 }
 
 pub fn maybe_auto_update(data_root: &Path, config: &AppConfig, json_output: bool) {
@@ -65,8 +74,8 @@ pub fn maybe_auto_update(data_root: &Path, config: &AppConfig, json_output: bool
         return;
     }
     let options = UpdateOptions {
-        apply: false,
-        check_only: true,
+        apply: true,
+        check_only: false,
         force: false,
     };
     match check_or_apply_update(data_root, config, options) {
@@ -90,12 +99,6 @@ pub fn check_or_apply_update(
     config: &AppConfig,
     options: UpdateOptions,
 ) -> Result<UpdateOutcome> {
-    if options.apply {
-        return Err(anyhow!(
-            "ctx update --apply is disabled until signed release manifest verification ships"
-        ));
-    }
-
     fs::create_dir_all(data_root)?;
     let current_version = env!("CARGO_PKG_VERSION").to_owned();
     let channel = config.updates.channel.clone();
@@ -104,7 +107,8 @@ pub fn check_or_apply_update(
     let manifest_bytes = net::get_bytes(&manifest_url)?;
     let manifest: Value = serde_json::from_slice(&manifest_bytes)
         .with_context(|| format!("parse update manifest {manifest_url}"))?;
-    let latest_version = manifest_version(&manifest);
+    let signed = verified_signed_manifest(&manifest)?;
+    let latest_version = manifest_version(signed);
     let update_available = options.force
         || latest_version
             .as_deref()
@@ -128,7 +132,7 @@ pub fn check_or_apply_update(
         return Ok(outcome);
     }
 
-    let artifact = resolve_artifact(&manifest, &platform, &manifest_url)?;
+    let artifact = resolve_artifact(signed, &platform, &manifest_url)?;
     if options.check_only || !options.apply {
         let latest = latest_version
             .clone()
@@ -144,14 +148,35 @@ pub fn check_or_apply_update(
             applied: false,
             artifact_url: Some(artifact.url),
             install_path: None,
-            message: format!(
-                "ctx {latest} is available; install is disabled until signed release manifests are supported"
-            ),
+            message: format!("ctx {latest} is available"),
         };
         write_update_state(data_root, &outcome)?;
         return Ok(outcome);
     }
-    unreachable!("update application is disabled until signed manifests ship")
+
+    let artifact_url = artifact.url.clone();
+    let bytes = net::get_bytes(&artifact.url)
+        .with_context(|| format!("download ctx update artifact {}", artifact.url))?;
+    verify_artifact_bytes(&artifact, &bytes)?;
+    let install_path = install_update(&bytes)?;
+    let latest = latest_version
+        .clone()
+        .unwrap_or_else(|| "unknown".to_owned());
+    let outcome = UpdateOutcome {
+        current_version,
+        latest_version,
+        channel,
+        manifest_url,
+        platform,
+        update_available: true,
+        action: "applied",
+        applied: true,
+        artifact_url: Some(artifact_url),
+        install_path: Some(install_path),
+        message: format!("ctx updated to {latest}"),
+    };
+    write_update_state(data_root, &outcome)?;
+    Ok(outcome)
 }
 
 fn should_check_now(data_root: &Path, interval: Duration) -> bool {
@@ -261,9 +286,234 @@ fn artifact_from_value(value: &Value, manifest_url: &str) -> Option<Artifact> {
         .or_else(|| value.get("download_url"))
         .or_else(|| value.get("path"))
         .and_then(|value| value.as_str())?;
+    let sha256 = value.get("sha256").and_then(|value| value.as_str())?;
+    let bytes = value.get("bytes").and_then(|value| value.as_u64());
     Some(Artifact {
         url: resolve_url(url, manifest_url),
+        sha256: sha256.to_owned(),
+        bytes,
     })
+}
+
+fn verified_signed_manifest(manifest: &Value) -> Result<&Value> {
+    let signed = manifest
+        .get("signed")
+        .ok_or_else(|| anyhow!("update manifest is missing signed payload"))?;
+    let payload = serde_json::to_vec(signed)?;
+    let signatures = manifest
+        .get("signatures")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| anyhow!("update manifest is missing signatures"))?;
+    let trusted = trusted_update_keys()?;
+    for signature in signatures {
+        let key_id = signature
+            .get("key_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let algorithm = signature
+            .get("algorithm")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        if algorithm != "ed25519" {
+            continue;
+        }
+        let Some(verifying_key) = trusted
+            .iter()
+            .find(|trusted| trusted.key_id == key_id)
+            .map(|trusted| &trusted.key)
+        else {
+            continue;
+        };
+        let Some(signature_b64) = signature.get("signature").and_then(|value| value.as_str())
+        else {
+            continue;
+        };
+        let Ok(signature_bytes) = BASE64.decode(signature_b64) else {
+            continue;
+        };
+        let Ok(signature) = Signature::from_slice(&signature_bytes) else {
+            continue;
+        };
+        if verifying_key.verify(&payload, &signature).is_ok() {
+            return Ok(signed);
+        }
+    }
+    Err(anyhow!(
+        "update manifest signature could not be verified by a trusted ctx release key"
+    ))
+}
+
+#[derive(Debug)]
+struct TrustedUpdateKey {
+    key_id: String,
+    key: VerifyingKey,
+}
+
+fn trusted_update_keys() -> Result<Vec<TrustedUpdateKey>> {
+    let mut specs = Vec::new();
+    if let (Some(key_id), Some(public_key_b64)) = (
+        option_env!("CTX_RELEASE_PUBLIC_KEY_ID"),
+        option_env!("CTX_RELEASE_PUBLIC_KEY_B64"),
+    ) {
+        specs.push((key_id.to_owned(), public_key_b64.to_owned()));
+    }
+    if cfg!(debug_assertions) {
+        if let Ok(value) = env::var(UPDATE_TRUSTED_KEYS_ENV) {
+            specs.extend(parse_trusted_key_specs(&value));
+        }
+        if let (Ok(key_id), Ok(public_key_b64)) =
+            (env::var(UPDATE_KEY_ID_ENV), env::var(UPDATE_KEY_B64_ENV))
+        {
+            if !key_id.trim().is_empty() && !public_key_b64.trim().is_empty() {
+                specs.push((key_id, public_key_b64));
+            }
+        }
+    }
+    let mut keys = Vec::new();
+    for (key_id, public_key_b64) in specs {
+        let key_bytes = BASE64
+            .decode(public_key_b64.trim())
+            .with_context(|| format!("decode update signing key {key_id}"))?;
+        let key_bytes: [u8; 32] = key_bytes
+            .try_into()
+            .map_err(|_| anyhow!("update signing key {key_id} is not 32 bytes"))?;
+        keys.push(TrustedUpdateKey {
+            key_id,
+            key: VerifyingKey::from_bytes(&key_bytes)
+                .with_context(|| "parse update signing public key")?,
+        });
+    }
+    if keys.is_empty() {
+        return Err(anyhow!("no trusted ctx update signing keys are configured"));
+    }
+    Ok(keys)
+}
+
+fn parse_trusted_key_specs(value: &str) -> Vec<(String, String)> {
+    value
+        .split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                return None;
+            }
+            let (key_id, public_key_b64) = entry.split_once(':')?;
+            Some((key_id.trim().to_owned(), public_key_b64.trim().to_owned()))
+        })
+        .collect()
+}
+
+fn verify_artifact_bytes(artifact: &Artifact, bytes: &[u8]) -> Result<()> {
+    if let Some(expected) = artifact.bytes {
+        let actual = bytes.len() as u64;
+        if actual != expected {
+            return Err(anyhow!(
+                "update artifact size mismatch: expected {expected} bytes, got {actual}"
+            ));
+        }
+    }
+    let actual_sha = hex_sha256(bytes);
+    if !artifact.sha256.eq_ignore_ascii_case(&actual_sha) {
+        return Err(anyhow!("update artifact checksum mismatch"));
+    }
+    Ok(())
+}
+
+fn install_update(bytes: &[u8]) -> Result<PathBuf> {
+    let target = env::var_os("CTX_UPDATE_TARGET")
+        .map(PathBuf::from)
+        .map(Ok)
+        .unwrap_or_else(env::current_exe)
+        .context("resolve ctx update target")?;
+    let parent = target.parent().ok_or_else(|| {
+        anyhow!(
+            "update target has no parent directory: {}",
+            target.display()
+        )
+    })?;
+    fs::create_dir_all(parent)?;
+    let unique = format!("{}.{}", std::process::id(), now_unix_s());
+    let staged = parent.join(format!(".ctx-update-{unique}.new"));
+    let mut file = fs::File::create(&staged)
+        .with_context(|| format!("create staged update {}", staged.display()))?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    make_staged_executable(&staged, &target)?;
+
+    let backup = backup_path(&target);
+    if target.exists() {
+        fs::copy(&target, &backup).with_context(|| {
+            format!(
+                "backup current ctx binary {} to {}",
+                target.display(),
+                backup.display()
+            )
+        })?;
+    }
+    replace_binary(&staged, &target).with_context(|| {
+        let _ = fs::remove_file(&staged);
+        format!("replace ctx binary {}", target.display())
+    })?;
+    sync_parent(parent);
+    Ok(target)
+}
+
+fn backup_path(target: &Path) -> PathBuf {
+    let name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("ctx");
+    target.with_file_name(format!("{name}.ctx-previous"))
+}
+
+#[cfg(unix)]
+fn make_staged_executable(staged: &Path, target: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = fs::metadata(target)
+        .map(|metadata| metadata.permissions().mode())
+        .unwrap_or(0o755)
+        | 0o111;
+    fs::set_permissions(staged, fs::Permissions::from_mode(mode))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_staged_executable(_staged: &Path, _target: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn replace_binary(staged: &Path, target: &Path) -> Result<()> {
+    fs::rename(staged, target)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn replace_binary(staged: &Path, target: &Path) -> Result<()> {
+    if target.exists() {
+        fs::remove_file(target)?;
+    }
+    fs::rename(staged, target)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent(parent: &Path) {
+    let _ = fs::File::open(parent).and_then(|file| file.sync_all());
+}
+
+#[cfg(not(unix))]
+fn sync_parent(_parent: &Path) {}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
 }
 
 fn resolve_url(url: &str, manifest_url: &str) -> String {
