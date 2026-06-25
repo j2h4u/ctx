@@ -270,6 +270,41 @@ fn import_progress_json_goes_to_stderr_without_polluting_stdout() {
 }
 
 #[test]
+fn import_all_discovers_and_imports_providers_together() {
+    let temp = tempdir();
+    copy_dir_all(
+        Path::new(&provider_history_fixture("codex-sessions")),
+        &temp.path().join(".codex").join("sessions"),
+    );
+    let pi_home = temp.path().join(".pi");
+    fs::create_dir_all(&pi_home).unwrap();
+    fs::copy(
+        provider_history_fixture("pi-session.jsonl"),
+        pi_home.join("sessions.jsonl"),
+    )
+    .unwrap();
+
+    let output = ctx(&temp)
+        .args(["import", "--all", "--json", "--progress", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["schema_version"], 1);
+    assert!(stdout["totals"]["imported_sessions"].as_u64().unwrap() >= 3);
+    let sources = stdout["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 2);
+    assert!(sources.iter().any(|source| source["provider"] == "codex"));
+    assert!(sources.iter().any(|source| source["provider"] == "pi"));
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains(r#""type":"ctx_progress""#), "{stderr}");
+    assert!(stderr.contains(r#""phase":"finalizing""#), "{stderr}");
+}
+
+#[test]
 fn provider_help_matches_implemented_importers() {
     let temp = tempdir();
     let output = ctx(&temp)

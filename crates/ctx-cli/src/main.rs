@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, Mutex},
+    thread,
     time::{Duration as StdDuration, Instant},
 };
 
@@ -243,10 +244,16 @@ impl CatalogTotals {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 struct SourceStats {
     files: usize,
     bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SourceProgressSnapshot {
+    completed_bytes: u64,
+    total_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,6 +368,83 @@ impl ProgressReporter {
         }))
     }
 
+    fn parallel_codex_import_callback(
+        &self,
+        source: &SourceInfo,
+        source_index: usize,
+        source_states: Arc<Mutex<Vec<SourceProgressSnapshot>>>,
+    ) -> Option<CodexSessionImportProgressCallback> {
+        if !self.is_enabled() || !matches!(source.provider, ProviderArg::Codex) {
+            return None;
+        }
+        let reporter = self.clone();
+        let provider = source.provider.as_str().to_owned();
+        let path = source.path.display().to_string();
+        Some(Arc::new(move |progress: CodexSessionImportProgress| {
+            let (completed_bytes, total_bytes) = {
+                let mut states = source_states
+                    .lock()
+                    .expect("parallel progress state poisoned");
+                if let Some(state) = states.get_mut(source_index) {
+                    state.total_bytes = state.total_bytes.max(progress.total_bytes);
+                    state.completed_bytes = progress
+                        .completed_bytes
+                        .min(state.total_bytes.max(progress.completed_bytes));
+                }
+                aggregate_source_progress(&states)
+            };
+            reporter.emit(ProgressLine {
+                phase: "indexing",
+                message: format!("{provider} {path}"),
+                completed_bytes,
+                total_bytes: reporter.total_bytes.max(total_bytes).max(completed_bytes),
+                completed_files: Some(progress.completed_files),
+                total_files: Some(progress.total_files),
+                imported_events: Some(progress.imported_events),
+                done: progress.done,
+                force: progress.done,
+            });
+        }))
+    }
+
+    fn parallel_source_done(
+        &self,
+        source: &SourceInfo,
+        source_index: usize,
+        source_states: &Arc<Mutex<Vec<SourceProgressSnapshot>>>,
+        stats: SourceStats,
+        summary: &ProviderImportSummary,
+    ) {
+        if !self.is_enabled() {
+            return;
+        }
+        let (completed_bytes, total_bytes) = {
+            let mut states = source_states
+                .lock()
+                .expect("parallel progress state poisoned");
+            if let Some(state) = states.get_mut(source_index) {
+                state.total_bytes = state.total_bytes.max(stats.bytes);
+                state.completed_bytes = state.total_bytes;
+            }
+            aggregate_source_progress(&states)
+        };
+        self.emit(ProgressLine {
+            phase: "indexing",
+            message: format!(
+                "imported {} {}",
+                source.provider.as_str(),
+                source.path.display()
+            ),
+            completed_bytes,
+            total_bytes: self.total_bytes.max(total_bytes).max(completed_bytes),
+            completed_files: Some(stats.files),
+            total_files: Some(stats.files),
+            imported_events: Some(summary.imported_events),
+            done: true,
+            force: true,
+        });
+    }
+
     fn emit(&self, line: ProgressLine) {
         let mut state = self.state.lock().expect("progress state poisoned");
         let now = Instant::now();
@@ -411,6 +495,18 @@ impl ProgressReporter {
             }
         }
     }
+}
+
+fn aggregate_source_progress(states: &[SourceProgressSnapshot]) -> (u64, u64) {
+    states
+        .iter()
+        .fold((0u64, 0u64), |(completed, total), state| {
+            let source_total = state.total_bytes.max(state.completed_bytes);
+            (
+                completed.saturating_add(state.completed_bytes.min(source_total)),
+                total.saturating_add(source_total),
+            )
+        })
 }
 
 struct ProgressLine {
@@ -696,7 +792,8 @@ fn catalog_available_sources(
 fn run_import(args: ImportArgs, data_root: PathBuf) -> Result<()> {
     fs::create_dir_all(&data_root)?;
     write_default_config(&data_root)?;
-    let mut store = Store::open(database_path(data_root))?;
+    let db_path = database_path(data_root);
+    let mut store = Store::open(&db_path)?;
     let mut totals = ImportTotals::default();
     let mut imported_sources = Vec::new();
 
@@ -726,48 +823,154 @@ fn run_import(args: ImportArgs, data_root: PathBuf) -> Result<()> {
         ),
     );
 
-    let mut completed_source_bytes = 0u64;
-    for (source, stats) in planned_sources {
+    if should_parallelize_import(&planned_sources) {
+        let final_refresh_required = store.event_search_projection_needs_backfill()?
+            || planned_sources
+                .iter()
+                .any(|(source, _)| !source_uses_incremental_event_search(source));
+        drop(store);
+
         if !args.json {
-            println!(
-                "importing {} {} ({} files, {} bytes)",
-                source.provider.as_str(),
-                source.path.display(),
-                stats.files,
-                stats.bytes
-            );
+            for (source, stats) in &planned_sources {
+                println!(
+                    "importing {} {} ({} files, {} bytes)",
+                    source.provider.as_str(),
+                    source.path.display(),
+                    stats.files,
+                    stats.bytes
+                );
+            }
         }
-        let source_progress = progress.codex_import_callback(&source, completed_source_bytes);
-        let summary = import_one_source(&mut store, &source, source_progress)?;
-        totals.add(&summary, &stats);
-        completed_source_bytes = completed_source_bytes.saturating_add(stats.bytes);
-        progress.done(
-            "indexing",
-            format!("imported {}", source.path.display()),
-            completed_source_bytes,
-        );
-        if !args.json {
-            println!(
-                "source_imported: sessions={} events={} edges={} skipped={} failed={}",
-                summary.imported_sessions,
-                summary.imported_events,
-                summary.imported_edges,
-                summary.skipped,
-                summary.failed
-            );
+
+        let source_states = Arc::new(Mutex::new(
+            planned_sources
+                .iter()
+                .map(|(_, stats)| SourceProgressSnapshot {
+                    completed_bytes: 0,
+                    total_bytes: stats.bytes,
+                })
+                .collect::<Vec<_>>(),
+        ));
+        let handles = planned_sources
+            .into_iter()
+            .enumerate()
+            .map(|(index, (source, stats))| {
+                let db_path = db_path.clone();
+                let progress_callback = progress.parallel_codex_import_callback(
+                    &source,
+                    index,
+                    Arc::clone(&source_states),
+                );
+                thread::spawn(move || -> Result<ImportSourceOutcome> {
+                    let mut store = Store::open(&db_path)?;
+                    let summary = import_one_source_without_search_refresh(
+                        &mut store,
+                        &source,
+                        progress_callback,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "import {} source {}",
+                            source.provider.as_str(),
+                            source.path.display()
+                        )
+                    })?;
+                    Ok(ImportSourceOutcome {
+                        index,
+                        source,
+                        stats,
+                        summary,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut outcomes = Vec::with_capacity(handles.len());
+        let mut first_error = None;
+        for handle in handles {
+            match handle.join() {
+                Ok(Ok(outcome)) => outcomes.push(outcome),
+                Ok(Err(err)) => {
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                }
+                Err(_) => {
+                    if first_error.is_none() {
+                        first_error = Some(anyhow!("provider import worker panicked"));
+                    }
+                }
+            }
         }
-        imported_sources.push(json!({
-            "provider": source.provider.as_str(),
-            "path": source.path,
-            "source_format": source.source_format,
-            "source_files": stats.files,
-            "source_bytes": stats.bytes,
-            "imported_sessions": summary.imported_sessions,
-            "imported_events": summary.imported_events,
-            "imported_edges": summary.imported_edges,
-            "skipped": summary.skipped,
-            "failed": summary.failed,
-        }));
+        if let Some(err) = first_error {
+            return Err(err);
+        }
+
+        outcomes.sort_by_key(|outcome| outcome.index);
+        for outcome in outcomes {
+            totals.add(&outcome.summary, &outcome.stats);
+            progress.parallel_source_done(
+                &outcome.source,
+                outcome.index,
+                &source_states,
+                outcome.stats,
+                &outcome.summary,
+            );
+            if !args.json {
+                println!(
+                    "source_imported: sessions={} events={} edges={} skipped={} failed={}",
+                    outcome.summary.imported_sessions,
+                    outcome.summary.imported_events,
+                    outcome.summary.imported_edges,
+                    outcome.summary.skipped,
+                    outcome.summary.failed
+                );
+            }
+            imported_sources.push(source_import_json(
+                &outcome.source,
+                &outcome.stats,
+                &outcome.summary,
+            ));
+        }
+
+        if final_refresh_required {
+            progress.message("finalizing", "refreshing search index");
+            let store = Store::open(&db_path)?;
+            store.refresh_search_index()?;
+        }
+    } else {
+        let mut completed_source_bytes = 0u64;
+        for (source, stats) in planned_sources {
+            if !args.json {
+                println!(
+                    "importing {} {} ({} files, {} bytes)",
+                    source.provider.as_str(),
+                    source.path.display(),
+                    stats.files,
+                    stats.bytes
+                );
+            }
+            let source_progress = progress.codex_import_callback(&source, completed_source_bytes);
+            let summary = import_one_source(&mut store, &source, source_progress)?;
+            totals.add(&summary, &stats);
+            completed_source_bytes = completed_source_bytes.saturating_add(stats.bytes);
+            progress.done(
+                "indexing",
+                format!("imported {}", source.path.display()),
+                completed_source_bytes,
+            );
+            if !args.json {
+                println!(
+                    "source_imported: sessions={} events={} edges={} skipped={} failed={}",
+                    summary.imported_sessions,
+                    summary.imported_events,
+                    summary.imported_edges,
+                    summary.skipped,
+                    summary.failed
+                );
+            }
+            imported_sources.push(source_import_json(&source, &stats, &summary));
+        }
     }
 
     if args.json {
@@ -803,6 +1006,37 @@ fn run_import(args: ImportArgs, data_root: PathBuf) -> Result<()> {
         totals.source_bytes,
     );
     Ok(())
+}
+
+#[derive(Debug)]
+struct ImportSourceOutcome {
+    index: usize,
+    source: SourceInfo,
+    stats: SourceStats,
+    summary: ProviderImportSummary,
+}
+
+fn should_parallelize_import(planned_sources: &[(SourceInfo, SourceStats)]) -> bool {
+    planned_sources.len() > 1
+}
+
+fn source_import_json(
+    source: &SourceInfo,
+    stats: &SourceStats,
+    summary: &ProviderImportSummary,
+) -> Value {
+    json!({
+        "provider": source.provider.as_str(),
+        "path": source.path,
+        "source_format": source.source_format,
+        "source_files": stats.files,
+        "source_bytes": stats.bytes,
+        "imported_sessions": summary.imported_sessions,
+        "imported_events": summary.imported_events,
+        "imported_edges": summary.imported_edges,
+        "skipped": summary.skipped,
+        "failed": summary.failed,
+    })
 }
 
 fn run_list(args: ListArgs, data_root: PathBuf) -> Result<()> {
@@ -1373,12 +1607,29 @@ fn import_one_source(
     source: &SourceInfo,
     progress: Option<CodexSessionImportProgressCallback>,
 ) -> Result<ProviderImportSummary> {
-    let record = import_record_for_source(source);
-    let record_id = record.id;
-    store.upsert_record(&record)?;
     let event_search_needs_backfill = store.event_search_projection_needs_backfill()?;
     let refresh_search_after_import =
         event_search_needs_backfill || !source_uses_incremental_event_search(source);
+    import_one_source_inner(store, source, progress, refresh_search_after_import)
+}
+
+fn import_one_source_without_search_refresh(
+    store: &mut Store,
+    source: &SourceInfo,
+    progress: Option<CodexSessionImportProgressCallback>,
+) -> Result<ProviderImportSummary> {
+    import_one_source_inner(store, source, progress, false)
+}
+
+fn import_one_source_inner(
+    store: &mut Store,
+    source: &SourceInfo,
+    progress: Option<CodexSessionImportProgressCallback>,
+    refresh_search_after_import: bool,
+) -> Result<ProviderImportSummary> {
+    let record = import_record_for_source(source);
+    let record_id = record.id;
+    store.upsert_record(&record)?;
     let tool_output_mode = codex_tool_output_mode()?;
     let include_notices = codex_include_notices();
     let summary = match source.provider {
