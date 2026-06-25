@@ -228,13 +228,18 @@ if ! grep -F -q '.\scripts\ci-windows.ps1 -Mode release-artifact-smoke' "${pipel
   exit 1
 fi
 
-if ! grep -F -q 'queue: "macos-arm64"' "${pipeline}"; then
-  printf 'macOS arm64 artifact smoke must route to queue=macos-arm64\n' >&2
+if ! grep -F -q 'queue: "ctx-mac-gui-shared-arm64"' "${pipeline}"; then
+  printf 'macOS arm64 artifact smoke must route to queue=ctx-mac-gui-shared-arm64\n' >&2
   exit 1
 fi
 
-if ! grep -F -q 'queue: "macos-x64"' "${pipeline}"; then
-  printf 'macOS x64 artifact smoke must route to queue=macos-x64\n' >&2
+if ! grep -F -q 'queue: "ctx-mac-gui-shared-x64"' "${pipeline}"; then
+  printf 'macOS x64 artifact smoke must route to queue=ctx-mac-gui-shared-x64\n' >&2
+  exit 1
+fi
+
+if ! grep -F -q 'os: "darwin"' "${pipeline}"; then
+  printf 'macOS artifact smoke must require darwin agents\n' >&2
   exit 1
 fi
 

@@ -103,9 +103,8 @@ steps:
       CTX_ARTIFACT_DIR=artifacts/buildkite/release-artifact-smoke/macos-arm64 \
       ./scripts/release-artifact-smoke.sh macos-arm64
     agents:
-      queue: "macos-arm64"
-      ctx-runner-class: "release-macos-arm64-stage"
-      os: "macos"
+      queue: "ctx-mac-gui-shared-arm64"
+      os: "darwin"
       arch: "arm64"
     timeout_in_minutes: 60
     artifact_paths:
@@ -130,9 +129,8 @@ steps:
       CTX_ARTIFACT_DIR=artifacts/buildkite/release-artifact-smoke/macos-x64 \
       ./scripts/release-artifact-smoke.sh macos-x64
     agents:
-      queue: "macos-x64"
-      ctx-runner-class: "release-macos-x64-stage"
-      os: "macos"
+      queue: "ctx-mac-gui-shared-x64"
+      os: "darwin"
       arch: "x86_64"
     timeout_in_minutes: 60
     artifact_paths:
@@ -147,7 +145,6 @@ steps:
       powershell -NoProfile -ExecutionPolicy Bypass -Command "$$env:CTX_RELEASE_PLATFORM='windows-x64'; $$env:CTX_RELEASE_TARGET_TRIPLE='x86_64-pc-windows-gnu'; $$env:CTX_EXPECT_HOST_TRIPLE='x86_64-pc-windows-gnu'; $$env:CTX_ARTIFACT_DIR='artifacts/buildkite/release-dry-run/windows-x64'; .\scripts\ci-windows.ps1 -Mode release-dry-run; $$env:CTX_RELEASE_DRY_RUN_DIR='artifacts/buildkite/release-dry-run/windows-x64'; $$env:CTX_ARTIFACT_DIR='artifacts/buildkite/release-artifact-smoke/windows-x64'; .\scripts\ci-windows.ps1 -Mode release-artifact-smoke"
     agents:
       queue: "windows-x64"
-      ctx-runner-class: "release-windows-x64-stage"
       os: "windows"
       arch: "x86_64"
     timeout_in_minutes: 60
