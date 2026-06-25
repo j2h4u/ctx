@@ -1279,7 +1279,7 @@ pub fn import_codex_history_jsonl(
             allow_partial_failures: options.allow_partial_failures,
             persist_cursors: true,
             wrap_transaction: true,
-            fast_event_inserts: false,
+            fast_event_inserts: true,
         },
     )
 }
@@ -5344,6 +5344,7 @@ mod tests {
         assert_eq!(first.imported_sessions, 2);
         assert_eq!(first.imported_events, 3);
         assert_eq!(first.imported_edges, 0);
+        assert!(!store.event_search_projection_needs_backfill().unwrap());
 
         let second = import_codex_history_jsonl(
             &fixture,

@@ -1703,12 +1703,6 @@ fn import_one_source_inner(
 
 fn source_uses_incremental_event_search(source: &SourceInfo) -> bool {
     matches!(source.provider, ProviderArg::Codex)
-        && (source.path.is_dir()
-            || !source
-                .path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name == "history.jsonl"))
 }
 
 fn codex_tool_output_mode() -> Result<CodexToolOutputMode> {
