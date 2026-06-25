@@ -262,7 +262,10 @@ fi
 if ! grep -F -q 'BUILDKITE_BUILD_CHECKOUT_PATH:' "${pipeline}" ||
   ! grep -F -q 'ctx-public-release-verification-cleanup-arm64' "${pipeline}" ||
   ! grep -F -q 'ctx-public-release-verification-cleanup-x64' "${pipeline}" ||
+  ! grep -F -q 'checkout_parent="$$(dirname "$${active_checkout_dir}")"' "${pipeline}" ||
+  ! grep -F -q 'checkout_dir="$${checkout_parent}/$${BUILDKITE_PIPELINE_SLUG:-ctx-public-release-verification}"' "${pipeline}" ||
   ! grep -F -q 'refusing to remove active cleanup checkout' "${pipeline}" ||
+  ! grep -F -q 'chflags -R nouchg,noschg "$${checkout_dir}"' "${pipeline}" ||
   ! grep -F -q 'chmod -R u+rwX "$${checkout_dir}"' "${pipeline}" ||
   ! grep -F -q 'rm -rf "$${checkout_dir}"' "${pipeline}" ||
   ! grep -F -q 'failed to remove stale checkout' "${pipeline}"; then
