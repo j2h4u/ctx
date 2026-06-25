@@ -116,18 +116,11 @@ const GEMINI_DEFAULTS: &[ProviderDefaultLocation] = &[ProviderDefaultLocation {
     source_kind: ProviderSourceKind::NativeHistory,
 }];
 
-const CURSOR_DEFAULTS: &[ProviderDefaultLocation] = &[
-    ProviderDefaultLocation {
-        path_components: &[".cursor"],
-        source_format: "cursor_unknown",
-        source_kind: ProviderSourceKind::DetectionOnly,
-    },
-    ProviderDefaultLocation {
-        path_components: &[".config", "Cursor"],
-        source_format: "cursor_config",
-        source_kind: ProviderSourceKind::DetectionOnly,
-    },
-];
+const CURSOR_DEFAULTS: &[ProviderDefaultLocation] = &[ProviderDefaultLocation {
+    path_components: &[".cursor", "projects"],
+    source_format: "cursor_agent_transcript_jsonl_tree",
+    source_kind: ProviderSourceKind::NativeHistory,
+}];
 
 const COPILOT_DEFAULTS: &[ProviderDefaultLocation] = &[ProviderDefaultLocation {
     path_components: &[".copilot", "session-state"],
@@ -214,13 +207,11 @@ const PROVIDER_SPECS: &[ProviderSourceSpec] = &[
         provider: CaptureProvider::Cursor,
         display_name: "Cursor",
         default_locations: CURSOR_DEFAULTS,
-        import_support: ProviderImportSupport::Unsupported,
+        import_support: ProviderImportSupport::Native,
         catalog_support: ProviderCatalogSupport::None,
-        raw_retention: ProviderRawRetention::None,
-        redaction_boundary: ProviderRedactionBoundary::ManualReview,
-        unsupported_reason: Some(
-            "native Cursor import is blocked until persisted local DB/files and a read-only parser are proven",
-        ),
+        raw_retention: ProviderRawRetention::PathReference,
+        redaction_boundary: ProviderRedactionBoundary::BeforeExport,
+        unsupported_reason: None,
     },
     ProviderSourceSpec {
         provider: CaptureProvider::CopilotCli,
@@ -306,6 +297,12 @@ pub fn provider_source_for_path(provider: CaptureProvider, path: PathBuf) -> Pro
         CaptureProvider::Claude => "claude_projects_jsonl_tree",
         CaptureProvider::OpenCode => "opencode_sqlite",
         CaptureProvider::Gemini => "gemini_cli_chat_recording_jsonl",
+        CaptureProvider::Cursor
+            if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") =>
+        {
+            "cursor_agent_transcript_jsonl"
+        }
+        CaptureProvider::Cursor => "cursor_agent_transcript_jsonl_tree",
         CaptureProvider::CopilotCli => "copilot_cli_session_events_jsonl",
         CaptureProvider::FactoryAiDroid => "factory_ai_droid_sessions_jsonl",
         _ => "normalized_provider_jsonl",

@@ -480,6 +480,27 @@ impl Default for CopilotCliImportOptions {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct CursorNativeImportOptions {
+    pub machine_id: String,
+    pub source_path: Option<PathBuf>,
+    pub imported_at: DateTime<Utc>,
+    pub work_record_id: Option<Uuid>,
+    pub allow_partial_failures: bool,
+}
+
+impl Default for CursorNativeImportOptions {
+    fn default() -> Self {
+        Self {
+            machine_id: default_machine_id(),
+            source_path: None,
+            imported_at: Utc::now(),
+            work_record_id: None,
+            allow_partial_failures: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderFixtureLine {
     pub provider: CaptureProvider,
@@ -653,6 +674,9 @@ pub struct OpenCodeSqliteAdapter;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GeminiCliJsonlAdapter;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CursorAgentTranscriptJsonlAdapter;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FactoryAiDroidJsonlAdapter;
@@ -1258,6 +1282,29 @@ impl ProviderCaptureAdapter for GeminiCliJsonlAdapter {
             context,
             CaptureProvider::Gemini,
             GEMINI_CLI_SOURCE_FORMAT,
+        )
+    }
+}
+
+impl ProviderCaptureAdapter for CursorAgentTranscriptJsonlAdapter {
+    fn provider(&self) -> CaptureProvider {
+        CaptureProvider::Cursor
+    }
+
+    fn source_format(&self) -> &str {
+        CURSOR_AGENT_TRANSCRIPT_SOURCE_FORMAT
+    }
+
+    fn normalize_path(
+        &self,
+        path: &Path,
+        context: &ProviderAdapterContext,
+    ) -> Result<ProviderNormalizationResult> {
+        normalize_jsonl_tree(
+            path,
+            context,
+            CaptureProvider::Cursor,
+            CURSOR_AGENT_TRANSCRIPT_SOURCE_FORMAT,
         )
     }
 }
@@ -2498,6 +2545,25 @@ pub fn import_gemini_cli_history(
     )
 }
 
+pub fn import_cursor_native_history(
+    path: impl AsRef<Path>,
+    store: &mut Store,
+    options: CursorNativeImportOptions,
+) -> Result<ProviderImportSummary> {
+    import_native_jsonl_tree(
+        store,
+        NativeJsonlTreeImport {
+            path: path.as_ref(),
+            machine_id: options.machine_id,
+            source_path: options.source_path,
+            imported_at: options.imported_at,
+            work_record_id: options.work_record_id,
+            allow_partial_failures: options.allow_partial_failures,
+        },
+        CursorAgentTranscriptJsonlAdapter,
+    )
+}
+
 pub fn import_factory_ai_droid_sessions(
     path: impl AsRef<Path>,
     store: &mut Store,
@@ -2593,6 +2659,7 @@ const CODEX_SESSION_SOURCE_FORMAT: &str = "codex_session_jsonl";
 const CLAUDE_PROJECTS_SOURCE_FORMAT: &str = "claude_projects_jsonl_tree";
 const OPENCODE_SQLITE_SOURCE_FORMAT: &str = "opencode_sqlite";
 const GEMINI_CLI_SOURCE_FORMAT: &str = "gemini_cli_chat_recording_jsonl";
+const CURSOR_AGENT_TRANSCRIPT_SOURCE_FORMAT: &str = "cursor_agent_transcript_jsonl";
 const FACTORY_DROID_SOURCE_FORMAT: &str = "factory_ai_droid_sessions_jsonl";
 const COPILOT_CLI_SOURCE_FORMAT: &str = "copilot_cli_session_events_jsonl";
 const CODEX_MAX_TEXT_CHARS: usize = 16_000;
@@ -4166,6 +4233,9 @@ fn normalize_jsonl_tree(
 fn native_jsonl_missing_reason(provider: CaptureProvider) -> &'static str {
     match provider {
         CaptureProvider::Gemini => "no Gemini CLI chat JSONL transcripts found under chats",
+        CaptureProvider::Cursor => {
+            "no Cursor agent transcript JSONL files found under projects/*/agent-transcripts"
+        }
         CaptureProvider::CopilotCli => "no Copilot CLI session events.jsonl transcripts found",
         CaptureProvider::FactoryAiDroid => "no Factory AI Droid session JSONL transcripts found",
         _ => "no native provider JSONL transcripts found",
@@ -4177,6 +4247,9 @@ fn provider_jsonl_path_is_native(provider: CaptureProvider, path: &Path) -> bool
         CaptureProvider::Gemini => path
             .components()
             .any(|component| component.as_os_str() == "chats"),
+        CaptureProvider::Cursor => path
+            .components()
+            .any(|component| component.as_os_str() == "agent-transcripts"),
         CaptureProvider::CopilotCli => {
             path.file_name().and_then(|name| name.to_str()) == Some("events.jsonl")
         }
@@ -4311,6 +4384,10 @@ fn native_jsonl_header_session_id(provider: CaptureProvider, value: &Value) -> O
             == Some("session.start"))
         .then(|| value.pointer("/data/sessionId").and_then(Value::as_str))
         .flatten(),
+        CaptureProvider::Cursor => (value.get("role").is_some()
+            || value.get("event").is_some()
+            || value.get("message").is_some())
+        .then_some("cursor-path-session"),
         _ => None,
     }
     .filter(|id| !id.trim().is_empty())
@@ -4389,6 +4466,15 @@ fn native_jsonl_path_session(
                     .map(str::to_owned),
                 agent_type,
             )
+        }
+        CaptureProvider::Cursor => {
+            let session = path
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                .unwrap_or(native_session_id)
+                .to_owned();
+            (session, None, None, AgentType::Primary)
         }
         _ => (native_session_id.to_owned(), None, None, AgentType::Primary),
     }
@@ -4538,6 +4624,24 @@ fn native_jsonl_event_type(provider: CaptureProvider, value: &Value) -> EventTyp
             Some("abort") => EventType::Notice,
             _ => EventType::Notice,
         },
+        CaptureProvider::Cursor => {
+            if native_jsonl_content_has(value, "tool_result") {
+                EventType::ToolOutput
+            } else if native_jsonl_content_has(value, "tool_use") {
+                EventType::ToolCall
+            } else {
+                match value
+                    .get("event")
+                    .or_else(|| value.get("type"))
+                    .or_else(|| value.get("role"))
+                    .and_then(Value::as_str)
+                {
+                    Some("turn_ended" | "summary") => EventType::Summary,
+                    Some("user" | "assistant") => EventType::Message,
+                    _ => EventType::Notice,
+                }
+            }
+        }
         _ => EventType::Notice,
     }
 }
@@ -4556,6 +4660,12 @@ fn native_jsonl_role(provider: CaptureProvider, value: &Value) -> EventRole {
             Some("tool.execution_start" | "tool.execution_complete") => EventRole::Tool,
             _ => EventRole::System,
         },
+        CaptureProvider::Cursor => provider_role(
+            value
+                .get("role")
+                .or_else(|| value.pointer("/message/role"))
+                .and_then(Value::as_str),
+        ),
         _ => EventRole::Unknown,
     }
 }
@@ -4613,6 +4723,12 @@ fn native_jsonl_event_text(
                     .map(|tool| format!("tool {tool}"))
             })
             .unwrap_or_else(|| format!("Copilot CLI event: {entry_type}")),
+        CaptureProvider::Cursor => value
+            .pointer("/message/content")
+            .or_else(|| value.get("content"))
+            .and_then(provider_value_text)
+            .or_else(|| value.get("text").and_then(Value::as_str).map(str::to_owned))
+            .unwrap_or_else(|| format!("Cursor event: {entry_type}")),
         _ if event_type == EventType::Notice => format!("Provider event: {entry_type}"),
         _ => serde_json::to_string(value).unwrap_or_else(|_| entry_type.to_owned()),
     }
@@ -4641,6 +4757,19 @@ fn gemini_tool_calls_have_result(value: &Value) -> bool {
 fn droid_content_has(value: &Value, expected: &str) -> bool {
     value
         .get("content")
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .any(|block| block.get("type").and_then(Value::as_str) == Some(expected))
+        })
+        .unwrap_or(false)
+}
+
+fn native_jsonl_content_has(value: &Value, expected: &str) -> bool {
+    value
+        .pointer("/message/content")
+        .or_else(|| value.get("content"))
         .and_then(Value::as_array)
         .map(|blocks| {
             blocks

@@ -354,19 +354,20 @@
       "id": "cursor",
       "display_name": "Cursor",
       "priority": "p1",
-      "status": "detected_unsupported",
+      "status": "local_import_when_supported",
       "capture_provider": "cursor",
       "implemented_paths": [
         {
-          "kind": "detection",
-          "source_format": "native_local_history_unimplemented",
-          "fidelity": "summary_only",
+          "kind": "native_import",
+          "source_format": "cursor_agent_transcript_jsonl",
+          "fidelity": "imported",
           "proof": [
-            "ctx sources"
+            "ctx import --provider cursor --path ~/.cursor/projects",
+            "cargo test -p work-record-capture --test cursor_native"
           ],
           "notes": [
-            "Cursor native import is blocked until persisted local DB/files and a read-only parser are proven.",
-            "Detection may report ~/.cursor, ~/.config/Cursor when present, but ctx does not import it."
+            "Reads Cursor CLI agent transcript JSONL files under ~/.cursor/projects/*/agent-transcripts/*/*.jsonl.",
+            "Cursor auth stores and ai-tracking code metadata are not imported."
           ]
         },
         {
@@ -381,14 +382,14 @@
           ]
         }
       ],
-      "imports_existing_history": false,
+      "imports_existing_history": true,
       "captures_new_runs_passively": false,
       "child_sessions_supported": false,
       "fidelity": {
-        "user_prompts": false,
-        "assistant_messages": false,
-        "tool_calls": false,
-        "tool_output": false,
+        "user_prompts": true,
+        "assistant_messages": true,
+        "tool_calls": true,
+        "tool_output": true,
         "command_output": false,
         "files_touched": false,
         "artifacts": false,
@@ -397,14 +398,14 @@
         "token_usage": false,
         "parent_child_session_edges": false
       },
-      "blockers": [
-        "Cursor native import is blocked until persisted local DB/files and a read-only parser are proven."
-      ],
+      "blockers": [],
       "public_docs": "docs/provider-support.md",
       "fixture_paths": [
-        "tests/fixtures/provider/cursor.jsonl"
+        "tests/fixtures/provider/cursor.jsonl",
+        "tests/fixtures/provider-history/cursor/2026.06.24/projects"
       ],
       "tests": [
+        "crates/work-record-capture/tests/cursor_native.rs",
         "crates/ctx-cli/tests/cli.rs"
       ]
     },

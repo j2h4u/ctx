@@ -1350,6 +1350,12 @@ fn native_provider_cli_flow_imports_new_supported_provider_paths() {
             write_native_gemini_fixture,
         ),
         (
+            "cursor",
+            "cursor",
+            "cursor_agent_transcript_jsonl_tree",
+            write_native_cursor_fixture,
+        ),
+        (
             "copilot-cli",
             "copilot_cli",
             "copilot_cli_session_events_jsonl",
@@ -1492,6 +1498,35 @@ fn write_native_gemini_fixture(temp: &TempDir, query: &str) -> String {
         .to_owned()
 }
 
+fn write_native_cursor_fixture(temp: &TempDir, query: &str) -> String {
+    let root = temp
+        .path()
+        .join("native-cursor/projects/sanitized-workspace/agent-transcripts/cursor-cli-native");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("cursor-cli-native.jsonl"),
+        format!(
+            "{}\n{}\n",
+            json!({
+                "timestamp": "2026-06-24T12:00:00Z",
+                "role": "user",
+                "message": {"role": "user", "content": [{"type": "text", "text": query}]}
+            }),
+            json!({
+                "timestamp": "2026-06-24T12:00:01Z",
+                "role": "assistant",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": "native import ok"}]}
+            })
+        ),
+    )
+    .unwrap();
+    temp.path()
+        .join("native-cursor/projects")
+        .to_str()
+        .unwrap()
+        .to_owned()
+}
+
 fn write_native_copilot_fixture(temp: &TempDir, query: &str) -> String {
     let root = temp
         .path()
@@ -1566,7 +1601,7 @@ fn normalized_provider_cli_requires_explicit_path_for_non_discovered_providers()
         ("opencode", "no native opencode history found"),
         ("antigravity", "native Antigravity import is blocked"),
         ("gemini", "no native gemini history found"),
-        ("cursor", "native Cursor import is blocked"),
+        ("cursor", "no native cursor history found"),
         ("copilot-cli", "no native copilot_cli history found"),
         (
             "factory-ai-droid",
