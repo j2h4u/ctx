@@ -51,10 +51,92 @@ if command -v ruby >/dev/null 2>&1; then
       abort "search-mvp #{binary} preflight must run before scripts/check.sh --mode=ci" unless ensure_idx < check_idx
       abort "search-mvp must explain #{binary} runner requirement" unless command.include?(spec.fetch("message"))
     end
+
+    aggregate_key = "aggregate-release-evidence"
+    aggregate = data["steps"].find { |step| step["key"] == aggregate_key }
+    abort "missing aggregate-release-evidence step" unless aggregate
+    aggregate_idx = data["steps"].index(aggregate)
+    aggregate_command = aggregate["command"].to_s
+    aggregate_artifacts = Array(aggregate["artifact_paths"])
+    aggregate_depends = Array(aggregate["depends_on"])
+
+    platform_steps = {
+      "linux-release-artifact-smoke" => "linux-x64",
+      "macos-arm64-release-artifact-smoke" => "macos-arm64",
+      "macos-x64-release-artifact-smoke" => "macos-x64",
+      "windows-x64-release-artifact-smoke" => "windows-x64",
+      "freebsd-native-release-proof" => "freebsd-x64",
+    }
+    platform_steps.each do |step_key, platform|
+      abort "#{aggregate_key} must depend on #{step_key}" unless aggregate_depends.include?(step_key)
+      platform_step = data["steps"].find { |step| step["key"] == step_key }
+      abort "#{aggregate_key} must be after #{step_key}" unless platform_step && aggregate_idx > data["steps"].index(platform_step)
+      abort "#{aggregate_key} must download #{platform} dry-run top-level artifacts from #{step_key}" unless aggregate_command.include?("artifacts/buildkite/release-dry-run/$${platform}/*") && aggregate_command.include?("download_platform_artifacts #{step_key} #{platform}")
+      abort "#{aggregate_key} must download #{platform} dry-run recursive artifacts from #{step_key}" unless aggregate_command.include?("artifacts/buildkite/release-dry-run/$${platform}/**/*") && aggregate_command.include?("download_platform_artifacts #{step_key} #{platform}")
+      abort "#{aggregate_key} must download #{platform} artifact-smoke top-level artifacts from #{step_key}" unless aggregate_command.include?("artifacts/buildkite/release-artifact-smoke/$${platform}/*") && aggregate_command.include?("download_platform_artifacts #{step_key} #{platform}")
+      abort "#{aggregate_key} must download #{platform} artifact-smoke recursive artifacts from #{step_key}" unless aggregate_command.include?("artifacts/buildkite/release-artifact-smoke/$${platform}/**/*") && aggregate_command.include?("download_platform_artifacts #{step_key} #{platform}")
+    end
+    {
+      "linux-x64" => "x86_64-unknown-linux-gnu",
+      "macos-arm64" => "aarch64-apple-darwin",
+      "macos-x64" => "x86_64-apple-darwin",
+      "windows-x64" => "x86_64-pc-windows-gnu.exe",
+      "freebsd-x64" => "x86_64-unknown-freebsd",
+    }.each do |platform, artifact_suffix|
+      [
+        "artifacts/buildkite/release-dry-run/#{platform}/manifest.json",
+        "artifacts/buildkite/release-dry-run/#{platform}/ctx-release-metadata.env",
+        "artifacts/buildkite/release-dry-run/#{platform}/checksums.sha256",
+        "artifacts/buildkite/release-dry-run/#{platform}/ctx-0.1.0-#{artifact_suffix}",
+        "artifacts/buildkite/release-artifact-smoke/#{platform}/artifact-smoke.json",
+        "artifacts/buildkite/release-artifact-smoke/#{platform}/commands/version.stdout",
+      ].each do |path|
+        abort "#{aggregate_key} must fail closed when #{path} is missing after artifact fetch" unless aggregate_command.include?("require_fetched_artifact #{path}")
+      end
+    end
+
+    ordered_release_evidence_commands = [
+      "CTX_ARTIFACT_DIR=artifacts/buildkite/release-candidate",
+      "./scripts/release-candidate-metadata.sh artifacts/buildkite/release-dry-run",
+      "CTX_ARTIFACT_DIR=artifacts/buildkite/r2-staging-smoke",
+      "./scripts/release-r2-staging-smoke.sh artifacts/buildkite/release-candidate",
+      "CTX_ARTIFACT_DIR=artifacts/buildkite/supply-chain",
+      "./scripts/release-supply-chain-proof.sh",
+      "CTX_RELEASE_R2_UPLOAD_READBACK=0",
+      "CTX_RELEASE_R2_MANAGER_APPROVED=0",
+      "CTX_ARTIFACT_DIR=artifacts/buildkite/r2-staging-readback",
+      "./scripts/release-r2-staging-readback-proof.sh artifacts/buildkite/release-candidate",
+      "./scripts/release-finished-product-evidence.sh artifacts/buildkite",
+      "CTX_COMPLETION_CERTIFICATE_ALLOW_SELF_TEST_FIXTURES=0",
+      "CTX_ARTIFACT_DIR=artifacts/buildkite/completion-certificate",
+      "./scripts/release-completion-certificate.sh --mode=release-evidence",
+    ]
+    last_idx = -1
+    ordered_release_evidence_commands.each do |snippet|
+      idx = aggregate_command.index(snippet)
+      abort "#{aggregate_key} must run #{snippet}" unless idx
+      abort "#{aggregate_key} must run release evidence commands in order" unless idx > last_idx
+      last_idx = idx
+    end
+    abort "#{aggregate_key} must explain real R2 upload/readback credential requirements" unless aggregate_command.include?("CTX_RELEASE_R2_UPLOAD_READBACK=1") && aggregate_command.include?("CTX_RELEASE_R2_MANAGER_APPROVED=1") && aggregate_command.include?("authenticated wrangler")
+    abort "#{aggregate_key} must write pipeline contract evidence" unless aggregate_command.include?("artifacts/buildkite/pipeline-contract/pipeline-contract.txt")
+
+    [
+      "artifacts/buildkite/release-candidate/**/*",
+      "artifacts/buildkite/r2-staging-smoke/**/*",
+      "artifacts/buildkite/supply-chain/**/*",
+      "artifacts/buildkite/r2-staging-readback/**/*",
+      "artifacts/buildkite/finished-product/**/*",
+      "artifacts/buildkite/provider-live-e2e-lanes/**/*",
+      "artifacts/buildkite/completion-certificate/**/*",
+      "artifacts/buildkite/pipeline-contract/*",
+    ].each do |artifact_path|
+      abort "#{aggregate_key} must upload #{artifact_path}" unless aggregate_artifacts.include?(artifact_path)
+    end
   ' "${pipeline}"
 fi
 
-for escaped_shell_var in '$$1' '$$2' '$$3' '$$@' '$${apt_get_updated}' '$${tool_binary}' '$${apt_package}' '$${required_message}'; do
+for escaped_shell_var in '$$1' '$$2' '$$3' '$$@' '$${apt_get_updated}' '$${tool_binary}' '$${apt_package}' '$${required_message}' '$${step_key}' '$${platform}' '$${required_path}' '$${BUILDKITE_BUILD_URL:-unknown-build}'; do
   if ! grep -F -q "${escaped_shell_var}" "${pipeline}"; then
     printf 'pipeline must escape %s for Buildkite interpolation\n' "${escaped_shell_var#\$}" >&2
     exit 1
@@ -66,7 +148,7 @@ if awk '
     for (idx = 1; idx <= length($0); idx++) {
       prev = idx == 1 ? "" : substr($0, idx - 1, 1)
       rest = substr($0, idx)
-      if (prev != "$" && prev != "\\" && rest ~ /^\$([123@]|\{(apt_get_updated|tool_binary|apt_package|required_message)\})/) {
+      if (prev != "$" && prev != "\\" && rest ~ /^\$([123@]|\{(apt_get_updated|tool_binary|apt_package|required_message|step_key|platform|required_path|BUILDKITE_BUILD_URL:-unknown-build)\})/) {
         print
         exit 1
       }
@@ -188,6 +270,123 @@ fi
 
 if ! grep -F -q './scripts/release-dry-run.sh' "${pipeline}"; then
   printf 'FreeBSD release proof must run scripts/release-dry-run.sh\n' >&2
+  exit 1
+fi
+
+if ! grep -F -q 'key: "aggregate-release-evidence"' "${pipeline}"; then
+  printf 'pipeline must include the aggregate release evidence step\n' >&2
+  exit 1
+fi
+
+for key in \
+  'linux-release-artifact-smoke' \
+  'macos-arm64-release-artifact-smoke' \
+  'macos-x64-release-artifact-smoke' \
+  'windows-x64-release-artifact-smoke' \
+  'freebsd-native-release-proof'; do
+  if ! grep -F -q "      - \"${key}\"" "${pipeline}"; then
+    printf 'aggregate release evidence must depend on %s\n' "${key}" >&2
+    exit 1
+  fi
+done
+
+if ! grep -F -q 'artifacts/buildkite/release-dry-run/$${platform}/*' "${pipeline}" ||
+  ! grep -F -q 'artifacts/buildkite/release-dry-run/$${platform}/**/*' "${pipeline}" ||
+  ! grep -F -q 'artifacts/buildkite/release-artifact-smoke/$${platform}/*' "${pipeline}" ||
+  ! grep -F -q 'artifacts/buildkite/release-artifact-smoke/$${platform}/**/*' "${pipeline}"; then
+  printf 'aggregate release evidence must download release dry-run and artifact-smoke evidence\n' >&2
+  exit 1
+fi
+
+for step_platform in \
+  'linux-release-artifact-smoke linux-x64' \
+  'macos-arm64-release-artifact-smoke macos-arm64' \
+  'macos-x64-release-artifact-smoke macos-x64' \
+  'windows-x64-release-artifact-smoke windows-x64' \
+  'freebsd-native-release-proof freebsd-x64'; do
+  if ! grep -F -q "download_platform_artifacts ${step_platform}" "${pipeline}"; then
+    printf 'aggregate release evidence must download platform artifacts with %s\n' "${step_platform}" >&2
+    exit 1
+  fi
+done
+
+for required_artifact in \
+  'artifacts/buildkite/release-dry-run/linux-x64/manifest.json' \
+  'artifacts/buildkite/release-dry-run/linux-x64/ctx-release-metadata.env' \
+  'artifacts/buildkite/release-dry-run/linux-x64/checksums.sha256' \
+  'artifacts/buildkite/release-dry-run/linux-x64/ctx-0.1.0-x86_64-unknown-linux-gnu' \
+  'artifacts/buildkite/release-artifact-smoke/linux-x64/artifact-smoke.json' \
+  'artifacts/buildkite/release-artifact-smoke/linux-x64/commands/version.stdout' \
+  'artifacts/buildkite/release-dry-run/macos-arm64/manifest.json' \
+  'artifacts/buildkite/release-dry-run/macos-arm64/ctx-release-metadata.env' \
+  'artifacts/buildkite/release-dry-run/macos-arm64/checksums.sha256' \
+  'artifacts/buildkite/release-dry-run/macos-arm64/ctx-0.1.0-aarch64-apple-darwin' \
+  'artifacts/buildkite/release-artifact-smoke/macos-arm64/artifact-smoke.json' \
+  'artifacts/buildkite/release-artifact-smoke/macos-arm64/commands/version.stdout' \
+  'artifacts/buildkite/release-dry-run/macos-x64/manifest.json' \
+  'artifacts/buildkite/release-dry-run/macos-x64/ctx-release-metadata.env' \
+  'artifacts/buildkite/release-dry-run/macos-x64/checksums.sha256' \
+  'artifacts/buildkite/release-dry-run/macos-x64/ctx-0.1.0-x86_64-apple-darwin' \
+  'artifacts/buildkite/release-artifact-smoke/macos-x64/artifact-smoke.json' \
+  'artifacts/buildkite/release-artifact-smoke/macos-x64/commands/version.stdout' \
+  'artifacts/buildkite/release-dry-run/windows-x64/manifest.json' \
+  'artifacts/buildkite/release-dry-run/windows-x64/ctx-release-metadata.env' \
+  'artifacts/buildkite/release-dry-run/windows-x64/checksums.sha256' \
+  'artifacts/buildkite/release-dry-run/windows-x64/ctx-0.1.0-x86_64-pc-windows-gnu.exe' \
+  'artifacts/buildkite/release-artifact-smoke/windows-x64/artifact-smoke.json' \
+  'artifacts/buildkite/release-artifact-smoke/windows-x64/commands/version.stdout' \
+  'artifacts/buildkite/release-dry-run/freebsd-x64/manifest.json' \
+  'artifacts/buildkite/release-dry-run/freebsd-x64/ctx-release-metadata.env' \
+  'artifacts/buildkite/release-dry-run/freebsd-x64/checksums.sha256' \
+  'artifacts/buildkite/release-dry-run/freebsd-x64/ctx-0.1.0-x86_64-unknown-freebsd' \
+  'artifacts/buildkite/release-artifact-smoke/freebsd-x64/artifact-smoke.json' \
+  'artifacts/buildkite/release-artifact-smoke/freebsd-x64/commands/version.stdout'; do
+  if ! grep -F -q "require_fetched_artifact ${required_artifact}" "${pipeline}"; then
+    printf 'aggregate release evidence must fail closed when %s is missing after artifact fetch\n' "${required_artifact}" >&2
+    exit 1
+  fi
+done
+
+for required in \
+  'CTX_ARTIFACT_DIR=artifacts/buildkite/release-candidate' \
+  './scripts/release-candidate-metadata.sh artifacts/buildkite/release-dry-run' \
+  'CTX_ARTIFACT_DIR=artifacts/buildkite/r2-staging-smoke' \
+  './scripts/release-r2-staging-smoke.sh artifacts/buildkite/release-candidate' \
+  'CTX_ARTIFACT_DIR=artifacts/buildkite/supply-chain' \
+  './scripts/release-supply-chain-proof.sh' \
+  'CTX_RELEASE_R2_UPLOAD_READBACK=0' \
+  'CTX_RELEASE_R2_MANAGER_APPROVED=0' \
+  'CTX_ARTIFACT_DIR=artifacts/buildkite/r2-staging-readback' \
+  './scripts/release-r2-staging-readback-proof.sh artifacts/buildkite/release-candidate' \
+  './scripts/release-finished-product-evidence.sh artifacts/buildkite' \
+  'CTX_COMPLETION_CERTIFICATE_ALLOW_SELF_TEST_FIXTURES=0' \
+  'CTX_ARTIFACT_DIR=artifacts/buildkite/completion-certificate' \
+  './scripts/release-completion-certificate.sh --mode=release-evidence'; do
+  if ! grep -F -q "${required}" "${pipeline}"; then
+    printf 'aggregate release evidence must run %s\n' "${required}" >&2
+    exit 1
+  fi
+done
+
+for artifact_path in \
+  'artifacts/buildkite/release-candidate/**/*' \
+  'artifacts/buildkite/r2-staging-smoke/**/*' \
+  'artifacts/buildkite/supply-chain/**/*' \
+  'artifacts/buildkite/r2-staging-readback/**/*' \
+  'artifacts/buildkite/finished-product/**/*' \
+  'artifacts/buildkite/provider-live-e2e-lanes/**/*' \
+  'artifacts/buildkite/completion-certificate/**/*' \
+  'artifacts/buildkite/pipeline-contract/*'; do
+  if ! grep -F -q "${artifact_path}" "${pipeline}"; then
+    printf 'aggregate release evidence must upload %s\n' "${artifact_path}" >&2
+    exit 1
+  fi
+done
+
+if ! grep -F -q 'CTX_RELEASE_R2_UPLOAD_READBACK=1' "${pipeline}" ||
+  ! grep -F -q 'CTX_RELEASE_R2_MANAGER_APPROVED=1' "${pipeline}" ||
+  ! grep -F -q 'authenticated wrangler' "${pipeline}"; then
+  printf 'aggregate release evidence must state real R2 upload/readback credential requirements\n' >&2
   exit 1
 fi
 

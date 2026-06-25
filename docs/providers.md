@@ -44,19 +44,23 @@ Only Codex and Pi have live E2E lanes because those are the providers with
 native local import paths in the public CLI. A live run requires
 `CTX_LIVE_PROVIDER_E2E=1`, `CTX_LIVE_PROVIDER_ACCEPT_LOCAL_HISTORY=1`, the
 provider selector (`CTX_LIVE_PROVIDER_CODEX=1` or `CTX_LIVE_PROVIDER_PI=1`),
-and an explicit local history path:
+an explicit local history path, and a deterministic retrieval query through
+`CTX_LIVE_PROVIDER_CODEX_QUERY`, `CTX_LIVE_PROVIDER_PI_QUERY`, or the shared
+`CTX_LIVE_PROVIDER_QUERY` fallback:
 
 ```bash
 CTX_LIVE_PROVIDER_E2E=1 \
 CTX_LIVE_PROVIDER_ACCEPT_LOCAL_HISTORY=1 \
 CTX_LIVE_PROVIDER_CODEX=1 \
 CTX_LIVE_PROVIDER_CODEX_SESSIONS_PATH=/path/to/.codex/sessions \
+CTX_LIVE_PROVIDER_CODEX_QUERY='private local query' \
 scripts/release-provider-live-e2e-lanes.sh run codex
 
 CTX_LIVE_PROVIDER_E2E=1 \
 CTX_LIVE_PROVIDER_ACCEPT_LOCAL_HISTORY=1 \
 CTX_LIVE_PROVIDER_PI=1 \
 CTX_LIVE_PROVIDER_PI_SESSIONS_PATH=/path/to/.pi/sessions.jsonl \
+CTX_LIVE_PROVIDER_PI_QUERY='private local query' \
 scripts/release-provider-live-e2e-lanes.sh run pi
 ```
 

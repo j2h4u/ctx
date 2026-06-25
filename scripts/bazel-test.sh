@@ -1344,7 +1344,8 @@ run_release_artifact_smoke_contract() {
 }
 
 run_release_supply_chain_r2_contract() {
-  local supply_dir r2_dir candidate_dir upload_log upload_status contract_dir evidence_root certificate_dir log status
+  local supply_dir r2_dir candidate_dir upload_log upload_status fake_wrangler_dir fake_wrangler_log
+  local contract_dir evidence_root certificate_dir log status
 
   supply_dir="${CTX_ARTIFACT_DIR}/supply-chain"
   rm -rf "${supply_dir}"
@@ -1390,6 +1391,35 @@ run_release_supply_chain_r2_contract() {
   grep -F 'CTX_RELEASE_R2_UPLOAD_READBACK=1 requires CTX_RELEASE_R2_MANAGER_APPROVED=1' "${upload_log}" >/dev/null \
     || fail 'R2 upload/readback mode did not explain missing manager approval'
 
+  fake_wrangler_dir="${CTX_ARTIFACT_DIR}/fake-wrangler-bin"
+  fake_wrangler_log="${CTX_ARTIFACT_DIR}/fake-wrangler.log"
+  r2_dir="${CTX_ARTIFACT_DIR}/r2-staging-readback-plan-only"
+  mkdir -p "${fake_wrangler_dir}" "${r2_dir}"
+  cat > "${fake_wrangler_dir}/wrangler" <<'EOF'
+#!/usr/bin/env bash
+printf 'wrangler invoked: %s\n' "$*" >> "${CTX_FAKE_WRANGLER_LOG}"
+exit 99
+EOF
+  chmod +x "${fake_wrangler_dir}/wrangler"
+  (
+    export PATH="${fake_wrangler_dir}:${PATH}"
+    export CTX_FAKE_WRANGLER_LOG="${fake_wrangler_log}"
+    export CTX_RELEASE_R2_UPLOAD_READBACK=1
+    export CTX_RELEASE_R2_MANAGER_APPROVED=1
+    CTX_RELEASE_R2_UPLOAD_READBACK=0 \
+    CTX_RELEASE_R2_MANAGER_APPROVED=0 \
+    CTX_ARTIFACT_DIR="${r2_dir}" \
+      run_timed "r2-staging-readback-plan-only-env-guard" \
+        bash scripts/release-r2-staging-readback-proof.sh "${candidate_dir}"
+  )
+  if [[ -s "${fake_wrangler_log}" ]]; then
+    fail "plan-only R2 readback path invoked wrangler despite forced-off upload env: $(cat "${fake_wrangler_log}")"
+  fi
+  grep -F '"status": "blocked_manual_required"' "${r2_dir}/r2-staging-readback.json" >/dev/null \
+    || fail 'plan-only R2 readback guard did not remain blocked without upload/readback'
+  grep -F '"upload_performed": false' "${r2_dir}/r2-staging-readback.json" >/dev/null \
+    || fail 'plan-only R2 readback guard claimed an upload'
+
   contract_dir="$(mktemp -d "${TMPDIR}/supply-chain-r2-certificate.XXXXXX")"
   evidence_root="${contract_dir}/evidence"
   certificate_dir="${contract_dir}/certificate-output"
@@ -1416,8 +1446,78 @@ run_release_supply_chain_r2_contract() {
     || fail 'release artifact evidence did not require R2 staging readback evidence'
 }
 
+run_release_finished_product_evidence_contract() {
+  local contract_root evidence_root release_root candidate_dir artifact_root
+  local product_json provider_json rich_json rich_context package_json security_json security_md jj_json jj_txt installer_json installer_txt lanes_json
+
+  contract_root="${CTX_ARTIFACT_DIR}/release-finished-product-evidence-contract"
+  evidence_root="${contract_root}/evidence"
+  artifact_root="${evidence_root}/artifacts/buildkite"
+  release_root="${artifact_root}/release-dry-run"
+  candidate_dir="${artifact_root}/release-candidate"
+  rm -rf "${contract_root}"
+  mkdir -p "${release_root}" "${candidate_dir}"
+
+  write_release_evidence_platform "${release_root}" "linux-x64" "linux_x64" "x86_64-unknown-linux-gnu"
+  write_release_evidence_platform "${release_root}" "macos-arm64" "macos_arm64" "aarch64-apple-darwin"
+  write_release_evidence_platform "${release_root}" "macos-x64" "macos_x64" "x86_64-apple-darwin"
+  write_release_evidence_platform "${release_root}" "windows-x64" "windows_x64" "x86_64-pc-windows-gnu"
+  write_release_evidence_platform "${release_root}" "freebsd-x64" "freebsd_x64" "x86_64-unknown-freebsd"
+
+  CTX_ARTIFACT_DIR="${candidate_dir}" run_timed "release-finished-product-candidate-metadata" \
+    bash scripts/release-candidate-metadata.sh "${release_root}"
+  CTX_ARTIFACT_DIR="${contract_root}/helper-timings" run_timed "release-finished-product-evidence-helper" \
+    bash scripts/release-finished-product-evidence.sh "${artifact_root}"
+
+  product_json="${artifact_root}/finished-product/product-decisions/product-decisions.json"
+  provider_json="${artifact_root}/finished-product/provider-fixtures/provider-fixtures.json"
+  rich_json="${artifact_root}/finished-product/rich-search-context/rich-search-context.json"
+  rich_context="${artifact_root}/finished-product/rich-search-context/rich-context.json"
+  package_json="${artifact_root}/finished-product/search-mvp-package-audit/search-mvp-package-audit.json"
+  security_json="${artifact_root}/finished-product/security-archive-fixtures/security-archive-fixtures.json"
+  security_md="${artifact_root}/finished-product/security-archive-fixtures/security-archive-fixtures.md"
+  jj_json="${artifact_root}/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.json"
+  jj_txt="${artifact_root}/finished-product/jj-e2e-blocker-status/jj-e2e-blocker-status.txt"
+  installer_json="${artifact_root}/finished-product/installer-dry-run-smoke/installer-dry-run-smoke.json"
+  installer_txt="${artifact_root}/finished-product/installer-dry-run-smoke/install-dry-run.txt"
+  lanes_json="${artifact_root}/provider-live-e2e-lanes/provider-live-e2e-lanes.json"
+
+  for required_file in \
+    "${product_json}" \
+    "${provider_json}" \
+    "${rich_json}" \
+    "${rich_context}" \
+    "${package_json}" \
+    "${security_json}" \
+    "${security_md}" \
+    "${jj_json}" \
+    "${jj_txt}" \
+    "${installer_json}" \
+    "${installer_txt}" \
+    "${lanes_json}"; do
+    [[ -s "${required_file}" ]] || fail "release finished-product evidence is missing: ${required_file}"
+  done
+
+  for json in "${product_json}" "${provider_json}" "${rich_json}" "${package_json}" "${security_json}" "${jj_json}" "${installer_json}"; do
+    grep -F '"status": "passed"' "${json}" >/dev/null \
+      || fail "release finished-product evidence did not pass: ${json}"
+    grep -F '"evidence_class": "release_artifact_evidence"' "${json}" >/dev/null \
+      || fail "release finished-product evidence did not record release_artifact_evidence: ${json}"
+    grep -F '"self_test_fixture": false' "${json}" >/dev/null \
+      || fail "release finished-product evidence was marked as a self-test fixture: ${json}"
+  done
+  grep -F 'Publishing: false' "${security_md}" >/dev/null \
+    || fail 'release finished-product evidence did not record non-publishing security archive status'
+  grep -F 'ctx install plan' "${installer_txt}" >/dev/null \
+    || fail 'release finished-product evidence did not record installer dry-run plan'
+  grep -F '"kind": "provider_live_e2e_lane_definitions"' "${lanes_json}" >/dev/null \
+    || fail 'release finished-product evidence did not write provider live lane definitions'
+  grep -F '"default_enabled": false' "${lanes_json}" >/dev/null \
+    || fail 'provider live lane definitions must remain opt-in by default'
+}
+
 run_completion_certificate_contract() {
-  local certificate_dir
+  local certificate_dir explicit_mode_dir explicit_mode_fixture_dir explicit_mode_output_dir explicit_mode_log explicit_mode_status
 
   run_timed "completion-certificate-shell-syntax" bash -n scripts/release-completion-certificate.sh
   certificate_dir="${CTX_ARTIFACT_DIR}/completion-certificate"
@@ -1426,6 +1526,33 @@ run_completion_certificate_contract() {
     bash scripts/release-completion-certificate.sh \
       --contract-self-test \
       --artifact-dir "${certificate_dir}"
+
+  explicit_mode_dir="$(mktemp -d "${TMPDIR}/completion-explicit-mode.XXXXXX")"
+  explicit_mode_fixture_dir="${explicit_mode_dir}/fixture-certificate"
+  explicit_mode_output_dir="${explicit_mode_dir}/explicit-release-evidence"
+  explicit_mode_log="${explicit_mode_dir}/explicit-release-evidence.log"
+  mkdir -p "${explicit_mode_fixture_dir}" "${explicit_mode_output_dir}"
+  bash scripts/release-completion-certificate.sh \
+    --contract-self-test \
+    --artifact-dir "${explicit_mode_fixture_dir}" >/dev/null
+
+  set +e
+  CTX_COMPLETION_CERTIFICATE_ALLOW_SELF_TEST_FIXTURES=1 \
+    bash scripts/release-completion-certificate.sh \
+      --mode=release-evidence \
+      --evidence-root "${explicit_mode_fixture_dir}/contract-evidence" \
+      --artifact-dir "${explicit_mode_output_dir}" > "${explicit_mode_log}" 2>&1
+  explicit_mode_status=$?
+  set -e
+
+  (( explicit_mode_status != 0 )) \
+    || fail 'explicit --mode=release-evidence was downgraded to contract self-test mode by CTX_COMPLETION_CERTIFICATE_ALLOW_SELF_TEST_FIXTURES'
+  grep -F 'is contract self-test evidence' "${explicit_mode_log}" >/dev/null \
+    || fail 'explicit release-evidence mode did not reject contract-marked fixture evidence'
+  if [[ -f "${explicit_mode_output_dir}/ctx-completion-certificate.json" ]] \
+    && grep -F '"evidence_mode": "contract-self-test"' "${explicit_mode_output_dir}/ctx-completion-certificate.json" >/dev/null; then
+    fail 'explicit release-evidence mode wrote a contract-self-test completion certificate'
+  fi
 }
 
 run_release_artifact_evidence_missing_contract() {
@@ -1788,6 +1915,9 @@ case "${mode}" in
     ;;
   release_supply_chain_r2_contract)
     run_release_supply_chain_r2_contract
+    ;;
+  release_finished_product_evidence_contract)
+    run_release_finished_product_evidence_contract
     ;;
   completion_certificate_contract)
     run_completion_certificate_contract

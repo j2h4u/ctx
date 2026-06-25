@@ -616,9 +616,6 @@ fn ranked_candidates(
                     candidate_for_record(store, record, &terms, &options.filters)?
                 {
                     candidates.push(candidate);
-                    if candidates.len() >= target_candidates {
-                        break;
-                    }
                 }
             }
 
@@ -657,6 +654,9 @@ fn ranked_candidates(
             .then_with(|| left.record.title.cmp(&right.record.title))
             .then_with(|| left.record.id.cmp(&right.record.id))
     });
+    if candidates.len() > target_candidates {
+        candidates.truncate(target_candidates);
+    }
     Ok(candidates)
 }
 
@@ -2410,6 +2410,89 @@ mod tests {
                 "{name} filter failed to page past decoys"
             );
         }
+    }
+
+    #[test]
+    fn filtered_search_scores_full_fetched_page_before_limiting() {
+        let (_temp, store) = test_store();
+        let query = "samepagerankneedle";
+        let workspace = Some("/workspace/same-page-rank".to_owned());
+        let mut records = Vec::new();
+
+        for (index, id) in [
+            "018f45d0-0000-7000-8000-000000000101",
+            "018f45d0-0000-7000-8000-000000000102",
+            "018f45d0-0000-7000-8000-000000000103",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut record = WorkRecord::new(
+                "Same page filtered candidate",
+                format!("{query} identical body for same page ranking"),
+                Vec::new(),
+                "task",
+                workspace.clone(),
+            );
+            record.id = Uuid::parse_str(id).unwrap();
+            record.created_at = fixed_time();
+            record.updated_at = fixed_time() + chrono::Duration::seconds(index as i64);
+            records.push(record);
+        }
+
+        let expected_best_id = records[2].id;
+        store.upsert_records(&records).unwrap();
+
+        let late_file_match = FileTouched {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000104").unwrap(),
+            work_record_id: Some(expected_best_id),
+            run_id: None,
+            event_id: None,
+            vcs_workspace_id: None,
+            path: "crates/search/src/samepagerankneedle.rs".into(),
+            change_kind: Some(FileChangeKind::Modified),
+            old_path: None,
+            line_count_delta: Some(1),
+            confidence: Confidence::Explicit,
+            timestamps: timestamps(),
+            source_id: None,
+            sync: sync_metadata(),
+        };
+        store.upsert_file_touched(&late_file_match).unwrap();
+
+        let raw_page = store.search_records(query, 3).unwrap();
+        assert_eq!(
+            raw_page.iter().map(|record| record.id).collect::<Vec<_>>(),
+            records.iter().map(|record| record.id).collect::<Vec<_>>(),
+            "regression setup must put the best filtered hit after the first limit+1 raw matches"
+        );
+
+        let packet = search_packet(
+            &store,
+            query,
+            &PacketOptions {
+                limit: 1,
+                filters: SearchFilters {
+                    repo: Some("same-page-rank".into()),
+                    ..SearchFilters::default()
+                },
+                ..PacketOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            packet
+                .results
+                .iter()
+                .map(|result| result.record_id)
+                .collect::<Vec<_>>(),
+            vec![expected_best_id]
+        );
+        assert!(packet.results[0]
+            .why_matched
+            .iter()
+            .any(|reason| reason == "file_touched"));
     }
 
     fn new_link_id(target_id: Uuid) -> Uuid {

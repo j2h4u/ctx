@@ -13,6 +13,7 @@ certificate_failures=0
 completion_evidence_root="${CTX_COMPLETION_EVIDENCE_ROOT:-.}"
 completion_evidence_root_explicit=0
 completion_certificate_mode="${CTX_COMPLETION_CERTIFICATE_MODE:-release-evidence}"
+completion_certificate_mode_explicit=0
 
 if [[ -n "${CTX_COMPLETION_EVIDENCE_ROOT:-}" ]]; then
   completion_evidence_root_explicit=1
@@ -1770,6 +1771,7 @@ main() {
     case "$1" in
       --mode=*)
         completion_certificate_mode="${1#*=}"
+        completion_certificate_mode_explicit=1
         ;;
       --mode)
         if (( $# < 2 )); then
@@ -1778,9 +1780,11 @@ main() {
         fi
         shift
         completion_certificate_mode="$1"
+        completion_certificate_mode_explicit=1
         ;;
       --contract-self-test|--self-test-contract)
         completion_certificate_mode="contract-self-test"
+        completion_certificate_mode_explicit=1
         ;;
       --evidence-root=*)
         completion_evidence_root="${1#*=}"
@@ -1819,7 +1823,9 @@ main() {
     shift
   done
 
-  if [[ "${CTX_COMPLETION_CERTIFICATE_ALLOW_SELF_TEST_FIXTURES:-0}" == "1" && "${completion_certificate_mode}" == "release-evidence" ]]; then
+  if [[ "${CTX_COMPLETION_CERTIFICATE_ALLOW_SELF_TEST_FIXTURES:-0}" == "1" \
+    && "${completion_certificate_mode}" == "release-evidence" \
+    && "${completion_certificate_mode_explicit}" == "0" ]]; then
     completion_certificate_mode="contract-self-test"
   fi
 

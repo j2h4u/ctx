@@ -222,3 +222,111 @@ steps:
       - "artifacts/buildkite/release-dry-run/freebsd-x64/**/*"
       - "artifacts/buildkite/release-artifact-smoke/freebsd-x64/*"
       - "artifacts/buildkite/release-artifact-smoke/freebsd-x64/**/*"
+
+  - label: ":package: aggregate release evidence"
+    key: "aggregate-release-evidence"
+    depends_on:
+      - "linux-release-artifact-smoke"
+      - "macos-arm64-release-artifact-smoke"
+      - "macos-x64-release-artifact-smoke"
+      - "windows-x64-release-artifact-smoke"
+      - "freebsd-native-release-proof"
+    command: |
+      echo "Aggregating platform release evidence from Buildkite artifacts."
+      echo "R2 upload/readback is plan-only in this lane; real upload/readback requires CTX_RELEASE_R2_UPLOAD_READBACK=1, CTX_RELEASE_R2_MANAGER_APPROVED=1, and authenticated wrangler in an approved manager-run lane."
+
+      download_platform_artifacts() {
+        step_key="$$1"
+        platform="$$2"
+
+        buildkite-agent artifact download "artifacts/buildkite/release-dry-run/$${platform}/*" . --step "$${step_key}"
+        buildkite-agent artifact download "artifacts/buildkite/release-dry-run/$${platform}/**/*" . --step "$${step_key}" || true
+        buildkite-agent artifact download "artifacts/buildkite/release-artifact-smoke/$${platform}/*" . --step "$${step_key}"
+        buildkite-agent artifact download "artifacts/buildkite/release-artifact-smoke/$${platform}/**/*" . --step "$${step_key}" || true
+      }
+
+      require_fetched_artifact() {
+        required_path="$$1"
+        if [ ! -s "$${required_path}" ]; then
+          echo "missing required aggregate release artifact: $${required_path}" >&2
+          exit 1
+        fi
+      }
+
+      download_platform_artifacts linux-release-artifact-smoke linux-x64
+      download_platform_artifacts macos-arm64-release-artifact-smoke macos-arm64
+      download_platform_artifacts macos-x64-release-artifact-smoke macos-x64
+      download_platform_artifacts windows-x64-release-artifact-smoke windows-x64
+      download_platform_artifacts freebsd-native-release-proof freebsd-x64
+
+      require_fetched_artifact artifacts/buildkite/release-dry-run/linux-x64/manifest.json
+      require_fetched_artifact artifacts/buildkite/release-dry-run/linux-x64/ctx-release-metadata.env
+      require_fetched_artifact artifacts/buildkite/release-dry-run/linux-x64/checksums.sha256
+      require_fetched_artifact artifacts/buildkite/release-dry-run/linux-x64/ctx-0.1.0-x86_64-unknown-linux-gnu
+      require_fetched_artifact artifacts/buildkite/release-artifact-smoke/linux-x64/artifact-smoke.json
+      require_fetched_artifact artifacts/buildkite/release-artifact-smoke/linux-x64/commands/version.stdout
+      require_fetched_artifact artifacts/buildkite/release-dry-run/macos-arm64/manifest.json
+      require_fetched_artifact artifacts/buildkite/release-dry-run/macos-arm64/ctx-release-metadata.env
+      require_fetched_artifact artifacts/buildkite/release-dry-run/macos-arm64/checksums.sha256
+      require_fetched_artifact artifacts/buildkite/release-dry-run/macos-arm64/ctx-0.1.0-aarch64-apple-darwin
+      require_fetched_artifact artifacts/buildkite/release-artifact-smoke/macos-arm64/artifact-smoke.json
+      require_fetched_artifact artifacts/buildkite/release-artifact-smoke/macos-arm64/commands/version.stdout
+      require_fetched_artifact artifacts/buildkite/release-dry-run/macos-x64/manifest.json
+      require_fetched_artifact artifacts/buildkite/release-dry-run/macos-x64/ctx-release-metadata.env
+      require_fetched_artifact artifacts/buildkite/release-dry-run/macos-x64/checksums.sha256
+      require_fetched_artifact artifacts/buildkite/release-dry-run/macos-x64/ctx-0.1.0-x86_64-apple-darwin
+      require_fetched_artifact artifacts/buildkite/release-artifact-smoke/macos-x64/artifact-smoke.json
+      require_fetched_artifact artifacts/buildkite/release-artifact-smoke/macos-x64/commands/version.stdout
+      require_fetched_artifact artifacts/buildkite/release-dry-run/windows-x64/manifest.json
+      require_fetched_artifact artifacts/buildkite/release-dry-run/windows-x64/ctx-release-metadata.env
+      require_fetched_artifact artifacts/buildkite/release-dry-run/windows-x64/checksums.sha256
+      require_fetched_artifact artifacts/buildkite/release-dry-run/windows-x64/ctx-0.1.0-x86_64-pc-windows-gnu.exe
+      require_fetched_artifact artifacts/buildkite/release-artifact-smoke/windows-x64/artifact-smoke.json
+      require_fetched_artifact artifacts/buildkite/release-artifact-smoke/windows-x64/commands/version.stdout
+      require_fetched_artifact artifacts/buildkite/release-dry-run/freebsd-x64/manifest.json
+      require_fetched_artifact artifacts/buildkite/release-dry-run/freebsd-x64/ctx-release-metadata.env
+      require_fetched_artifact artifacts/buildkite/release-dry-run/freebsd-x64/checksums.sha256
+      require_fetched_artifact artifacts/buildkite/release-dry-run/freebsd-x64/ctx-0.1.0-x86_64-unknown-freebsd
+      require_fetched_artifact artifacts/buildkite/release-artifact-smoke/freebsd-x64/artifact-smoke.json
+      require_fetched_artifact artifacts/buildkite/release-artifact-smoke/freebsd-x64/commands/version.stdout
+
+      mkdir -p artifacts/buildkite/pipeline-contract
+      printf 'Buildkite aggregate-release-evidence verified platform artifact proof and release evidence assembly for %s\n' "$${BUILDKITE_BUILD_URL:-unknown-build}" \
+        > artifacts/buildkite/pipeline-contract/pipeline-contract.txt
+
+      CTX_ARTIFACT_DIR=artifacts/buildkite/release-candidate \
+        ./scripts/release-candidate-metadata.sh artifacts/buildkite/release-dry-run
+      CTX_ARTIFACT_DIR=artifacts/buildkite/r2-staging-smoke \
+        ./scripts/release-r2-staging-smoke.sh artifacts/buildkite/release-candidate
+      CTX_ARTIFACT_DIR=artifacts/buildkite/supply-chain \
+        ./scripts/release-supply-chain-proof.sh
+      CTX_RELEASE_R2_UPLOAD_READBACK=0 \
+      CTX_RELEASE_R2_MANAGER_APPROVED=0 \
+      CTX_ARTIFACT_DIR=artifacts/buildkite/r2-staging-readback \
+        ./scripts/release-r2-staging-readback-proof.sh artifacts/buildkite/release-candidate
+      ./scripts/release-finished-product-evidence.sh artifacts/buildkite
+      CTX_COMPLETION_CERTIFICATE_ALLOW_SELF_TEST_FIXTURES=0 \
+      CTX_ARTIFACT_DIR=artifacts/buildkite/completion-certificate \
+        ./scripts/release-completion-certificate.sh --mode=release-evidence
+    agents:
+      queue: "release-linux-managed"
+      ctx-runner-class: "release-linux-x64-stage"
+      os: "linux"
+      arch: "x86_64"
+    timeout_in_minutes: 60
+    artifact_paths:
+      - "artifacts/buildkite/release-candidate/*"
+      - "artifacts/buildkite/release-candidate/**/*"
+      - "artifacts/buildkite/r2-staging-smoke/*"
+      - "artifacts/buildkite/r2-staging-smoke/**/*"
+      - "artifacts/buildkite/supply-chain/*"
+      - "artifacts/buildkite/supply-chain/**/*"
+      - "artifacts/buildkite/r2-staging-readback/*"
+      - "artifacts/buildkite/r2-staging-readback/**/*"
+      - "artifacts/buildkite/finished-product/*"
+      - "artifacts/buildkite/finished-product/**/*"
+      - "artifacts/buildkite/provider-live-e2e-lanes/*"
+      - "artifacts/buildkite/provider-live-e2e-lanes/**/*"
+      - "artifacts/buildkite/completion-certificate/*"
+      - "artifacts/buildkite/completion-certificate/**/*"
+      - "artifacts/buildkite/pipeline-contract/*"
