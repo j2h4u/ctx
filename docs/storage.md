@@ -168,12 +168,29 @@ their own configuration; ctx indexing those transcripts does not repeat that
 behavior.
 
 First-party analytics are default-on and may create `install.json` and send
-coarse command-invocation metadata. They do not send session text, prompts,
-transcripts, indexed snippets, or command output. To disable them, add:
+coarse product metadata. They do not send session text, prompts, transcripts,
+search queries, result snippets, source paths, repository or branch names,
+native session IDs, command text, command output, or raw IP addresses.
+
+Analytics may include:
+
+- a generated install identifier that is hashed server-side;
+- ctx version, OS, architecture, command name, success state, and duration
+  bucket;
+- JSON-output and option booleans such as whether a search used filters;
+- bucketed counts such as indexed sessions, import totals, result counts, and
+  validation finding counts;
+- provider identifiers such as `codex` or `claude` when selected as filters;
+- coarse Cloudflare-derived geography such as country, region, colo, ASN, and
+  AS organization.
+
+To disable analytics, add:
 
 ```toml
 [analytics]
 enabled = false
 ```
 
-Use that opt-out when a strict local-only no-network mode is required.
+Equivalent environment opt-outs are `CTX_ANALYTICS_OFF=1`,
+`CTX_DISABLE_ANALYTICS=1`, or `CTX_ANALYTICS_ENABLED=false`. Use an opt-out when
+a strict local-only no-network mode is required.

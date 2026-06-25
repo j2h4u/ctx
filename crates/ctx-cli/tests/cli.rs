@@ -529,7 +529,38 @@ fn analytics_sends_coarse_cli_metadata_when_enabled() {
     assert_eq!(event["events"][0]["origin_runtime"], "cli");
     assert_eq!(event["events"][0]["surface"], "cli");
     assert_eq!(event["events"][0]["properties"]["action"], "status");
-    assert!(event["events"][0]["properties"].get("command").is_none());
+    assert_eq!(
+        event["events"][0]["properties"]["analytics_client"],
+        "ctx-cli"
+    );
+    assert_eq!(event["events"][0]["properties"]["initialized"], false);
+    assert_eq!(
+        event["events"][0]["properties"]["indexed_items_bucket"],
+        "0"
+    );
+    assert_eq!(
+        event["events"][0]["properties"]["cataloged_sessions_bucket"],
+        "0"
+    );
+    for forbidden in [
+        "command",
+        "query",
+        "query_text",
+        "path",
+        "file_path",
+        "repo",
+        "repo_name",
+        "branch",
+        "error",
+        "error_message",
+        "session_id",
+        "item_id",
+    ] {
+        assert!(
+            event["events"][0]["properties"].get(forbidden).is_none(),
+            "analytics leaked forbidden property {forbidden}: {event:#}"
+        );
+    }
 }
 
 #[test]

@@ -19,7 +19,7 @@ mod config;
 mod identity;
 mod net;
 
-use analytics::AnalyticsEvent;
+use analytics::{AnalyticsEvent, AnalyticsProperties};
 use config::{AppConfig, CONFIG_FILE};
 use ctx_history_capture::{
     catalog_codex_session_tree, discover_provider_sources, import_antigravity_cli_history,
@@ -643,6 +643,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let action = cli.command.name();
     let json_output = cli.command.json_output();
+    let mut analytics_properties = command_analytics_properties(&cli.command);
     let data_root = cli
         .data_root
         .clone()
@@ -652,15 +653,17 @@ fn main() -> Result<()> {
     let config = AppConfig::load(&data_root)?;
 
     let result = match cli.command {
-        CommandRoot::Setup(args) => run_setup(args, data_root.clone()),
-        CommandRoot::Status(args) => run_status(args, data_root.clone()),
-        CommandRoot::Sources(args) => run_sources(args),
-        CommandRoot::Import(args) => run_import(args, data_root.clone()),
-        CommandRoot::List(args) => run_list(args, data_root.clone()),
-        CommandRoot::Show(args) => run_show(args, data_root.clone()),
-        CommandRoot::Search(args) => run_search(args, data_root.clone()),
-        CommandRoot::Doctor(args) => run_doctor(args, data_root.clone()),
-        CommandRoot::Validate(args) => run_validate(args, data_root.clone()),
+        CommandRoot::Setup(args) => run_setup(args, data_root.clone(), &mut analytics_properties),
+        CommandRoot::Status(args) => run_status(args, data_root.clone(), &mut analytics_properties),
+        CommandRoot::Sources(args) => run_sources(args, &mut analytics_properties),
+        CommandRoot::Import(args) => run_import(args, data_root.clone(), &mut analytics_properties),
+        CommandRoot::List(args) => run_list(args, data_root.clone(), &mut analytics_properties),
+        CommandRoot::Show(args) => run_show(args, data_root.clone(), &mut analytics_properties),
+        CommandRoot::Search(args) => run_search(args, data_root.clone(), &mut analytics_properties),
+        CommandRoot::Doctor(args) => run_doctor(args, data_root.clone(), &mut analytics_properties),
+        CommandRoot::Validate(args) => {
+            run_validate(args, data_root.clone(), &mut analytics_properties)
+        }
     };
     analytics::send_cli_event(
         &data_root,
@@ -670,12 +673,105 @@ fn main() -> Result<()> {
             json_output,
             success: result.is_ok(),
             duration: started.elapsed(),
+            properties: analytics_properties,
         },
     );
     result
 }
 
-fn run_setup(args: SetupArgs, data_root: PathBuf) -> Result<()> {
+fn command_analytics_properties(command: &CommandRoot) -> AnalyticsProperties {
+    let mut properties = analytics::empty_properties();
+    match command {
+        CommandRoot::Setup(args) => {
+            analytics::insert_str(
+                &mut properties,
+                "progress_mode",
+                progress_mode_name(args.progress),
+            );
+        }
+        CommandRoot::Status(_)
+        | CommandRoot::Sources(_)
+        | CommandRoot::Doctor(_)
+        | CommandRoot::Validate(_) => {}
+        CommandRoot::Import(args) => {
+            analytics::insert_bool(&mut properties, "resume", args.resume);
+            analytics::insert_bool(&mut properties, "all_sources", args.all);
+            analytics::insert_str(
+                &mut properties,
+                "source_mode",
+                if args.path.is_some() {
+                    "explicit_path"
+                } else if args.all {
+                    "all_discovered"
+                } else if args.provider.is_some() {
+                    "discovered_provider"
+                } else {
+                    "auto_discovered"
+                },
+            );
+            if let Some(provider) = args.provider {
+                analytics::insert_str(
+                    &mut properties,
+                    "provider_filter",
+                    provider.capture_provider().as_str(),
+                );
+            }
+            analytics::insert_str(
+                &mut properties,
+                "progress_mode",
+                progress_mode_name(args.progress),
+            );
+        }
+        CommandRoot::List(args) => {
+            analytics::insert_count_bucket(&mut properties, "limit_bucket", args.limit as u64);
+        }
+        CommandRoot::Show(_) => {
+            analytics::insert_str(&mut properties, "target_kind", "unknown_id");
+        }
+        CommandRoot::Search(args) => {
+            analytics::insert_bool(&mut properties, "has_query", args.query.is_some());
+            analytics::insert_bool(
+                &mut properties,
+                "has_provider_filter",
+                args.provider.is_some(),
+            );
+            analytics::insert_bool(&mut properties, "has_repo_filter", args.repo.is_some());
+            analytics::insert_bool(&mut properties, "has_since_filter", args.since.is_some());
+            analytics::insert_bool(
+                &mut properties,
+                "has_event_type_filter",
+                args.event_type.is_some(),
+            );
+            analytics::insert_bool(&mut properties, "has_file_filter", args.file.is_some());
+            analytics::insert_bool(&mut properties, "primary_only", args.primary_only);
+            analytics::insert_bool(&mut properties, "include_subagents", args.include_subagents);
+            analytics::insert_count_bucket(&mut properties, "limit_bucket", args.limit as u64);
+            if let Some(provider) = args.provider {
+                analytics::insert_str(
+                    &mut properties,
+                    "provider_filter",
+                    provider.capture_provider().as_str(),
+                );
+            }
+        }
+    }
+    properties
+}
+
+fn progress_mode_name(progress: ProgressArg) -> &'static str {
+    match progress {
+        ProgressArg::Auto => "auto",
+        ProgressArg::Plain => "plain",
+        ProgressArg::Json => "json",
+        ProgressArg::None => "none",
+    }
+}
+
+fn run_setup(
+    args: SetupArgs,
+    data_root: PathBuf,
+    analytics_properties: &mut AnalyticsProperties,
+) -> Result<()> {
     fs::create_dir_all(&data_root)?;
     let db_path = database_path(data_root.clone());
     let store = Store::open(&db_path)?;
@@ -690,6 +786,26 @@ fn run_setup(args: SetupArgs, data_root: PathBuf) -> Result<()> {
         catalog.source_bytes,
     );
     let catalog_counts = store.catalog_session_counts()?;
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "providers_detected_bucket",
+        sources.len() as u64,
+    );
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "cataloged_sessions_bucket",
+        catalog.cataloged_sessions as u64,
+    );
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "pending_sessions_bucket",
+        catalog_counts.pending as u64,
+    );
+    analytics::insert_bytes_bucket(
+        analytics_properties,
+        "catalog_source_bytes_bucket",
+        catalog.source_bytes,
+    );
 
     if args.json {
         print_json(json!({
@@ -734,7 +850,11 @@ fn run_setup(args: SetupArgs, data_root: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn run_status(args: JsonArgs, data_root: PathBuf) -> Result<()> {
+fn run_status(
+    args: JsonArgs,
+    data_root: PathBuf,
+    analytics_properties: &mut AnalyticsProperties,
+) -> Result<()> {
     let db_path = database_path(data_root.clone());
     let initialized = db_path.exists();
     let config_path = data_root.join(CONFIG_FILE);
@@ -748,6 +868,18 @@ fn run_status(args: JsonArgs, data_root: PathBuf) -> Result<()> {
     } else {
         (0, 0, Default::default())
     };
+    analytics::insert_bool(analytics_properties, "initialized", initialized);
+    analytics::insert_count_bucket(analytics_properties, "indexed_items_bucket", records as u64);
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "indexed_sources_bucket",
+        sources as u64,
+    );
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "cataloged_sessions_bucket",
+        catalog_counts.total as u64,
+    );
 
     if args.json {
         print_json(json!({
@@ -782,8 +914,30 @@ fn run_status(args: JsonArgs, data_root: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn run_sources(args: JsonArgs) -> Result<()> {
+fn run_sources(args: JsonArgs, analytics_properties: &mut AnalyticsProperties) -> Result<()> {
     let sources = discovered_sources();
+    let existing = sources.iter().filter(|source| source.exists).count();
+    let importable = sources
+        .iter()
+        .filter(|source| {
+            source.exists && matches!(source.import_support, ProviderImportSupport::Native)
+        })
+        .count();
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "providers_detected_bucket",
+        sources.len() as u64,
+    );
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "providers_existing_bucket",
+        existing as u64,
+    );
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "providers_importable_bucket",
+        importable as u64,
+    );
     if args.json {
         print_json(json!({
             "schema_version": 1,
@@ -841,7 +995,11 @@ fn catalog_available_sources(
     Ok((totals, catalog_sources))
 }
 
-fn run_import(args: ImportArgs, data_root: PathBuf) -> Result<()> {
+fn run_import(
+    args: ImportArgs,
+    data_root: PathBuf,
+    analytics_properties: &mut AnalyticsProperties,
+) -> Result<()> {
     fs::create_dir_all(&data_root)?;
     config::write_default_config(&data_root)?;
     let db_path = database_path(data_root);
@@ -864,6 +1022,16 @@ fn run_import(args: ImportArgs, data_root: PathBuf) -> Result<()> {
         planned_total_bytes = planned_total_bytes.saturating_add(stats.bytes);
         planned_sources.push((source, stats));
     }
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "sources_seen_bucket",
+        planned_sources.len() as u64,
+    );
+    analytics::insert_bytes_bucket(
+        analytics_properties,
+        "source_bytes_bucket",
+        planned_total_bytes,
+    );
 
     let progress = ProgressReporter::new(args.progress, args.json, "import", planned_total_bytes);
     progress.message(
@@ -1067,6 +1235,32 @@ fn run_import(args: ImportArgs, data_root: PathBuf) -> Result<()> {
         format!("indexed {} source file(s)", totals.source_files),
         totals.source_bytes,
     );
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "source_files_bucket",
+        totals.source_files as u64,
+    );
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "sessions_imported_bucket",
+        totals.imported_sessions as u64,
+    );
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "events_imported_bucket",
+        totals.imported_events as u64,
+    );
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "edges_imported_bucket",
+        totals.imported_edges as u64,
+    );
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "skipped_bucket",
+        totals.skipped as u64,
+    );
+    analytics::insert_count_bucket(analytics_properties, "failed_bucket", totals.failed as u64);
     Ok(())
 }
 
@@ -1106,7 +1300,11 @@ fn source_import_json(
     })
 }
 
-fn run_list(args: ListArgs, data_root: PathBuf) -> Result<()> {
+fn run_list(
+    args: ListArgs,
+    data_root: PathBuf,
+    analytics_properties: &mut AnalyticsProperties,
+) -> Result<()> {
     let store = Store::open(database_path(data_root))?;
     let records = store.list_records(args.limit)?;
     let remaining = args.limit.saturating_sub(records.len());
@@ -1115,6 +1313,12 @@ fn run_list(args: ListArgs, data_root: PathBuf) -> Result<()> {
         .into_iter()
         .take(remaining)
         .collect::<Vec<_>>();
+    let item_count = records.len() + sessions.len();
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "items_returned_bucket",
+        item_count as u64,
+    );
     if args.json {
         let mut items = Vec::new();
         for record in records {
@@ -1144,11 +1348,21 @@ fn run_list(args: ListArgs, data_root: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn run_show(args: ShowArgs, data_root: PathBuf) -> Result<()> {
+fn run_show(
+    args: ShowArgs,
+    data_root: PathBuf,
+    analytics_properties: &mut AnalyticsProperties,
+) -> Result<()> {
     let store = Store::open(database_path(data_root))?;
     let Ok(record) = store.get_record(args.id) else {
         let session = store.get_session(args.id)?;
         let events = store.events_for_session(session.id)?;
+        analytics::insert_str(analytics_properties, "target_kind", "session");
+        analytics::insert_count_bucket(
+            analytics_properties,
+            "events_returned_bucket",
+            events.len() as u64,
+        );
         if args.json {
             print_json(compact_json(json!({
                 "schema_version": 1,
@@ -1182,6 +1396,17 @@ fn run_show(args: ShowArgs, data_root: PathBuf) -> Result<()> {
     };
     let sessions = store.sessions_for_record(record.id)?;
     let events = store.events_for_record(record.id)?;
+    analytics::insert_str(analytics_properties, "target_kind", "agent_history");
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "sessions_returned_bucket",
+        sessions.len() as u64,
+    );
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "events_returned_bucket",
+        events.len() as u64,
+    );
     if args.json {
         print_json(compact_json(json!({
             "schema_version": 1,
@@ -1482,7 +1707,11 @@ fn prune_null_json(value: &mut Value) {
     }
 }
 
-fn run_search(args: SearchArgs, data_root: PathBuf) -> Result<()> {
+fn run_search(
+    args: SearchArgs,
+    data_root: PathBuf,
+    analytics_properties: &mut AnalyticsProperties,
+) -> Result<()> {
     refresh_before_search(&args, &data_root)?;
     let store = Store::open(database_path(data_root))?;
     let query = args.query.unwrap_or_default();
@@ -1499,11 +1728,26 @@ fn run_search(args: SearchArgs, data_root: PathBuf) -> Result<()> {
         )?,
         ..ctx_history_search::PacketOptions::default()
     };
+    let packet = ctx_history_search::search_packet(&store, &query, &options)?;
+    let result_count = packet.results.len();
+    let citation_count = packet
+        .results
+        .iter()
+        .map(|result| result.citations.len())
+        .sum::<usize>();
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "result_count_bucket",
+        result_count as u64,
+    );
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "citation_count_bucket",
+        citation_count as u64,
+    );
     if args.json {
-        let packet = ctx_history_search::search_packet(&store, &query, &options)?;
         print_share_safe_value(SearchDto::packet(&store, &packet))?;
     } else {
-        let packet = ctx_history_search::search_packet(&store, &query, &options)?;
         for result in packet.results {
             println!("{} {}", result.record_id, result.title);
             println!("  {}", result.snippet);
@@ -1643,12 +1887,21 @@ fn refresh_sources_quietly(data_root: &Path, sources: Vec<SourceInfo>) -> Result
     Ok(())
 }
 
-fn run_doctor(args: JsonArgs, data_root: PathBuf) -> Result<()> {
+fn run_doctor(
+    args: JsonArgs,
+    data_root: PathBuf,
+    analytics_properties: &mut AnalyticsProperties,
+) -> Result<()> {
     let store = Store::open(database_path(data_root.clone()))?;
     let mut findings = store.validate()?;
     if !data_root.exists() {
         findings.push(format!("data root does not exist: {}", data_root.display()));
     }
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "finding_count_bucket",
+        findings.len() as u64,
+    );
     if args.json {
         print_json(json!({
             "schema_version": 1,
@@ -1665,9 +1918,18 @@ fn run_doctor(args: JsonArgs, data_root: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn run_validate(args: JsonArgs, data_root: PathBuf) -> Result<()> {
+fn run_validate(
+    args: JsonArgs,
+    data_root: PathBuf,
+    analytics_properties: &mut AnalyticsProperties,
+) -> Result<()> {
     let store = Store::open(database_path(data_root))?;
     let findings = store.validate()?;
+    analytics::insert_count_bucket(
+        analytics_properties,
+        "finding_count_bucket",
+        findings.len() as u64,
+    );
     if args.json {
         print_json(json!({
             "schema_version": 1,
