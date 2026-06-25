@@ -13,12 +13,14 @@ use work_record_core::{
     EventType, FileTouched, RedactionState, Run, Session, Summary, VcsChange, Visibility,
     WorkRecord,
 };
-use work_record_store::Store;
+use work_record_store::{EventSearchHit, Store};
 
 pub const AGENT_CONTEXT_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_MAX_TOKENS: u32 = 12_000;
 pub const DEFAULT_RESULT_LIMIT: usize = 10;
 pub const DEFAULT_SNIPPET_CHARS: usize = 320;
+const LARGE_EVENT_RECORD_THRESHOLD: i64 = 1_024;
+const MAX_FAST_EVENT_FETCH_LIMIT: usize = 5_000;
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -247,6 +249,9 @@ pub fn context_packet(
 
 pub fn search_packet(store: &Store, query: &str, options: &PacketOptions) -> Result<SearchPacket> {
     let options = normalized_options(options);
+    if let Some(packet) = fast_event_search_packet(store, query, &options)? {
+        return Ok(packet);
+    }
     let candidates = ranked_candidates(store, Some(query), &options)?;
     let mut truncation = ContextTruncation::default();
     let mut results = Vec::new();
@@ -310,6 +315,250 @@ pub fn search_packet(store: &Store, query: &str, options: &PacketOptions) -> Res
         pagination: pagination(Some(cursor_offset), has_more),
         truncation,
     })
+}
+
+fn fast_event_search_packet(
+    store: &Store,
+    query: &str,
+    options: &PacketOptions,
+) -> Result<Option<SearchPacket>> {
+    if query.trim().is_empty() || options.filters.file.is_some() {
+        return Ok(None);
+    }
+    if store.max_events_per_work_record()? < LARGE_EVENT_RECORD_THRESHOLD {
+        return Ok(None);
+    }
+
+    let fetch_limit = fast_event_fetch_limit(options);
+    let hits = store.search_event_hits(query, fetch_limit)?;
+    let mut results = Vec::new();
+    let mut raw_hits_seen = 0_usize;
+    for hit in hits {
+        raw_hits_seen += 1;
+        if !event_hit_matches_filters(&hit, &options.filters) {
+            continue;
+        }
+        results.push(event_search_result(&hit, query, options.snippet_chars));
+        if results.len() > options.limit {
+            break;
+        }
+    }
+
+    let has_more = results.len() > options.limit || raw_hits_seen >= fetch_limit;
+    if results.len() > options.limit {
+        results.truncate(options.limit);
+    }
+    normalize_search_result_ranks(&mut results);
+
+    let truncation = if has_more {
+        ContextTruncation {
+            truncated: true,
+            reason: Some("limit".to_owned()),
+            omitted_results: 1,
+        }
+    } else {
+        ContextTruncation::default()
+    };
+
+    let cursor_offset = results.len();
+    Ok(Some(SearchPacket {
+        schema_version: AGENT_CONTEXT_SCHEMA_VERSION,
+        query: query.to_owned(),
+        filters: options.filters.clone(),
+        generated_at: Utc::now(),
+        results,
+        pagination: pagination(Some(cursor_offset), has_more),
+        truncation,
+    }))
+}
+
+fn fast_event_fetch_limit(options: &PacketOptions) -> usize {
+    if has_filters(&options.filters) {
+        options
+            .limit
+            .saturating_mul(80)
+            .saturating_add(1)
+            .clamp(options.limit.saturating_add(1), MAX_FAST_EVENT_FETCH_LIMIT)
+    } else {
+        options.limit.saturating_add(1)
+    }
+}
+
+fn event_hit_matches_filters(hit: &EventSearchHit, filters: &SearchFilters) -> bool {
+    if let Some(provider) = filters.provider {
+        if hit.provider != Some(provider) {
+            return false;
+        }
+    }
+    if let Some(since) = filters.since {
+        if hit.occurred_at < since {
+            return false;
+        }
+    }
+    if filters.primary_only {
+        let is_primary = hit.session_is_primary.unwrap_or(false)
+            || hit.agent_type == Some(work_record_core::AgentType::Primary);
+        if !is_primary {
+            return false;
+        }
+    } else if !filters.include_subagents
+        && hit.agent_type == Some(work_record_core::AgentType::Subagent)
+    {
+        return false;
+    }
+    if let Some(event_type) = filters.event_type {
+        if hit.event_type != event_type {
+            return false;
+        }
+    }
+    if let Some(repo) = filters
+        .repo
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let repo = repo.to_lowercase();
+        let matches_repo = [
+            hit.cwd.as_deref(),
+            hit.raw_source_path.as_deref(),
+            hit.record_workspace.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| value.to_lowercase().contains(&repo));
+        if !matches_repo {
+            return false;
+        }
+    }
+    true
+}
+
+fn event_search_result(
+    hit: &EventSearchHit,
+    query: &str,
+    snippet_chars: usize,
+) -> SearchPacketResult {
+    let terms = query_terms(query);
+    let raw_source_exists = hit
+        .raw_source_path
+        .as_deref()
+        .map(|path| Path::new(path).is_file());
+    let mut citations = vec![ContextCitation {
+        citation_type: ContextCitationType::Event,
+        id: hit.event_id,
+        label: event_result_label(hit).to_owned(),
+        time: hit.occurred_at,
+        provider: hit.provider,
+        session_id: hit.session_id,
+        event_seq: Some(hit.seq),
+        raw_source_path: hit.raw_source_path.clone(),
+        raw_source_exists,
+        cursor: hit.cursor.clone(),
+    }];
+    if let Some(session_id) = hit.session_id {
+        citations.push(ContextCitation {
+            citation_type: ContextCitationType::Session,
+            id: session_id,
+            label: "session".to_owned(),
+            time: hit.occurred_at,
+            provider: hit.provider,
+            session_id: Some(session_id),
+            event_seq: None,
+            raw_source_path: hit.raw_source_path.clone(),
+            raw_source_exists,
+            cursor: hit.cursor.clone(),
+        });
+    }
+
+    SearchPacketResult {
+        record_id: hit.event_id,
+        session_id: hit.session_id,
+        event_id: Some(hit.event_id),
+        event_seq: Some(hit.seq),
+        title: event_result_title(hit),
+        snippet: matched_snippet(&hit.preview, &terms, snippet_chars),
+        rank: (-hit.score as f32).max(0.0),
+        provider: hit.provider,
+        timestamp: Some(hit.occurred_at),
+        cwd: hit.cwd.clone(),
+        raw_source_path: hit.raw_source_path.clone(),
+        raw_source_exists,
+        cursor: hit.cursor.clone(),
+        why_matched: vec![event_reason(hit.event_type).to_owned()],
+        citations,
+        links: ContextLinks::default(),
+        visibility: Visibility::LocalOnly,
+    }
+}
+
+fn event_result_title(hit: &EventSearchHit) -> String {
+    let provider = hit
+        .provider
+        .map(|provider| provider.as_str())
+        .unwrap_or("agent");
+    let source = hit
+        .session_external_session_id
+        .as_deref()
+        .or_else(|| {
+            hit.raw_source_path
+                .as_deref()
+                .and_then(|path| Path::new(path).file_name().and_then(|value| value.to_str()))
+        })
+        .map(|value| safe_snippet(value, 80));
+    match source {
+        Some(source) => format!("{provider} {} - {source}", event_result_label(hit)),
+        None => format!("{provider} {}", event_result_label(hit)),
+    }
+}
+
+fn event_result_label(hit: &EventSearchHit) -> &'static str {
+    match hit.event_type {
+        EventType::Message => match hit.role {
+            Some(work_record_core::EventRole::User) => "user message",
+            Some(work_record_core::EventRole::Assistant) => "assistant message",
+            Some(work_record_core::EventRole::System) => "system message",
+            _ => "message",
+        },
+        EventType::ToolCall => "tool call",
+        EventType::ToolOutput => "tool output",
+        EventType::CommandStarted => "command started",
+        EventType::CommandOutput => "command output",
+        EventType::CommandFinished => "command finished",
+        EventType::FileTouched => "file touched",
+        EventType::VcsChange => "vcs change",
+        EventType::Artifact => "artifact",
+        EventType::Summary => "summary",
+        EventType::Notice => "notice",
+    }
+}
+
+fn event_reason(event_type: EventType) -> &'static str {
+    match event_type {
+        EventType::Message => "message",
+        EventType::ToolCall => "tool_call",
+        EventType::ToolOutput => "tool_output",
+        EventType::CommandStarted | EventType::CommandOutput | EventType::CommandFinished => {
+            "command_event"
+        }
+        EventType::FileTouched => "file_touched",
+        EventType::VcsChange => "vcs_change",
+        EventType::Artifact => "artifact",
+        EventType::Summary => "summary",
+        EventType::Notice => "notice",
+    }
+}
+
+fn normalize_search_result_ranks(results: &mut [SearchPacketResult]) {
+    let max_rank = results
+        .iter()
+        .map(|result| result.rank)
+        .fold(0.0_f32, f32::max);
+    if max_rank <= 0.0 {
+        return;
+    }
+    for result in results {
+        result.rank = (result.rank / max_rank).clamp(0.0, 1.0);
+    }
 }
 
 pub fn redacted_snippet(input: &str, max_chars: usize) -> String {
@@ -1707,6 +1956,107 @@ mod tests {
         )
         .unwrap();
         assert!(unsafe_packet.results.is_empty());
+    }
+
+    #[test]
+    fn large_agent_history_search_returns_event_hits() {
+        let (_temp, store) = test_store();
+        let record = WorkRecord::new(
+            "Large provider history",
+            "single imported agent-history record",
+            Vec::new(),
+            "agent_history",
+            Some("/workspace/ctx".into()),
+        );
+        store.insert_record(&record).unwrap();
+
+        let session = Session {
+            id: Uuid::parse_str("018f45d0-0000-7000-8000-000000000601").unwrap(),
+            work_record_id: Some(record.id),
+            parent_session_id: None,
+            root_session_id: None,
+            capture_source_id: None,
+            provider: CaptureProvider::Codex,
+            external_session_id: Some("large-history-session".into()),
+            external_agent_id: None,
+            agent_type: AgentType::Primary,
+            role_hint: Some("primary".into()),
+            is_primary: true,
+            status: SessionStatus::Imported,
+            transcript_blob_id: None,
+            started_at: fixed_time(),
+            ended_at: None,
+            timestamps: timestamps(),
+            sync: sync_metadata(),
+        };
+        store.upsert_session(&session).unwrap();
+
+        let target_event_id = Uuid::parse_str("018f45d0-0000-7000-8000-0000000006ff").unwrap();
+        for index in 0..=(LARGE_EVENT_RECORD_THRESHOLD as u64) {
+            let event_id = if index == LARGE_EVENT_RECORD_THRESHOLD as u64 {
+                target_event_id
+            } else {
+                let mut bytes = *session.id.as_bytes();
+                bytes[14] = (index / 256) as u8;
+                bytes[15] = index as u8;
+                Uuid::from_bytes(bytes)
+            };
+            let text = if event_id == target_event_id {
+                "large-fast-event-needle from one transcript"
+            } else {
+                "ordinary large history event"
+            };
+            store
+                .upsert_event(&Event {
+                    id: event_id,
+                    seq: 10_000 + index,
+                    work_record_id: Some(record.id),
+                    session_id: Some(session.id),
+                    run_id: None,
+                    event_type: EventType::Message,
+                    role: Some(EventRole::Assistant),
+                    occurred_at: fixed_time() + chrono::Duration::milliseconds(index as i64),
+                    capture_source_id: None,
+                    payload: serde_json::json!({
+                        "cursor": format!("line:{index}"),
+                        "body": { "text": text }
+                    }),
+                    payload_blob_id: None,
+                    dedupe_key: Some(format!("large-history-{index}")),
+                    redaction_state: RedactionState::SafePreview,
+                    sync: sync_metadata(),
+                })
+                .unwrap();
+        }
+        store.refresh_search_index().unwrap();
+
+        let packet = search_packet(
+            &store,
+            "large-fast-event-needle",
+            &PacketOptions {
+                limit: 5,
+                snippet_chars: 200,
+                ..PacketOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(packet.results.len(), 1);
+        let result = &packet.results[0];
+        assert_eq!(result.record_id, target_event_id);
+        assert_eq!(result.event_id, Some(target_event_id));
+        assert_eq!(result.session_id, Some(session.id));
+        assert_eq!(result.provider, Some(CaptureProvider::Codex));
+        assert_eq!(
+            result.snippet,
+            "large-fast-event-needle from one transcript"
+        );
+        assert_eq!(result.why_matched, vec!["message"]);
+        assert!(result.citations.iter().any(|citation| {
+            citation.citation_type == ContextCitationType::Event
+                && citation.id == target_event_id
+                && citation.cursor.as_deref() == Some("line:1024")
+        }));
     }
 
     #[test]

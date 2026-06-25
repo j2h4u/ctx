@@ -20,6 +20,7 @@ fn tempdir() -> TempDir {
 fn ctx(temp: &TempDir) -> Command {
     let mut command = Command::cargo_bin("ctx").unwrap();
     command.env("CTX_DATA_ROOT", temp.path());
+    command.env("HOME", temp.path());
     command
 }
 
@@ -211,6 +212,61 @@ fn setup_does_not_migrate_legacy_shim_directory() {
         legacy_shims.join("git").exists(),
         "legacy shim files should be left in place instead of installed"
     );
+}
+
+#[test]
+fn setup_catalogs_codex_sessions_without_deep_import() {
+    let temp = tempdir();
+    let sessions = temp
+        .path()
+        .join(".codex")
+        .join("sessions")
+        .join("2026/06/24");
+    fs::create_dir_all(&sessions).unwrap();
+    fs::write(
+        sessions.join("rollout-2026-06-24T10-00-00-codex-session-setup.jsonl"),
+        r#"{"timestamp":"2026-06-24T10:00:00.000Z","type":"session_meta","payload":{"id":"codex-session-setup","timestamp":"2026-06-24T10:00:00.000Z","cwd":"/repo/app","originator":"codex-cli","cli_version":"0.200.0","source":"cli","model_provider":"openai"}}"#,
+    )
+    .unwrap();
+
+    let setup = json_output(ctx(&temp).args(["setup", "--json"]));
+    assert_eq!(setup["catalog"]["cataloged_sessions"], 1);
+    assert_eq!(setup["catalog"]["source_files"], 1);
+    assert_eq!(setup["catalog"]["failed_sessions"], 0);
+
+    let status = json_output(ctx(&temp).args(["status", "--json"]));
+    assert_eq!(status["cataloged_sessions"], 1);
+    assert_eq!(status["indexed_catalog_sessions"], 0);
+    assert_eq!(status["indexed_items"], 0);
+}
+
+#[test]
+fn import_progress_json_goes_to_stderr_without_polluting_stdout() {
+    let temp = tempdir();
+    let fixture = provider_history_fixture("codex-sessions");
+    let output = ctx(&temp)
+        .args([
+            "import",
+            "--provider",
+            "codex",
+            "--path",
+            &fixture,
+            "--json",
+            "--progress",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["schema_version"], 1);
+    assert!(stdout["totals"]["imported_sessions"].as_u64().unwrap() > 0);
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains(r#""type":"ctx_progress""#), "{stderr}");
+    assert!(stderr.contains(r#""operation":"import""#), "{stderr}");
 }
 
 #[test]
@@ -440,7 +496,7 @@ fn codex_cli_resume_is_idempotent_rescan_and_filters_subagents() {
     assert_eq!(first["resume"], false);
     assert_eq!(first["resume_mode"], "normal_scan");
     assert_eq!(first["totals"]["imported_sessions"], 2);
-    assert_eq!(first["totals"]["imported_events"], 8);
+    assert_eq!(first["totals"]["imported_events"], 6);
     assert_eq!(first["totals"]["imported_edges"], 1);
 
     let with_subagents = json_output(ctx(&temp).args(["search", "subagent", "--json"]));
@@ -554,7 +610,7 @@ fn codex_cli_marks_deleted_raw_source_citations_unavailable() {
         &copied_text,
         "--json",
     ]));
-    assert_eq!(imported["totals"]["imported_events"], 8);
+    assert_eq!(imported["totals"]["imported_events"], 6);
 
     fs::remove_dir_all(&copied).unwrap();
 
@@ -577,14 +633,19 @@ fn privacy_redaction_oracle_covers_cli_json_and_sqlite() {
     let temp = tempdir();
     let fixture = redaction_fixture("codex-sessions");
 
-    let import = json_output(ctx(&temp).args([
-        "import",
-        "--provider",
-        "codex",
-        "--path",
-        &fixture,
-        "--json",
-    ]));
+    let import = json_output(
+        ctx(&temp)
+            .env("CTX_CODEX_TOOL_OUTPUT_MODE", "full")
+            .env("CTX_CODEX_INCLUDE_NOTICES", "1")
+            .args([
+                "import",
+                "--provider",
+                "codex",
+                "--path",
+                &fixture,
+                "--json",
+            ]),
+    );
     assert_eq!(import["schema_version"], 1);
     assert_eq!(import["totals"]["failed"], 0);
     assert!(import["totals"]["imported_sessions"].as_u64().unwrap() > 0);

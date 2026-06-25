@@ -1,8 +1,10 @@
 use std::{
-    fs,
-    io::Write,
+    env, fs,
+    io::{IsTerminal, Write},
     path::{Path, PathBuf},
     str::FromStr,
+    sync::{Arc, Mutex},
+    time::{Duration as StdDuration, Instant},
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -11,9 +13,11 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 use uuid::Uuid;
 use work_record_capture::{
-    import_codex_history_jsonl, import_codex_session_jsonl, import_codex_session_tree,
-    import_pi_session_jsonl, stable_capture_uuid, CodexHistoryImportOptions,
-    CodexSessionImportOptions, PiSessionImportOptions, ProviderImportSummary,
+    catalog_codex_session_tree, import_codex_history_jsonl, import_codex_session_jsonl,
+    import_codex_session_tree, import_pi_session_jsonl, stable_capture_uuid, CatalogSummary,
+    CodexHistoryImportOptions, CodexSessionCatalogOptions, CodexSessionImportOptions,
+    CodexSessionImportProgress, CodexSessionImportProgressCallback, CodexToolOutputMode,
+    PiSessionImportOptions, ProviderImportSummary,
 };
 use work_record_core::{
     database_path, default_data_root, CaptureProvider, ContextCitation, ContextCitationType, Event,
@@ -60,6 +64,8 @@ enum CommandRoot {
 struct SetupArgs {
     #[arg(long)]
     json: bool,
+    #[arg(long, value_enum, default_value_t = ProgressArg::Auto)]
+    progress: ProgressArg,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -80,6 +86,8 @@ struct ImportArgs {
     resume: bool,
     #[arg(long)]
     json: bool,
+    #[arg(long, value_enum, default_value_t = ProgressArg::Auto)]
+    progress: ProgressArg,
 }
 
 impl ImportArgs {
@@ -161,6 +169,14 @@ enum ProviderArg {
     Pi,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ProgressArg {
+    Auto,
+    Plain,
+    Json,
+    None,
+}
+
 impl ProviderArg {
     fn capture_provider(self) -> CaptureProvider {
         match self {
@@ -207,9 +223,292 @@ impl ImportTotals {
 }
 
 #[derive(Debug, Default)]
+struct CatalogTotals {
+    sources: usize,
+    source_files: usize,
+    source_bytes: u64,
+    cataloged_sessions: usize,
+    skipped_sessions: usize,
+    failed_sessions: usize,
+}
+
+impl CatalogTotals {
+    fn add(&mut self, summary: &CatalogSummary) {
+        self.sources += 1;
+        self.source_files += summary.source_files;
+        self.source_bytes = self.source_bytes.saturating_add(summary.source_bytes);
+        self.cataloged_sessions += summary.cataloged_sessions;
+        self.skipped_sessions += summary.skipped_sessions;
+        self.failed_sessions += summary.failed_sessions;
+    }
+}
+
+#[derive(Debug, Default)]
 struct SourceStats {
     files: usize,
     bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProgressRenderMode {
+    None,
+    Plain { interactive: bool },
+    Json,
+}
+
+#[derive(Debug)]
+struct ProgressState {
+    started: Instant,
+    last_emit: Option<Instant>,
+    last_line_len: usize,
+}
+
+#[derive(Clone)]
+struct ProgressReporter {
+    mode: ProgressRenderMode,
+    operation: &'static str,
+    total_bytes: u64,
+    state: Arc<Mutex<ProgressState>>,
+}
+
+impl ProgressReporter {
+    fn new(arg: ProgressArg, json_output: bool, operation: &'static str, total_bytes: u64) -> Self {
+        let stderr_is_terminal = std::io::stderr().is_terminal();
+        let mode = match arg {
+            ProgressArg::None => ProgressRenderMode::None,
+            ProgressArg::Json => ProgressRenderMode::Json,
+            ProgressArg::Plain => ProgressRenderMode::Plain {
+                interactive: stderr_is_terminal,
+            },
+            ProgressArg::Auto if json_output || !stderr_is_terminal => ProgressRenderMode::None,
+            ProgressArg::Auto => ProgressRenderMode::Plain { interactive: true },
+        };
+        Self {
+            mode,
+            operation,
+            total_bytes,
+            state: Arc::new(Mutex::new(ProgressState {
+                started: Instant::now(),
+                last_emit: None,
+                last_line_len: 0,
+            })),
+        }
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.mode != ProgressRenderMode::None
+    }
+
+    fn message(&self, phase: &'static str, message: impl Into<String>) {
+        if !self.is_enabled() {
+            return;
+        }
+        let message = message.into();
+        self.emit(ProgressLine {
+            phase,
+            message,
+            completed_bytes: 0,
+            total_bytes: self.total_bytes,
+            completed_files: None,
+            total_files: None,
+            imported_events: None,
+            done: false,
+            force: true,
+        });
+    }
+
+    fn done(&self, phase: &'static str, message: impl Into<String>, completed_bytes: u64) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.emit(ProgressLine {
+            phase,
+            message: message.into(),
+            completed_bytes,
+            total_bytes: self.total_bytes.max(completed_bytes),
+            completed_files: None,
+            total_files: None,
+            imported_events: None,
+            done: true,
+            force: true,
+        });
+    }
+
+    fn codex_import_callback(
+        &self,
+        source: &SourceInfo,
+        source_offset_bytes: u64,
+    ) -> Option<CodexSessionImportProgressCallback> {
+        if !self.is_enabled() || !matches!(source.provider, ProviderArg::Codex) {
+            return None;
+        }
+        let reporter = self.clone();
+        let provider = source.provider.as_str().to_owned();
+        let path = source.path.display().to_string();
+        Some(Arc::new(move |progress: CodexSessionImportProgress| {
+            let completed_bytes = source_offset_bytes.saturating_add(progress.completed_bytes);
+            reporter.emit(ProgressLine {
+                phase: "indexing",
+                message: format!("{provider} {path}"),
+                completed_bytes,
+                total_bytes: reporter.total_bytes.max(completed_bytes),
+                completed_files: Some(progress.completed_files),
+                total_files: Some(progress.total_files),
+                imported_events: Some(progress.imported_events),
+                done: progress.done,
+                force: progress.done,
+            });
+        }))
+    }
+
+    fn emit(&self, line: ProgressLine) {
+        let mut state = self.state.lock().expect("progress state poisoned");
+        let now = Instant::now();
+        if !line.force
+            && state
+                .last_emit
+                .is_some_and(|last| now.duration_since(last) < StdDuration::from_millis(900))
+        {
+            return;
+        }
+        state.last_emit = Some(now);
+        let elapsed = now.duration_since(state.started);
+        match self.mode {
+            ProgressRenderMode::None => {}
+            ProgressRenderMode::Json => {
+                let value = json!({
+                    "type": "ctx_progress",
+                    "operation": self.operation,
+                    "phase": line.phase,
+                    "message": line.message,
+                    "completed_bytes": line.completed_bytes,
+                    "total_bytes": line.total_bytes,
+                    "percent": progress_percent(line.completed_bytes, line.total_bytes),
+                    "elapsed_seconds": elapsed.as_secs_f64(),
+                    "eta_seconds": eta_seconds(line.completed_bytes, line.total_bytes, elapsed),
+                    "completed_files": line.completed_files,
+                    "total_files": line.total_files,
+                    "imported_events": line.imported_events,
+                    "done": line.done,
+                });
+                eprintln!("{value}");
+            }
+            ProgressRenderMode::Plain { interactive } => {
+                let rendered = render_progress_line(&line, elapsed);
+                if interactive {
+                    let padding = state.last_line_len.saturating_sub(rendered.len());
+                    eprint!("\r{}{}", rendered, " ".repeat(padding));
+                    if line.done {
+                        eprintln!();
+                        state.last_line_len = 0;
+                    } else {
+                        state.last_line_len = rendered.len();
+                        let _ = std::io::stderr().flush();
+                    }
+                } else {
+                    eprintln!("{rendered}");
+                }
+            }
+        }
+    }
+}
+
+struct ProgressLine {
+    phase: &'static str,
+    message: String,
+    completed_bytes: u64,
+    total_bytes: u64,
+    completed_files: Option<usize>,
+    total_files: Option<usize>,
+    imported_events: Option<usize>,
+    done: bool,
+    force: bool,
+}
+
+fn render_progress_line(line: &ProgressLine, elapsed: StdDuration) -> String {
+    let percent = progress_percent(line.completed_bytes, line.total_bytes);
+    let bar = progress_bar(percent, 20);
+    let eta = eta_seconds(line.completed_bytes, line.total_bytes, elapsed)
+        .map(format_seconds)
+        .unwrap_or_else(|| "estimating".to_owned());
+    let files = match (line.completed_files, line.total_files) {
+        (Some(done), Some(total)) if total > 0 => format!(" {done}/{total} files"),
+        _ => String::new(),
+    };
+    let events = line
+        .imported_events
+        .map(|events| format!(" {events} events"))
+        .unwrap_or_default();
+    let remaining = if line.done {
+        "done".to_owned()
+    } else {
+        format!("{eta} left")
+    };
+    format!(
+        "{} [{}] {:>5.1}% {}/{}{}{} {} - {}",
+        line.phase,
+        bar,
+        percent,
+        format_bytes(line.completed_bytes),
+        format_bytes(line.total_bytes),
+        files,
+        events,
+        remaining,
+        line.message
+    )
+}
+
+fn progress_percent(completed: u64, total: u64) -> f64 {
+    if total == 0 {
+        return 0.0;
+    }
+    ((completed as f64 / total as f64) * 100.0).clamp(0.0, 100.0)
+}
+
+fn eta_seconds(completed: u64, total: u64, elapsed: StdDuration) -> Option<f64> {
+    if completed == 0 || total <= completed {
+        return None;
+    }
+    let rate = completed as f64 / elapsed.as_secs_f64().max(0.001);
+    if rate <= 0.0 {
+        return None;
+    }
+    Some((total - completed) as f64 / rate)
+}
+
+fn progress_bar(percent: f64, width: usize) -> String {
+    let filled = ((percent / 100.0) * width as f64).round() as usize;
+    format!(
+        "{}{}",
+        "#".repeat(filled.min(width)),
+        "-".repeat(width.saturating_sub(filled))
+    )
+}
+
+fn format_seconds(seconds: f64) -> String {
+    let seconds = seconds.max(0.0).round() as u64;
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        let minutes = seconds / 60;
+        let rem = seconds % 60;
+        format!("{minutes}m{rem:02}s")
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes}B")
+    } else {
+        format!("{value:.1}{}", UNITS[unit])
+    }
 }
 
 struct ListItemDto;
@@ -246,6 +545,14 @@ fn run_setup(args: SetupArgs, data_root: PathBuf) -> Result<()> {
     let store = Store::open(&db_path)?;
     write_default_config(&data_root)?;
     let sources = discovered_sources();
+    let progress = ProgressReporter::new(args.progress, args.json, "setup", 0);
+    progress.message("cataloging", "cataloging discovered Codex sessions");
+    let (catalog, catalog_sources) = catalog_available_sources(&store, &sources)?;
+    progress.done(
+        "cataloging",
+        format!("cataloged {} Codex sessions", catalog.cataloged_sessions),
+        catalog.source_bytes,
+    );
 
     if args.json {
         print_json(json!({
@@ -254,6 +561,15 @@ fn run_setup(args: SetupArgs, data_root: PathBuf) -> Result<()> {
             "database_path": store.path(),
             "config_path": data_root.join(CONFIG_FILE),
             "sources": sources_json(&sources),
+            "catalog": {
+                "sources": catalog.sources,
+                "source_files": catalog.source_files,
+                "source_bytes": catalog.source_bytes,
+                "cataloged_sessions": catalog.cataloged_sessions,
+                "skipped_sessions": catalog.skipped_sessions,
+                "failed_sessions": catalog.failed_sessions,
+            },
+            "catalog_sources": catalog_sources,
             "network_required": false,
             "repo_writes": false,
         }))?;
@@ -262,6 +578,9 @@ fn run_setup(args: SetupArgs, data_root: PathBuf) -> Result<()> {
         println!("data_root: {}", data_root.display());
         println!("database_path: {}", store.path().display());
         println!("config_path: {}", data_root.join(CONFIG_FILE).display());
+        println!("cataloged_sessions: {}", catalog.cataloged_sessions);
+        println!("catalog_source_files: {}", catalog.source_files);
+        println!("catalog_source_bytes: {}", catalog.source_bytes);
         println!("next_steps:");
         println!("  ctx sources");
         println!("  ctx import --all");
@@ -275,14 +594,15 @@ fn run_status(args: JsonArgs, data_root: PathBuf) -> Result<()> {
     let db_path = database_path(data_root.clone());
     let initialized = db_path.exists();
     let config_path = data_root.join(CONFIG_FILE);
-    let (records, sources) = if initialized {
+    let (records, sources, catalog_counts) = if initialized {
         let store = Store::open(&db_path)?;
         (
             store.list_records(usize::MAX)?.len() + store.list_sessions()?.len(),
             store.list_capture_sources()?.len(),
+            store.catalog_session_counts()?,
         )
     } else {
-        (0, 0)
+        (0, 0, Default::default())
     };
 
     if args.json {
@@ -294,6 +614,9 @@ fn run_status(args: JsonArgs, data_root: PathBuf) -> Result<()> {
             "config_path": config_path,
             "indexed_items": records,
             "indexed_sources": sources,
+            "cataloged_sessions": catalog_counts.total,
+            "indexed_catalog_sessions": catalog_counts.indexed,
+            "stale_catalog_sessions": catalog_counts.stale,
             "local_only": true,
         }))?;
     } else {
@@ -303,6 +626,9 @@ fn run_status(args: JsonArgs, data_root: PathBuf) -> Result<()> {
         println!("initialized: {initialized}");
         println!("indexed_items: {records}");
         println!("indexed_sources: {sources}");
+        println!("cataloged_sessions: {}", catalog_counts.total);
+        println!("indexed_catalog_sessions: {}", catalog_counts.indexed);
+        println!("stale_catalog_sessions: {}", catalog_counts.stale);
         println!("local_only: true");
     }
     Ok(())
@@ -329,6 +655,44 @@ fn run_sources(args: JsonArgs) -> Result<()> {
     Ok(())
 }
 
+fn catalog_available_sources(
+    store: &Store,
+    sources: &[SourceInfo],
+) -> Result<(CatalogTotals, Vec<Value>)> {
+    let mut totals = CatalogTotals::default();
+    let mut catalog_sources = Vec::new();
+    for source in sources {
+        if source.provider.as_str() != ProviderArg::Codex.as_str()
+            || source.source_format != "codex_session_jsonl_tree"
+            || !source.exists
+        {
+            continue;
+        }
+        let summary = catalog_codex_session_tree(
+            &source.path,
+            store,
+            CodexSessionCatalogOptions {
+                source_root: Some(source.path.clone()),
+                allow_partial_failures: true,
+                ..CodexSessionCatalogOptions::default()
+            },
+        )
+        .with_context(|| format!("catalog Codex sessions from {}", source.path.display()))?;
+        totals.add(&summary);
+        catalog_sources.push(json!({
+            "provider": source.provider.as_str(),
+            "path": source.path,
+            "source_format": source.source_format,
+            "source_files": summary.source_files,
+            "source_bytes": summary.source_bytes,
+            "cataloged_sessions": summary.cataloged_sessions,
+            "skipped_sessions": summary.skipped_sessions,
+            "failed_sessions": summary.failed_sessions,
+        }));
+    }
+    Ok((totals, catalog_sources))
+}
+
 fn run_import(args: ImportArgs, data_root: PathBuf) -> Result<()> {
     fs::create_dir_all(&data_root)?;
     write_default_config(&data_root)?;
@@ -343,9 +707,27 @@ fn run_import(args: ImportArgs, data_root: PathBuf) -> Result<()> {
         ));
     }
 
+    let mut planned_sources = Vec::new();
+    let mut planned_total_bytes = 0u64;
     for source in requests {
         let stats = source_stats(&source.path)
             .with_context(|| format!("scan import source {}", source.path.display()))?;
+        planned_total_bytes = planned_total_bytes.saturating_add(stats.bytes);
+        planned_sources.push((source, stats));
+    }
+
+    let progress = ProgressReporter::new(args.progress, args.json, "import", planned_total_bytes);
+    progress.message(
+        "discovering",
+        format!(
+            "found {} import source(s), {}",
+            planned_sources.len(),
+            format_bytes(planned_total_bytes)
+        ),
+    );
+
+    let mut completed_source_bytes = 0u64;
+    for (source, stats) in planned_sources {
         if !args.json {
             println!(
                 "importing {} {} ({} files, {} bytes)",
@@ -355,8 +737,15 @@ fn run_import(args: ImportArgs, data_root: PathBuf) -> Result<()> {
                 stats.bytes
             );
         }
-        let summary = import_one_source(&mut store, &source)?;
+        let source_progress = progress.codex_import_callback(&source, completed_source_bytes);
+        let summary = import_one_source(&mut store, &source, source_progress)?;
         totals.add(&summary, &stats);
+        completed_source_bytes = completed_source_bytes.saturating_add(stats.bytes);
+        progress.done(
+            "indexing",
+            format!("imported {}", source.path.display()),
+            completed_source_bytes,
+        );
         if !args.json {
             println!(
                 "source_imported: sessions={} events={} edges={} skipped={} failed={}",
@@ -408,6 +797,11 @@ fn run_import(args: ImportArgs, data_root: PathBuf) -> Result<()> {
         println!("resume: {}", args.resume);
         println!("resume_mode: {}", args.resume_mode());
     }
+    progress.done(
+        "finalizing",
+        format!("indexed {} source file(s)", totals.source_files),
+        totals.source_bytes,
+    );
     Ok(())
 }
 
@@ -746,10 +1140,19 @@ fn public_record_item_type(record: &WorkRecord) -> String {
 }
 
 fn item_type_for_id(store: &Store, item_id: Uuid) -> String {
-    store
-        .get_record(item_id)
-        .map(|record| public_record_item_type(&record))
-        .unwrap_or_else(|_| "indexed_item".to_owned())
+    if let Ok(record) = store.get_record(item_id) {
+        return public_record_item_type(&record);
+    }
+    if store.get_event(item_id).is_ok() {
+        return "event".to_owned();
+    }
+    if store.get_session(item_id).is_ok() {
+        return "session".to_owned();
+    }
+    if store.get_run(item_id).is_ok() {
+        return "run".to_owned();
+    }
+    "indexed_item".to_owned()
 }
 
 fn source_path_for(store: &Store, source_id: Option<Uuid>) -> Option<String> {
@@ -965,10 +1368,19 @@ fn import_requests(args: &ImportArgs) -> Result<Vec<SourceInfo>> {
         .collect())
 }
 
-fn import_one_source(store: &mut Store, source: &SourceInfo) -> Result<ProviderImportSummary> {
+fn import_one_source(
+    store: &mut Store,
+    source: &SourceInfo,
+    progress: Option<CodexSessionImportProgressCallback>,
+) -> Result<ProviderImportSummary> {
     let record = import_record_for_source(source);
     let record_id = record.id;
     store.upsert_record(&record)?;
+    let event_search_needs_backfill = store.event_search_projection_needs_backfill()?;
+    let refresh_search_after_import =
+        event_search_needs_backfill || !source_uses_incremental_event_search(source);
+    let tool_output_mode = codex_tool_output_mode()?;
+    let include_notices = codex_include_notices();
     let summary = match source.provider {
         ProviderArg::Codex => {
             if source.path.is_dir() {
@@ -979,6 +1391,9 @@ fn import_one_source(store: &mut Store, source: &SourceInfo) -> Result<ProviderI
                         source_path: Some(source.path.clone()),
                         work_record_id: Some(record_id),
                         allow_partial_failures: true,
+                        tool_output_mode,
+                        include_notices,
+                        progress: progress.clone(),
                         ..CodexSessionImportOptions::default()
                     },
                 )
@@ -1008,6 +1423,9 @@ fn import_one_source(store: &mut Store, source: &SourceInfo) -> Result<ProviderI
                         source_path: Some(source.path.clone()),
                         work_record_id: Some(record_id),
                         allow_partial_failures: true,
+                        tool_output_mode,
+                        include_notices,
+                        progress,
                         ..CodexSessionImportOptions::default()
                     },
                 )
@@ -1026,8 +1444,43 @@ fn import_one_source(store: &mut Store, source: &SourceInfo) -> Result<ProviderI
         )
         .map_err(anyhow::Error::from),
     }?;
-    store.refresh_search_index()?;
+    if refresh_search_after_import {
+        store.refresh_search_index()?;
+    }
     Ok(summary)
+}
+
+fn source_uses_incremental_event_search(source: &SourceInfo) -> bool {
+    matches!(source.provider, ProviderArg::Codex)
+        && (source.path.is_dir()
+            || !source
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "history.jsonl"))
+}
+
+fn codex_tool_output_mode() -> Result<CodexToolOutputMode> {
+    if let Some(raw) = env::var_os("CTX_CODEX_TOOL_OUTPUT_MODE") {
+        let raw = raw.to_string_lossy();
+        return match raw.as_ref() {
+            "full" => Ok(CodexToolOutputMode::Full),
+            "metadata" => Ok(CodexToolOutputMode::Metadata),
+            "failures" | "failure" | "errors" | "error" => Ok(CodexToolOutputMode::Failures),
+            "skip" => Ok(CodexToolOutputMode::Skip),
+            other => Err(anyhow!(
+                "unsupported CTX_CODEX_TOOL_OUTPUT_MODE={other:?}; expected full, metadata, failures, or skip"
+            )),
+        };
+    }
+    if env::var_os("CTX_EXPERIMENTAL_SKIP_TOOL_OUTPUTS").is_some() {
+        return Ok(CodexToolOutputMode::Skip);
+    }
+    Ok(CodexToolOutputMode::Failures)
+}
+
+fn codex_include_notices() -> bool {
+    env::var_os("CTX_CODEX_INCLUDE_NOTICES").is_some()
 }
 
 fn source_stats(path: &Path) -> Result<SourceStats> {

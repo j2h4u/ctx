@@ -16,6 +16,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
@@ -111,7 +112,7 @@ pub fn classify_evidence_freshness(
     EvidenceFreshness::Fresh
 }
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const BUSY_TIMEOUT: Duration = Duration::from_millis(5_000);
 const OBJECTS_DIR: &str = "objects";
 const SPOOL_DIR: &str = "spool";
@@ -137,6 +138,56 @@ pub struct LocalWorkspaceIdentity {
     pub display_root: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatalogSession {
+    pub provider: CaptureProvider,
+    pub source_format: String,
+    pub source_root: String,
+    pub source_path: String,
+    pub external_session_id: Option<String>,
+    pub parent_external_session_id: Option<String>,
+    pub agent_type: AgentType,
+    pub role_hint: Option<String>,
+    pub external_agent_id: Option<String>,
+    pub cwd: Option<String>,
+    pub session_started_at_ms: Option<i64>,
+    pub file_size_bytes: u64,
+    pub file_modified_at_ms: i64,
+    pub cataloged_at_ms: i64,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CatalogCounts {
+    pub total: usize,
+    pub indexed: usize,
+    pub stale: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventSearchHit {
+    pub event_id: Uuid,
+    pub work_record_id: Option<Uuid>,
+    pub session_id: Option<Uuid>,
+    pub run_id: Option<Uuid>,
+    pub seq: u64,
+    pub event_type: EventType,
+    pub role: Option<EventRole>,
+    pub occurred_at: DateTime<Utc>,
+    pub preview: String,
+    pub score: f64,
+    pub provider: Option<CaptureProvider>,
+    pub session_external_session_id: Option<String>,
+    pub agent_type: Option<AgentType>,
+    pub session_is_primary: Option<bool>,
+    pub cwd: Option<String>,
+    pub raw_source_path: Option<String>,
+    pub cursor: Option<String>,
+    pub record_title: Option<String>,
+    pub record_kind: Option<String>,
+    pub record_workspace: Option<String>,
 }
 
 const WORK_RECORD_COLUMNS: &[ColumnSpec] = &[
@@ -310,6 +361,25 @@ CREATE TABLE IF NOT EXISTS capture_sources (
     visibility TEXT NOT NULL DEFAULT 'local_only' CHECK (visibility IN ('local_only', 'reportable', 'sync_metadata', 'sync_full', 'withheld')),
     sync_state TEXT NOT NULL DEFAULT 'local_only' CHECK (sync_state IN ('local_only', 'pending', 'synced', 'failed', 'withheld')),
     sync_version INTEGER NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS catalog_sessions (
+    source_path TEXT PRIMARY KEY NOT NULL,
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude', 'pi', 'opencode', 'antigravity', 'gemini', 'cursor', 'shell', 'git', 'jj', 'gh', 'unknown')),
+    source_format TEXT NOT NULL,
+    source_root TEXT NOT NULL,
+    external_session_id TEXT,
+    parent_external_session_id TEXT,
+    agent_type TEXT NOT NULL CHECK (agent_type IN ('primary', 'subagent', 'agent_team_member', 'reviewer', 'implementer', 'unknown')),
+    role_hint TEXT,
+    external_agent_id TEXT,
+    cwd TEXT,
+    session_started_at_ms INTEGER,
+    file_size_bytes INTEGER NOT NULL,
+    file_modified_at_ms INTEGER NOT NULL,
+    cataloged_at_ms INTEGER NOT NULL,
+    is_stale INTEGER NOT NULL DEFAULT 0,
     metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 
@@ -670,6 +740,12 @@ CREATE TABLE IF NOT EXISTS audit_log (
 const INDEXES_SQL: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_capture_sources_external_session_id ON capture_sources(provider, external_session_id);
 
+CREATE INDEX IF NOT EXISTS idx_catalog_sessions_provider_external_session_id ON catalog_sessions(provider, external_session_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_sessions_provider_source_root_stale ON catalog_sessions(provider, source_root, is_stale);
+CREATE INDEX IF NOT EXISTS idx_catalog_sessions_started_at ON catalog_sessions(session_started_at_ms);
+CREATE INDEX IF NOT EXISTS idx_catalog_sessions_cwd ON catalog_sessions(cwd);
+CREATE INDEX IF NOT EXISTS idx_sessions_provider_external_session_id ON sessions(provider, external_session_id);
+
 CREATE INDEX IF NOT EXISTS idx_work_records_primary_vcs_workspace_id ON work_records(primary_vcs_workspace_id);
 CREATE INDEX IF NOT EXISTS idx_work_records_source_id ON work_records(source_id);
 CREATE INDEX IF NOT EXISTS idx_work_records_last_activity_at_ms ON work_records(last_activity_at_ms);
@@ -849,6 +925,9 @@ impl Store {
         if user_version < 4 {
             migrate_to_v4(&self.conn)?;
         }
+        if user_version < 5 {
+            migrate_to_v5(&self.conn)?;
+        }
         create_fts_tables_if_supported(&self.conn)?;
         Ok(())
     }
@@ -869,6 +948,14 @@ impl Store {
 
     pub fn refresh_search_index(&self) -> Result<()> {
         self.rebuild_search_projection()
+    }
+
+    pub fn event_search_projection_needs_backfill(&self) -> Result<bool> {
+        if !table_exists(&self.conn, "event_search")? {
+            return Ok(false);
+        }
+        Ok(table_row_count(&self.conn, "events")? > 0
+            && table_row_count(&self.conn, "event_search")? == 0)
     }
 
     pub fn upsert_capture_source(&self, source: &CaptureSource) -> Result<()> {
@@ -950,6 +1037,120 @@ impl Store {
             )
             .optional()
             .map_err(StoreError::from)
+    }
+
+    pub fn mark_catalog_source_stale(
+        &self,
+        provider: CaptureProvider,
+        source_root: &str,
+        cataloged_at_ms: i64,
+    ) -> Result<usize> {
+        let changed = self.conn.execute(
+            r#"
+            UPDATE catalog_sessions
+            SET is_stale = 1, cataloged_at_ms = ?3
+            WHERE provider = ?1 AND source_root = ?2
+            "#,
+            params![provider.as_str(), source_root, cataloged_at_ms],
+        )?;
+        Ok(changed)
+    }
+
+    pub fn upsert_catalog_sessions(&self, sessions: &[CatalogSession]) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            INSERT INTO catalog_sessions
+            (
+                source_path, provider, source_format, source_root,
+                external_session_id, parent_external_session_id, agent_type, role_hint,
+                external_agent_id, cwd, session_started_at_ms, file_size_bytes,
+                file_modified_at_ms, cataloged_at_ms, is_stale, metadata_json
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15)
+            ON CONFLICT(source_path) DO UPDATE SET
+                provider = excluded.provider,
+                source_format = excluded.source_format,
+                source_root = excluded.source_root,
+                external_session_id = excluded.external_session_id,
+                parent_external_session_id = excluded.parent_external_session_id,
+                agent_type = excluded.agent_type,
+                role_hint = excluded.role_hint,
+                external_agent_id = excluded.external_agent_id,
+                cwd = excluded.cwd,
+                session_started_at_ms = excluded.session_started_at_ms,
+                file_size_bytes = excluded.file_size_bytes,
+                file_modified_at_ms = excluded.file_modified_at_ms,
+                cataloged_at_ms = excluded.cataloged_at_ms,
+                is_stale = 0,
+                metadata_json = excluded.metadata_json
+            "#,
+        )?;
+        for session in sessions {
+            stmt.execute(params![
+                session.source_path.as_str(),
+                session.provider.as_str(),
+                session.source_format.as_str(),
+                session.source_root.as_str(),
+                session.external_session_id.as_deref(),
+                session.parent_external_session_id.as_deref(),
+                session.agent_type.as_str(),
+                session.role_hint.as_deref(),
+                session.external_agent_id.as_deref(),
+                session.cwd.as_deref(),
+                session.session_started_at_ms,
+                capped_i64(session.file_size_bytes),
+                session.file_modified_at_ms,
+                session.cataloged_at_ms,
+                serde_json::to_string(&session.metadata)?,
+            ])?;
+        }
+        Ok(())
+    }
+
+    pub fn catalog_session_count(&self) -> Result<usize> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM catalog_sessions WHERE is_stale = 0",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count as usize)
+            .map_err(StoreError::from)
+    }
+
+    pub fn catalog_session_counts(&self) -> Result<CatalogCounts> {
+        let total = self.conn.query_row(
+            "SELECT COUNT(*) FROM catalog_sessions WHERE is_stale = 0",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as usize;
+        let indexed = self.conn.query_row(
+            r#"
+                SELECT COUNT(*)
+                FROM catalog_sessions AS catalog
+                WHERE catalog.is_stale = 0
+                  AND catalog.external_session_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1
+                    FROM sessions AS session
+                    WHERE session.provider = catalog.provider
+                      AND session.external_session_id = catalog.external_session_id
+                    LIMIT 1
+                  )
+                "#,
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as usize;
+        let stale = self.conn.query_row(
+            "SELECT COUNT(*) FROM catalog_sessions WHERE is_stale != 0",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as usize;
+        Ok(CatalogCounts {
+            total,
+            indexed,
+            stale,
+        })
     }
 
     pub fn upsert_session(&self, session: &Session) -> Result<()> {
@@ -1165,6 +1366,42 @@ impl Store {
         Ok(())
     }
 
+    pub fn insert_run_if_absent(&self, run: &Run) -> Result<bool> {
+        let changed = self
+            .conn
+            .prepare_cached(
+                r#"
+                INSERT OR IGNORE INTO runs
+                (id, work_record_id, session_id, run_type, status, started_at_ms, ended_at_ms, exit_code, cwd, command_preview, input_blob_id, output_blob_id, created_at_ms, updated_at_ms, source_id, visibility, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+                "#,
+            )?
+            .execute(params![
+                run.id.to_string(),
+                optional_uuid_string(run.work_record_id),
+                optional_uuid_string(run.session_id),
+                run.run_type.as_str(),
+                run.status.as_str(),
+                timestamp_ms(run.started_at),
+                optional_timestamp_ms(run.ended_at),
+                run.exit_code,
+                run.cwd.as_deref(),
+                run.command_preview.as_deref(),
+                optional_uuid_string(run.input_blob_id),
+                optional_uuid_string(run.output_blob_id),
+                timestamp_ms(run.timestamps.created_at),
+                timestamp_ms(run.timestamps.updated_at),
+                optional_uuid_string(run.source_id),
+                run.sync.visibility.as_str(),
+                run.sync.fidelity.as_str(),
+                run.sync.sync_state.as_str(),
+                run.sync.sync_version as i64,
+                optional_timestamp_ms(run.sync.deleted_at),
+                serde_json::to_string(&run.sync.metadata)?,
+            ])?;
+        Ok(changed > 0)
+    }
+
     pub fn get_run(&self, id: Uuid) -> Result<Run> {
         self.conn
             .query_row(
@@ -1294,6 +1531,43 @@ impl Store {
         Ok(event_id)
     }
 
+    pub fn insert_event_if_absent(&self, event: &Event) -> Result<bool> {
+        let changed = self
+            .conn
+            .prepare_cached(
+                r#"
+                INSERT OR IGNORE INTO events
+                (id, seq, work_record_id, session_id, run_id, event_type, role, occurred_at_ms, capture_source_id, payload_json, payload_blob_id, dedupe_key, visibility, redaction_state, fidelity, sync_state, sync_version, deleted_at_ms, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+                "#,
+            )?
+            .execute(params![
+                event.id.to_string(),
+                event.seq as i64,
+                optional_uuid_string(event.work_record_id),
+                optional_uuid_string(event.session_id),
+                optional_uuid_string(event.run_id),
+                event.event_type.as_str(),
+                event.role.map(|role| role.as_str()),
+                timestamp_ms(event.occurred_at),
+                optional_uuid_string(event.capture_source_id),
+                serde_json::to_string(&event.payload)?,
+                optional_uuid_string(event.payload_blob_id),
+                event.dedupe_key.as_deref(),
+                event.sync.visibility.as_str(),
+                event.redaction_state.as_str(),
+                event.sync.fidelity.as_str(),
+                event.sync.sync_state.as_str(),
+                event.sync.sync_version as i64,
+                optional_timestamp_ms(event.sync.deleted_at),
+                serde_json::to_string(&event.sync.metadata)?,
+            ])?;
+        if changed > 0 {
+            insert_event_search_projection_for_event(&self.conn, event)?;
+        }
+        Ok(changed > 0)
+    }
+
     pub fn event_id_by_dedupe_key(&self, dedupe_key: &str) -> Result<Uuid> {
         self.conn
             .query_row(
@@ -1302,6 +1576,17 @@ impl Store {
                 |row| parse_uuid(row.get::<_, String>(0)?),
             )
             .map_err(StoreError::from)
+    }
+
+    pub fn get_event(&self, id: Uuid) -> Result<Event> {
+        self.conn
+            .query_row(
+                event_select_sql("WHERE id = ?1").as_str(),
+                params![id.to_string()],
+                event_from_row,
+            )
+            .optional()?
+            .ok_or(StoreError::NotFound(id))
     }
 
     pub fn events_for_session(&self, session_id: Uuid) -> Result<Vec<Event>> {
@@ -2211,6 +2496,95 @@ impl Store {
         Ok(Some(records))
     }
 
+    pub fn max_events_per_work_record(&self) -> Result<i64> {
+        let max_events = self.conn.query_row(
+            r#"
+            SELECT COALESCE(MAX(event_count), 0)
+            FROM (
+                SELECT COUNT(*) AS event_count
+                FROM events
+                GROUP BY work_record_id
+            )
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(max_events)
+    }
+
+    pub fn search_event_hits(&self, query: &str, limit: usize) -> Result<Vec<EventSearchHit>> {
+        if !table_exists(&self.conn, "event_search")? {
+            return Ok(Vec::new());
+        }
+        let Some(match_query) = fts_match_query(query) else {
+            return Ok(Vec::new());
+        };
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT event_search.event_id,
+                   COALESCE(e.work_record_id, event_search.work_record_id, s.work_record_id, rs.work_record_id),
+                   COALESCE(e.session_id, event_search.session_id, s.id, rs.id),
+                   e.run_id,
+                   e.seq,
+                   e.event_type,
+                   e.role,
+                   e.occurred_at_ms,
+                   event_search.safe_preview_text,
+                   bm25(event_search),
+                   COALESCE(s.provider, rs.provider, event_source.provider, session_source.provider, run_source.provider),
+                   COALESCE(s.external_session_id, rs.external_session_id),
+                   COALESCE(s.agent_type, rs.agent_type),
+                   COALESCE(s.is_primary, rs.is_primary),
+                   COALESCE(event_source.cwd, session_source.cwd, run_source.cwd),
+                   COALESCE(event_source.raw_source_path, session_source.raw_source_path, run_source.raw_source_path),
+                   e.payload_json,
+                   COALESCE(event_source.metadata_json, session_source.metadata_json, run_source.metadata_json),
+                   wr.title,
+                   wr.kind,
+                   wr.workspace
+            FROM event_search
+            JOIN events e ON e.id = event_search.event_id
+            LEFT JOIN runs r ON r.id = e.run_id
+            LEFT JOIN sessions s ON s.id = COALESCE(e.session_id, event_search.session_id)
+            LEFT JOIN sessions rs ON rs.id = r.session_id
+            LEFT JOIN capture_sources event_source ON event_source.id = e.capture_source_id
+            LEFT JOIN capture_sources session_source ON session_source.id = COALESCE(s.capture_source_id, rs.capture_source_id)
+            LEFT JOIN capture_sources run_source ON run_source.id = r.source_id
+            LEFT JOIN work_records wr ON wr.id = COALESCE(e.work_record_id, event_search.work_record_id, s.work_record_id, rs.work_record_id, r.work_record_id)
+            WHERE event_search MATCH ?1
+            ORDER BY bm25(event_search), e.occurred_at_ms DESC, e.seq DESC, event_search.event_id
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(params![match_query, limit.max(1) as i64], |row| {
+            let payload_json = row.get::<_, String>(16)?;
+            let source_metadata_json = row.get::<_, Option<String>>(17)?;
+            Ok(EventSearchHit {
+                event_id: parse_uuid(row.get::<_, String>(0)?)?,
+                work_record_id: parse_optional_uuid(row.get(1)?)?,
+                session_id: parse_optional_uuid(row.get(2)?)?,
+                run_id: parse_optional_uuid(row.get(3)?)?,
+                seq: row.get::<_, i64>(4)? as u64,
+                event_type: parse_text_enum::<EventType>(row.get::<_, String>(5)?)?,
+                role: parse_optional_text_enum::<EventRole>(row.get(6)?)?,
+                occurred_at: ms_to_time(row.get(7)?)?,
+                preview: row.get(8)?,
+                score: row.get(9)?,
+                provider: parse_optional_text_enum::<CaptureProvider>(row.get(10)?)?,
+                session_external_session_id: row.get(11)?,
+                agent_type: parse_optional_text_enum::<AgentType>(row.get(12)?)?,
+                session_is_primary: row.get::<_, Option<i64>>(13)?.map(|value| value != 0),
+                cwd: row.get(14)?,
+                raw_source_path: row.get(15)?,
+                cursor: event_search_cursor(&payload_json, source_metadata_json.as_deref())?,
+                record_title: row.get(18)?,
+                record_kind: row.get(19)?,
+                record_workspace: row.get(20)?,
+            })
+        })?;
+        collect_rows(rows)
+    }
+
     #[cfg(feature = "legacy-pr-evidence")]
     pub fn insert_evidence(&self, evidence: &Evidence) -> Result<()> {
         let work_record_id = evidence
@@ -2840,6 +3214,10 @@ fn configure_connection(conn: &Connection, busy_timeout: Duration) -> Result<()>
         r#"
         PRAGMA foreign_keys = ON;
         PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        PRAGMA temp_store = MEMORY;
+        PRAGMA cache_size = -32768;
+        PRAGMA wal_autocheckpoint = 10000;
         "#,
     )?;
     Ok(())
@@ -2954,22 +3332,22 @@ fn rebuild_search_projection(conn: &Connection) -> Result<()> {
         collect_rows(rows)?
     };
 
+    let mut insert_record_search = conn.prepare(
+        r#"
+        INSERT INTO work_record_search
+        (record_id, title, summary, primary_user_text, decision_text, context_text, tag_text)
+        VALUES (?1, ?2, ?3, ?4, '', ?5, ?6)
+        "#,
+    )?;
     for record in records {
-        conn.execute(
-            r#"
-            INSERT INTO work_record_search
-            (record_id, title, summary, primary_user_text, decision_text, context_text, tag_text)
-            VALUES (?1, ?2, ?3, ?4, '', ?5, ?6)
-            "#,
-            params![
-                record.id.to_string(),
-                redact_preview(&record.title, 512),
-                redact_preview(&record.body, 2048),
-                redact_preview(&record.body, 2048),
-                "",
-                redact_preview(&record.tags.join(" "), 1024),
-            ],
-        )?;
+        insert_record_search.execute(params![
+            record.id.to_string(),
+            redact_preview(&record.title, 512),
+            redact_preview(&record.body, 2048),
+            redact_preview(&record.body, 2048),
+            "",
+            redact_preview(&record.tags.join(" "), 1024),
+        ])?;
     }
 
     Ok(())
@@ -3044,6 +3422,13 @@ fn populate_event_search_projection(conn: &Connection) -> Result<()> {
             row.get::<_, String>(6)?,
         ))
     })?;
+    let mut insert_event_search = conn.prepare(
+        r#"
+        INSERT INTO event_search
+        (event_id, work_record_id, session_id, role, safe_preview_text, rank_bucket)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "#,
+    )?;
     for row in rows {
         let (event_id, work_record_id, session_id, role, event_type, payload_json, redaction_state) =
             row?;
@@ -3051,22 +3436,41 @@ fn populate_event_search_projection(conn: &Connection) -> Result<()> {
         if preview.trim().is_empty() {
             continue;
         }
-        conn.execute(
-            r#"
-            INSERT INTO event_search
-            (event_id, work_record_id, session_id, role, safe_preview_text, rank_bucket)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-            "#,
-            params![
-                event_id,
-                work_record_id,
-                session_id,
-                role,
-                preview,
-                event_type
-            ],
-        )?;
+        insert_event_search.execute(params![
+            event_id,
+            work_record_id,
+            session_id,
+            role,
+            preview,
+            event_type
+        ])?;
     }
+    Ok(())
+}
+
+fn insert_event_search_projection_for_event(conn: &Connection, event: &Event) -> Result<()> {
+    if !table_exists(conn, "event_search")? {
+        return Ok(());
+    }
+    let preview = event_search_preview_from_payload(&event.payload, event.redaction_state);
+    if preview.trim().is_empty() {
+        return Ok(());
+    }
+    conn.prepare_cached(
+        r#"
+        INSERT INTO event_search
+        (event_id, work_record_id, session_id, role, safe_preview_text, rank_bucket)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "#,
+    )?
+    .execute(params![
+        event.id.to_string(),
+        optional_uuid_string(event.work_record_id),
+        optional_uuid_string(event.session_id),
+        event.role.map(|role| role.as_str()),
+        preview,
+        event.event_type.as_str(),
+    ])?;
     Ok(())
 }
 
@@ -3075,6 +3479,19 @@ fn event_search_preview(payload_json: &str, redaction_state: &str) -> Result<Str
         return Ok("raw event payload withheld".to_owned());
     }
     let payload: serde_json::Value = serde_json::from_str(payload_json)?;
+    Ok(event_search_preview_from_payload(
+        &payload,
+        parse_text_enum::<RedactionState>(redaction_state.to_owned())?,
+    ))
+}
+
+fn event_search_preview_from_payload(
+    payload: &serde_json::Value,
+    redaction_state: RedactionState,
+) -> String {
+    if redaction_state == RedactionState::Raw {
+        return "raw event payload withheld".to_owned();
+    }
     let preview = event_payload_preview(&payload)
         .or_else(|| {
             if payload.is_object() || payload.is_array() {
@@ -3084,7 +3501,7 @@ fn event_search_preview(payload_json: &str, redaction_state: &str) -> Result<Str
             }
         })
         .unwrap_or_default();
-    Ok(redact_share_safe_preview(&preview, 2048))
+    redact_share_safe_preview(&preview, 2048)
 }
 
 fn event_payload_preview(payload: &serde_json::Value) -> Option<String> {
@@ -3246,6 +3663,29 @@ fn migrate_to_v4(conn: &Connection) -> Result<()> {
             }
             if foreign_keys_enabled != 0 {
                 conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            }
+            Err(err)
+        }
+    }
+}
+
+fn migrate_to_v5(conn: &Connection) -> Result<()> {
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+    let migration = (|| -> Result<()> {
+        conn.execute_batch(CREATE_TABLES_SQL)?;
+        conn.execute_batch(INDEXES_SQL)?;
+        conn.execute_batch("PRAGMA user_version = 5;")?;
+        Ok(())
+    })();
+
+    match migration {
+        Ok(()) => {
+            conn.execute_batch("COMMIT;")?;
+            Ok(())
+        }
+        Err(err) => {
+            if let Err(rollback_err) = conn.execute_batch("ROLLBACK;") {
+                return Err(StoreError::Sql(rollback_err));
             }
             Err(err)
         }
@@ -3464,6 +3904,10 @@ fn count_foreign_key_failures(conn: &Connection) -> Result<i64> {
 
 fn timestamp_ms(value: DateTime<Utc>) -> i64 {
     value.timestamp_millis()
+}
+
+fn capped_i64(value: u64) -> i64 {
+    value.min(i64::MAX as u64) as i64
 }
 
 fn time_ms(value: i64) -> DateTime<Utc> {
@@ -5949,6 +6393,44 @@ where
         .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
 }
 
+fn parse_optional_text_enum<T>(value: Option<String>) -> rusqlite::Result<Option<T>>
+where
+    T: FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    value.map(parse_text_enum).transpose()
+}
+
+fn event_search_cursor(
+    payload_json: &str,
+    source_metadata_json: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    let payload: serde_json::Value = serde_json::from_str(payload_json)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+    if let Some(cursor) = payload.get("cursor").and_then(|value| value.as_str()) {
+        return Ok(Some(cursor.to_owned()));
+    }
+    if let Some(cursor) = payload
+        .get("body")
+        .and_then(|body| body.get("cursor"))
+        .and_then(|value| value.as_str())
+    {
+        return Ok(Some(cursor.to_owned()));
+    }
+
+    let Some(source_metadata_json) = source_metadata_json else {
+        return Ok(None);
+    };
+    let metadata: serde_json::Value = serde_json::from_str(source_metadata_json)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+    Ok(metadata
+        .get("cursor")
+        .and_then(|cursor| cursor.get("after"))
+        .and_then(|after| after.get("cursor"))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned))
+}
+
 fn collect_rows<T>(
     rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>,
 ) -> Result<Vec<T>> {
@@ -5965,7 +6447,7 @@ mod search_order_tests {
 
     fn tempdir() -> tempfile::TempDir {
         let root = std::env::current_dir().unwrap().join("target/test-data");
-        std::fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&root).unwrap();
         tempfile::Builder::new()
             .prefix("work-record-store-search-order-")
             .tempdir_in(root)
@@ -6026,6 +6508,110 @@ mod search_order_tests {
         drop(store);
         let reopened = Store::open(&path).unwrap();
         assert_search_order(&reopened, &expected);
+    }
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+
+    fn tempdir() -> tempfile::TempDir {
+        let root = std::env::current_dir().unwrap().join("target/test-data");
+        fs::create_dir_all(&root).unwrap();
+        tempfile::Builder::new()
+            .prefix("work-record-store-catalog-")
+            .tempdir_in(root)
+            .unwrap()
+    }
+
+    fn fixed_time() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-06-23T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn timestamps() -> EntityTimestamps {
+        EntityTimestamps {
+            created_at: fixed_time(),
+            updated_at: fixed_time(),
+        }
+    }
+
+    fn sync_metadata() -> SyncMetadata {
+        SyncMetadata {
+            visibility: Visibility::LocalOnly,
+            fidelity: Fidelity::Imported,
+            sync_state: SyncState::LocalOnly,
+            sync_version: 0,
+            deleted_at: None,
+            metadata: serde_json::json!({}),
+        }
+    }
+
+    #[test]
+    fn catalog_sessions_count_indexed_and_stale_rows() {
+        let temp = tempdir();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let cataloged_at_ms = timestamp_ms(fixed_time());
+        store
+            .upsert_catalog_sessions(&[CatalogSession {
+                provider: CaptureProvider::Codex,
+                source_format: "codex_session_jsonl".into(),
+                source_root: "/home/user/.codex/sessions".into(),
+                source_path: "/home/user/.codex/sessions/2026/06/24/rollout.jsonl".into(),
+                external_session_id: Some("codex-session-1".into()),
+                parent_external_session_id: None,
+                agent_type: AgentType::Primary,
+                role_hint: Some("primary".into()),
+                external_agent_id: None,
+                cwd: Some("/repo".into()),
+                session_started_at_ms: Some(cataloged_at_ms),
+                file_size_bytes: 42,
+                file_modified_at_ms: cataloged_at_ms,
+                cataloged_at_ms,
+                metadata: serde_json::json!({"catalog_scope": "session_meta"}),
+            }])
+            .unwrap();
+
+        let counts = store.catalog_session_counts().unwrap();
+        assert_eq!(counts.total, 1);
+        assert_eq!(counts.indexed, 0);
+        assert_eq!(counts.stale, 0);
+
+        store
+            .upsert_session(&Session {
+                id: new_id(),
+                work_record_id: None,
+                parent_session_id: None,
+                root_session_id: None,
+                capture_source_id: None,
+                provider: CaptureProvider::Codex,
+                external_session_id: Some("codex-session-1".into()),
+                external_agent_id: None,
+                agent_type: AgentType::Primary,
+                role_hint: Some("primary".into()),
+                is_primary: true,
+                status: SessionStatus::Imported,
+                transcript_blob_id: None,
+                started_at: fixed_time(),
+                ended_at: None,
+                timestamps: timestamps(),
+                sync: sync_metadata(),
+            })
+            .unwrap();
+        assert_eq!(store.catalog_session_counts().unwrap().indexed, 1);
+
+        store
+            .mark_catalog_source_stale(
+                CaptureProvider::Codex,
+                "/home/user/.codex/sessions",
+                cataloged_at_ms + 1,
+            )
+            .unwrap();
+        let counts = store.catalog_session_counts().unwrap();
+        assert_eq!(counts.total, 0);
+        assert_eq!(counts.indexed, 0);
+        assert_eq!(counts.stale, 1);
     }
 }
 
