@@ -1864,7 +1864,7 @@ fn codex_tool_output_mode() -> Result<CodexToolOutputMode> {
     if env::var_os("CTX_EXPERIMENTAL_SKIP_TOOL_OUTPUTS").is_some() {
         return Ok(CodexToolOutputMode::Skip);
     }
-    Ok(CodexToolOutputMode::Failures)
+    Ok(CodexToolOutputMode::Skip)
 }
 
 fn codex_include_notices() -> bool {
