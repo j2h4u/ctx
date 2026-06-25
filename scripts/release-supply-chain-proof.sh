@@ -247,6 +247,9 @@ write_supply_chain_evidence() {
   commit="$(git rev-parse HEAD)"
   branch="$(git branch --show-current)"
 
+  ctx_init_resource_env
+  ctx_ensure_rust_build_toolchain
+
   require_file "Cargo.lock" "Cargo.lock" || return 1
   if ! cargo metadata --locked --format-version 1 > "${metadata_json}"; then
     printf 'cargo metadata --locked failed\n' >&2
