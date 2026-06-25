@@ -65,11 +65,20 @@ if command -v ruby >/dev/null 2>&1; then
     abort "live-provider-e2e-openrouter must depend on search-mvp" unless Array(openrouter["depends_on"]).include?("search-mvp") || openrouter["depends_on"] == "search-mvp"
     abort "live-provider-e2e-openrouter must be default-off behind CTX_LIVE_PROVIDER_OPENROUTER" unless openrouter["if"].to_s.include?("CTX_LIVE_PROVIDER_OPENROUTER")
     openrouter_command = openrouter["command"].to_s
-    abort "live-provider-e2e-openrouter must run the Bazel OpenRouter provider target" unless openrouter_command.include?("./scripts/bazel-test.sh provider_live_e2e_openrouter")
+    abort "live-provider-e2e-openrouter must hydrate OpenRouter config through the Infisical wrapper" unless openrouter_command.include?("./scripts/run-openrouter-provider-e2e-infisical.sh")
+    abort "live-provider-e2e-openrouter must run the Bazel OpenRouter provider target" unless openrouter_command.include?("bazel test //:provider_live_e2e_openrouter")
     abort "live-provider-e2e-openrouter must explicitly opt into generation" unless openrouter_command.include?("CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1")
     abort "live-provider-e2e-openrouter must allow the configured free-model fallback only in the explicit lane" unless openrouter_command.include?("CTX_LIVE_PROVIDER_OPENROUTER_ALLOW_DEFAULT_FREE_MODEL=1")
+    abort "live-provider-e2e-openrouter must pass OpenRouter API credentials only into the Bazel test env" unless openrouter_command.include?("--test_env=OPENROUTER_API_KEY")
+    abort "live-provider-e2e-openrouter must pass OpenRouter endpoint config into the Bazel test env" unless openrouter_command.include?("--test_env=OPENROUTER_BASE_URL")
+    openrouter_env = openrouter["env"] || {}
+    abort "live-provider-e2e-openrouter must opt into Infisical hydration" unless openrouter_env["CTX_LIVE_PROVIDER_OPENROUTER_USE_INFISICAL"].to_s == "1"
+    abort "live-provider-e2e-openrouter must configure the OpenRouter Infisical project id" unless openrouter_env["CTX_OPENROUTER_INFISICAL_PROJECT_ID"].to_s.match?(/\A[0-9a-f-]{36}\z/)
+    abort "live-provider-e2e-openrouter must configure the OpenRouter Infisical environment" unless openrouter_env["CTX_OPENROUTER_INFISICAL_ENV"].to_s == "prod"
+    abort "live-provider-e2e-openrouter must configure the OpenRouter Infisical path" unless openrouter_env["CTX_OPENROUTER_INFISICAL_PATH"].to_s == "/"
     openrouter_artifacts = Array(openrouter["artifact_paths"])
-    abort "live-provider-e2e-openrouter must upload generated provider evidence" unless openrouter_artifacts.include?("artifacts/buildkite/provider-live-e2e/openrouter/**/*")
+    abort "live-provider-e2e-openrouter must upload Bazel test output evidence" unless openrouter_artifacts.include?("bazel-testlogs/provider_live_e2e_openrouter/**/test.outputs/**/*")
+    abort "live-provider-e2e-openrouter must upload Bazel output zips" unless openrouter_artifacts.include?("bazel-testlogs/provider_live_e2e_openrouter/**/*.zip")
     abort "aggregate-release-evidence must not depend on the credential-gated OpenRouter live lane" if aggregate_depends.include?("live-provider-e2e-openrouter")
 
     platform_steps = {
@@ -215,11 +224,19 @@ fi
 
 for required in \
   'if: build.env("CTX_LIVE_PROVIDER_OPENROUTER") == "1"' \
+  './scripts/run-openrouter-provider-e2e-infisical.sh' \
+  'bazel test //:provider_live_e2e_openrouter' \
   'CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1' \
   'CTX_LIVE_PROVIDER_OPENROUTER_ALLOW_DEFAULT_FREE_MODEL=1' \
-  './scripts/bazel-test.sh provider_live_e2e_openrouter' \
-  'artifacts/buildkite/provider-live-e2e/openrouter/**/*'; do
-  if ! grep -F -q "${required}" "${pipeline}"; then
+  'CTX_LIVE_PROVIDER_OPENROUTER_USE_INFISICAL: "1"' \
+  'CTX_OPENROUTER_INFISICAL_PROJECT_ID:' \
+  'CTX_OPENROUTER_INFISICAL_ENV: "prod"' \
+  'CTX_OPENROUTER_INFISICAL_PATH: "/"' \
+  '--test_env=OPENROUTER_API_KEY' \
+  '--test_env=OPENROUTER_BASE_URL' \
+  'bazel-testlogs/provider_live_e2e_openrouter/**/test.outputs/**/*' \
+  'bazel-testlogs/provider_live_e2e_openrouter/**/*.zip'; do
+  if ! grep -F -q -- "${required}" "${pipeline}"; then
     printf 'pipeline OpenRouter generated provider E2E step is missing %s\n' "${required}" >&2
     exit 1
   fi

@@ -37,7 +37,7 @@ Required generated OpenRouter env:
   CTX_LIVE_PROVIDER_E2E=1
   CTX_LIVE_PROVIDER_OPENROUTER=1
   CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1
-  OpenRouter credential and model environment hydrated by the runner
+  OpenRouter credential, endpoint, and model environment hydrated by Infisical
 USAGE
 }
 
@@ -553,7 +553,7 @@ write_lane_definitions() {
         printf '      "enabled_when": "CTX_LIVE_PROVIDER_E2E=1 and CTX_LIVE_PROVIDER_ACCEPT_LOCAL_HISTORY=1 and %s=1 and %s is set and %s or CTX_LIVE_PROVIDER_QUERY is set",\n' "$(ctx_json_escape "${env_name}")" "$(ctx_json_escape "${required_path_env}")" "$(ctx_json_escape "${query_env}")"
       elif [[ "${capability}" == "credentialed_generated_multi_session_smoke" ]]; then
         printf '      "capability": "credentialed_generated_multi_session_import_search_context_smoke",\n'
-        printf '      "enabled_when": "CTX_LIVE_PROVIDER_E2E=1 and %s=1 and CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1 and runner-provided OpenRouter credential/model configuration is available",\n' "$(ctx_json_escape "${env_name}")"
+        printf '      "enabled_when": "CTX_LIVE_PROVIDER_E2E=1 and %s=1 and CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1 and Infisical-hydrated OpenRouter credential/endpoint/model configuration is available",\n' "$(ctx_json_escape "${env_name}")"
       else
         printf '      "capability": "fixture_only_blocker",\n'
         printf '      "enabled_when": "CTX_LIVE_PROVIDER_E2E=1 and %s=1",\n' "$(ctx_json_escape "${env_name}")"
@@ -582,6 +582,10 @@ write_lane_definitions() {
         printf '      "default_status": "skipped_until_explicit_local_history_opt_in",\n'
       elif [[ "${capability}" == "credentialed_generated_multi_session_smoke" ]]; then
         printf '      "generation_opt_in_env": "CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1",\n'
+        printf '      "infisical_wrapper": "scripts/run-openrouter-provider-e2e-infisical.sh",\n'
+        printf '      "infisical_project_env": "CTX_OPENROUTER_INFISICAL_PROJECT_ID",\n'
+        printf '      "infisical_env_env": "CTX_OPENROUTER_INFISICAL_ENV",\n'
+        printf '      "infisical_path_env": "CTX_OPENROUTER_INFISICAL_PATH",\n'
         printf '      "generated_provider_count": 7,\n'
         printf '      "ctx_network_required": false,\n'
         printf '      "credential_used_before_ctx_import": true,\n'
@@ -628,7 +632,7 @@ write_lane_definitions() {
           "${secret_scope}" \
           "${provider//_/-}"
       elif [[ "${capability}" == "credentialed_generated_multi_session_smoke" ]]; then
-        printf '| %s | `%s=1`, `%s=1`, `%s=1`, runner credential/model configuration | generated multi-session import/search/context for all harness providers | `%s` | `live-provider-e2e-%s` |\n' \
+        printf '| %s | `%s=1`, `%s=1`, `%s=1`, Infisical-hydrated OpenRouter credential/endpoint/model configuration | generated multi-session import/search/context for all harness providers | `%s` | `live-provider-e2e-%s` |\n' \
           "${display}" \
           "CTX_LIVE_PROVIDER_E2E" \
           "${env_name}" \
@@ -646,7 +650,7 @@ write_lane_definitions() {
     done < <(provider_ids)
     printf '\n'
     printf 'Codex and Pi lanes use only explicit local-history paths, a temporary `CTX_DATA_ROOT`, and redacted aggregate/oracle-count artifacts.\n'
-    printf 'The OpenRouter generated lane uses credentials only before `ctx import` to create temporary synthetic histories, then runs `ctx` with a scrubbed environment.\n'
+    printf 'The OpenRouter generated lane uses `scripts/run-openrouter-provider-e2e-infisical.sh` to hydrate OpenRouter credential and endpoint configuration from Infisical only before `ctx import` creates temporary synthetic histories, then runs `ctx` with a scrubbed environment.\n'
     printf 'Fixture-only providers remain blockers until the public CLI ships a native local importer.\n'
   } > "${markdown}"
 
@@ -1391,12 +1395,12 @@ run_openrouter_generated_provider() {
   fi
   if ! openrouter_credential_configured; then
     write_skipped_result "${provider}" "${out_dir}" "openrouter_credential_missing" \
-      "runner-provided OpenRouter credential configuration is required for generated provider history"
+      "Infisical-hydrated OpenRouter credential configuration is required for generated provider history"
     return 0
   fi
   if ! openrouter_model_configured; then
     write_skipped_result "${provider}" "${out_dir}" "openrouter_model_missing" \
-      "runner-provided OpenRouter model configuration is required, or explicitly allow the default free model"
+      "Infisical-hydrated OpenRouter model configuration is required, or explicitly allow the default free model"
     return 0
   fi
   if ! require_python3; then

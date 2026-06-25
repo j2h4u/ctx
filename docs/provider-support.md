@@ -69,14 +69,15 @@ Fixture-only providers write blocked artifacts until a native read-only local
 importer ships.
 
 The generated OpenRouter lane is separate from native local-history proof. It
-uses runner-provided OpenRouter credential and endpoint configuration before
-`ctx import` to create temporary synthetic histories for Codex, Pi, Claude,
-OpenCode, Antigravity, Gemini, and Cursor. Then it runs only `ctx setup`,
-`ctx import`, `ctx search`, `ctx context`, `ctx status`, `ctx doctor`, and
-`ctx validate` with a scrubbed environment. The credential is not passed to
-`ctx`, generated raw histories are not persisted as artifacts, `source_exists`
-counts are not required for those temporary histories, and the lane stays out of
-default `production` and `release_contract` gates.
+uses `scripts/run-openrouter-provider-e2e-infisical.sh` to hydrate OpenRouter
+credential and endpoint configuration from Infisical before the Bazel target
+generates temporary synthetic histories for Codex, Pi, Claude, OpenCode,
+Antigravity, Gemini, and Cursor. Then it runs only `ctx setup`, `ctx import`,
+`ctx search`, `ctx context`, `ctx status`, `ctx doctor`, and `ctx validate` with
+a scrubbed environment. The credential is not passed to `ctx`, generated raw
+histories are not persisted as artifacts, `source_exists` counts are not
+required for those temporary histories, and the lane stays out of default
+`production` and `release_contract` gates.
 
 The Bazel provider-live wrapper does not build `ctx` for skipped or fixture-only
 blocker lanes. A true Codex or Pi local-history live run may build or use the

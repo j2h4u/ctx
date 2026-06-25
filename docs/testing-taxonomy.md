@@ -47,11 +47,13 @@ when needed.
 - Provider-live validation is never implied by `production` or
   `release_contract`; it requires explicit local-history or generated-history
   opt-in.
-- Generated OpenRouter provider-live validation may use runner credential and
-  endpoint configuration before import to create temporary synthetic histories.
-  The credential must not be passed to `ctx`, generated raw histories must not
-  be published as artifacts, and setup, import, search, context, status, doctor, and validate
-  remain local filesystem operations with no product network dependency.
+- Generated OpenRouter provider-live validation uses
+  `scripts/run-openrouter-provider-e2e-infisical.sh` to hydrate OpenRouter
+  credential and endpoint configuration from Infisical before import to create
+  temporary synthetic histories. The credential must not be passed to `ctx`,
+  generated raw histories must not be published as artifacts, and setup, import,
+  search, context, status, doctor, and validate remain local filesystem
+  operations with no product network dependency.
 - Performance-sensitive changes should add `perf` to the normal gate instead of
   replacing correctness checks.
 - The search performance gate is manual and non-default. Run

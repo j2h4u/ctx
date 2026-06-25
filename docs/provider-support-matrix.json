@@ -238,8 +238,12 @@
           "CTX_LIVE_PROVIDER_E2E=1",
           "CTX_LIVE_PROVIDER_OPENROUTER=1",
           "CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1",
-          "runner OpenRouter credential configuration",
-          "runner OpenRouter model configuration or explicit free-model fallback"
+          "scripts/run-openrouter-provider-e2e-infisical.sh",
+          "CTX_OPENROUTER_INFISICAL_PROJECT_ID or CTX_INFISICAL_PROJECT_ID",
+          "CTX_OPENROUTER_INFISICAL_ENV=prod",
+          "CTX_OPENROUTER_INFISICAL_PATH=/",
+          "OpenRouter credential and endpoint configuration hydrated from Infisical",
+          "Infisical-hydrated OpenRouter model configuration or explicit free-model fallback"
         ],
         "artifacts": [
           "live-e2e.json",
@@ -318,8 +322,12 @@
           "CTX_LIVE_PROVIDER_E2E=1",
           "CTX_LIVE_PROVIDER_OPENROUTER=1",
           "CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1",
-          "runner OpenRouter credential configuration",
-          "runner OpenRouter model configuration or explicit free-model fallback"
+          "scripts/run-openrouter-provider-e2e-infisical.sh",
+          "CTX_OPENROUTER_INFISICAL_PROJECT_ID or CTX_INFISICAL_PROJECT_ID",
+          "CTX_OPENROUTER_INFISICAL_ENV=prod",
+          "CTX_OPENROUTER_INFISICAL_PATH=/",
+          "OpenRouter credential and endpoint configuration hydrated from Infisical",
+          "Infisical-hydrated OpenRouter model configuration or explicit free-model fallback"
         ],
         "artifacts": [
           "live-e2e.json",
@@ -398,8 +406,12 @@
           "CTX_LIVE_PROVIDER_E2E=1",
           "CTX_LIVE_PROVIDER_OPENROUTER=1",
           "CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1",
-          "runner OpenRouter credential configuration",
-          "runner OpenRouter model configuration or explicit free-model fallback"
+          "scripts/run-openrouter-provider-e2e-infisical.sh",
+          "CTX_OPENROUTER_INFISICAL_PROJECT_ID or CTX_INFISICAL_PROJECT_ID",
+          "CTX_OPENROUTER_INFISICAL_ENV=prod",
+          "CTX_OPENROUTER_INFISICAL_PATH=/",
+          "OpenRouter credential and endpoint configuration hydrated from Infisical",
+          "Infisical-hydrated OpenRouter model configuration or explicit free-model fallback"
         ],
         "artifacts": [
           "live-e2e.json",
@@ -478,8 +490,12 @@
           "CTX_LIVE_PROVIDER_E2E=1",
           "CTX_LIVE_PROVIDER_OPENROUTER=1",
           "CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1",
-          "runner OpenRouter credential configuration",
-          "runner OpenRouter model configuration or explicit free-model fallback"
+          "scripts/run-openrouter-provider-e2e-infisical.sh",
+          "CTX_OPENROUTER_INFISICAL_PROJECT_ID or CTX_INFISICAL_PROJECT_ID",
+          "CTX_OPENROUTER_INFISICAL_ENV=prod",
+          "CTX_OPENROUTER_INFISICAL_PATH=/",
+          "OpenRouter credential and endpoint configuration hydrated from Infisical",
+          "Infisical-hydrated OpenRouter model configuration or explicit free-model fallback"
         ],
         "artifacts": [
           "live-e2e.json",
@@ -558,8 +574,12 @@
           "CTX_LIVE_PROVIDER_E2E=1",
           "CTX_LIVE_PROVIDER_OPENROUTER=1",
           "CTX_LIVE_PROVIDER_OPENROUTER_GENERATE=1",
-          "runner OpenRouter credential configuration",
-          "runner OpenRouter model configuration or explicit free-model fallback"
+          "scripts/run-openrouter-provider-e2e-infisical.sh",
+          "CTX_OPENROUTER_INFISICAL_PROJECT_ID or CTX_INFISICAL_PROJECT_ID",
+          "CTX_OPENROUTER_INFISICAL_ENV=prod",
+          "CTX_OPENROUTER_INFISICAL_PATH=/",
+          "OpenRouter credential and endpoint configuration hydrated from Infisical",
+          "Infisical-hydrated OpenRouter model configuration or explicit free-model fallback"
         ],
         "artifacts": [
           "live-e2e.json",

@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+usage: scripts/run-openrouter-provider-e2e-infisical.sh COMMAND [ARG...]
+
+Runs a command with OpenRouter live-E2E secrets hydrated through Infisical.
+
+Configuration:
+  CTX_LIVE_PROVIDER_OPENROUTER_USE_INFISICAL=0  bypass Infisical and exec COMMAND
+  CTX_OPENROUTER_INFISICAL_PROJECT_ID           Infisical project id
+  CTX_OPENROUTER_INFISICAL_ENV                  Infisical environment, defaults to prod
+  CTX_OPENROUTER_INFISICAL_PATH                 Infisical path, defaults to /
+  CTX_OPENROUTER_INFISICAL_DOMAIN               Optional Infisical API endpoint
+
+Fallback generic names are also accepted:
+  CTX_INFISICAL_PROJECT_ID
+  CTX_INFISICAL_ENV
+  CTX_INFISICAL_PATH
+  CTX_INFISICAL_DOMAIN
+USAGE
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if (( $# == 0 )); then
+  usage >&2
+  exit 64
+fi
+
+if [[ "${CTX_LIVE_PROVIDER_OPENROUTER_USE_INFISICAL:-1}" != "1" ]]; then
+  exec "$@"
+fi
+
+if ! command -v infisical >/dev/null 2>&1; then
+  printf 'infisical CLI is required for OpenRouter provider E2E secret hydration\n' >&2
+  exit 127
+fi
+
+project_id="${CTX_OPENROUTER_INFISICAL_PROJECT_ID:-${CTX_INFISICAL_PROJECT_ID:-}}"
+env_name="${CTX_OPENROUTER_INFISICAL_ENV:-${CTX_INFISICAL_ENV:-prod}}"
+secret_path="${CTX_OPENROUTER_INFISICAL_PATH:-${CTX_INFISICAL_PATH:-/}}"
+domain="${CTX_OPENROUTER_INFISICAL_DOMAIN:-${CTX_INFISICAL_DOMAIN:-}}"
+
+if [[ -z "${project_id}" ]]; then
+  printf 'CTX_OPENROUTER_INFISICAL_PROJECT_ID or CTX_INFISICAL_PROJECT_ID is required\n' >&2
+  exit 64
+fi
+
+infisical_cmd=(infisical)
+if [[ -n "${domain}" ]]; then
+  infisical_cmd+=(--domain "${domain}")
+fi
+infisical_cmd+=(run --env="${env_name}" --path="${secret_path}" --projectId="${project_id}" --)
+
+exec "${infisical_cmd[@]}" "$@"
