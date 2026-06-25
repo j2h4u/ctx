@@ -338,6 +338,15 @@ if ! grep -F -q 'artifacts/buildkite/release-dry-run/$${platform}/*' "${pipeline
   exit 1
 fi
 
+if ! grep -F -q 'download_windows_platform_artifacts "$${step_key}" "$${platform}"' "${pipeline}" ||
+  ! grep -F -q 'artifacts\\buildkite\\release-dry-run\\$${platform}\\*' "${pipeline}" ||
+  ! grep -F -q 'artifacts\\buildkite\\release-artifact-smoke\\$${platform}\\*' "${pipeline}" ||
+  ! grep -F -q 'normalize_windows_artifact_paths' "${pipeline}" ||
+  ! grep -F -q 'normalized_path="$${relative_path//\\//}"' "${pipeline}"; then
+  printf 'aggregate release evidence must download Windows artifacts with backslash paths and normalize them before validation\n' >&2
+  exit 1
+fi
+
 for step_platform in \
   'linux-release-artifact-smoke linux-x64' \
   'macos-arm64-release-artifact-smoke macos-arm64' \

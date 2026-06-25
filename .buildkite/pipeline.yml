@@ -310,10 +310,38 @@ steps:
         step_key="$$1"
         platform="$$2"
 
+        if [ "$${platform}" = "windows-x64" ]; then
+          download_windows_platform_artifacts "$${step_key}" "$${platform}"
+          return
+        fi
+
         buildkite-agent artifact download "artifacts/buildkite/release-dry-run/$${platform}/*" . --step "$${step_key}"
         buildkite-agent artifact download "artifacts/buildkite/release-dry-run/$${platform}/**/*" . --step "$${step_key}" || true
         buildkite-agent artifact download "artifacts/buildkite/release-artifact-smoke/$${platform}/*" . --step "$${step_key}"
         buildkite-agent artifact download "artifacts/buildkite/release-artifact-smoke/$${platform}/**/*" . --step "$${step_key}" || true
+      }
+
+      download_windows_platform_artifacts() {
+        step_key="$$1"
+        platform="$$2"
+
+        buildkite-agent artifact download "artifacts\\buildkite\\release-dry-run\\$${platform}\\*" . --step "$${step_key}"
+        buildkite-agent artifact download "artifacts\\buildkite\\release-dry-run\\$${platform}\\**\\*" . --step "$${step_key}" || true
+        buildkite-agent artifact download "artifacts\\buildkite\\release-artifact-smoke\\$${platform}\\*" . --step "$${step_key}"
+        buildkite-agent artifact download "artifacts\\buildkite\\release-artifact-smoke\\$${platform}\\**\\*" . --step "$${step_key}" || true
+        normalize_windows_artifact_paths
+      }
+
+      normalize_windows_artifact_paths() {
+        find . -type f -name '*\\*' -print | while IFS= read -r source_path; do
+          relative_path="$${source_path#./}"
+          normalized_path="$${relative_path//\\//}"
+          if [ "$${relative_path}" = "$${normalized_path}" ]; then
+            continue
+          fi
+          mkdir -p "$$(dirname "$${normalized_path}")"
+          mv "$${source_path}" "$${normalized_path}"
+        done
       }
 
       require_fetched_artifact() {
