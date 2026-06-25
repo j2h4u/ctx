@@ -90,13 +90,26 @@ steps:
     key: "macos-arm64-checkout-cleanup"
     depends_on: "search-mvp"
     env:
-      BUILDKITE_SKIP_CHECKOUT: "true"
+      BUILDKITE_BUILD_CHECKOUT_PATH: "/Users/ctxrunner/.buildkite-agent/builds/ctxrunner-Mac-mini-ctx-mac-gui-shared-arm64/luca-king/ctx-public-release-verification-cleanup-arm64"
     command: |
       checkout_root="$${BUILDKITE_BUILD_PATH:-}"
+      active_checkout_dir="$${BUILDKITE_BUILD_CHECKOUT_PATH:-}"
       checkout_dir="$${checkout_root}/$${BUILDKITE_ORGANIZATION_SLUG:-luca-king}/$${BUILDKITE_PIPELINE_SLUG:-ctx-public-release-verification}"
+      if [ -z "$${checkout_root}" ]; then
+        echo "BUILDKITE_BUILD_PATH is required for macOS checkout cleanup" >&2
+        exit 2
+      fi
+      if [ "$${checkout_dir}" = "$${active_checkout_dir}" ]; then
+        echo "refusing to remove active cleanup checkout: $${checkout_dir}" >&2
+        exit 2
+      fi
       if [ -n "$${checkout_root}" ] && [ -d "$${checkout_dir}" ]; then
         chmod -R u+rwX "$${checkout_dir}" || true
         rm -rf "$${checkout_dir}"
+      fi
+      if [ -e "$${checkout_dir}" ]; then
+        echo "failed to remove stale checkout: $${checkout_dir}" >&2
+        exit 1
       fi
     agents:
       queue: "ctx-mac-gui-shared-arm64"
@@ -108,13 +121,26 @@ steps:
     key: "macos-x64-checkout-cleanup"
     depends_on: "search-mvp"
     env:
-      BUILDKITE_SKIP_CHECKOUT: "true"
+      BUILDKITE_BUILD_CHECKOUT_PATH: "/usr/local/var/buildkite-agent/builds/ctxcis-iMac-ctx-mac-gui-shared-x64/luca-king/ctx-public-release-verification-cleanup-x64"
     command: |
       checkout_root="$${BUILDKITE_BUILD_PATH:-}"
+      active_checkout_dir="$${BUILDKITE_BUILD_CHECKOUT_PATH:-}"
       checkout_dir="$${checkout_root}/$${BUILDKITE_ORGANIZATION_SLUG:-luca-king}/$${BUILDKITE_PIPELINE_SLUG:-ctx-public-release-verification}"
+      if [ -z "$${checkout_root}" ]; then
+        echo "BUILDKITE_BUILD_PATH is required for macOS checkout cleanup" >&2
+        exit 2
+      fi
+      if [ "$${checkout_dir}" = "$${active_checkout_dir}" ]; then
+        echo "refusing to remove active cleanup checkout: $${checkout_dir}" >&2
+        exit 2
+      fi
       if [ -n "$${checkout_root}" ] && [ -d "$${checkout_dir}" ]; then
         chmod -R u+rwX "$${checkout_dir}" || true
         rm -rf "$${checkout_dir}"
+      fi
+      if [ -e "$${checkout_dir}" ]; then
+        echo "failed to remove stale checkout: $${checkout_dir}" >&2
+        exit 1
       fi
     agents:
       queue: "ctx-mac-gui-shared-x64"

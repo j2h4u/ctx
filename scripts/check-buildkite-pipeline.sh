@@ -254,10 +254,19 @@ for cleanup_key in macos-arm64-checkout-cleanup macos-x64-checkout-cleanup; do
   fi
 done
 
-if ! grep -F -q 'BUILDKITE_SKIP_CHECKOUT: "true"' "${pipeline}" ||
+if grep -F -q 'BUILDKITE_SKIP_CHECKOUT: "true"' "${pipeline}"; then
+  printf 'macOS cleanup steps must not skip checkout because the shared macOS pre-command hook requires a checked-out repo hook\n' >&2
+  exit 1
+fi
+
+if ! grep -F -q 'BUILDKITE_BUILD_CHECKOUT_PATH:' "${pipeline}" ||
+  ! grep -F -q 'ctx-public-release-verification-cleanup-arm64' "${pipeline}" ||
+  ! grep -F -q 'ctx-public-release-verification-cleanup-x64' "${pipeline}" ||
+  ! grep -F -q 'refusing to remove active cleanup checkout' "${pipeline}" ||
   ! grep -F -q 'chmod -R u+rwX "$${checkout_dir}"' "${pipeline}" ||
-  ! grep -F -q 'rm -rf "$${checkout_dir}"' "${pipeline}"; then
-  printf 'macOS cleanup steps must set BUILDKITE_SKIP_CHECKOUT and remove stale checkout directories\n' >&2
+  ! grep -F -q 'rm -rf "$${checkout_dir}"' "${pipeline}" ||
+  ! grep -F -q 'failed to remove stale checkout' "${pipeline}"; then
+  printf 'macOS cleanup steps must use alternate checkout paths and fail closed when stale checkout cleanup does not complete\n' >&2
   exit 1
 fi
 
