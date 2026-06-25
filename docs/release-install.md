@@ -13,7 +13,8 @@ cargo install --path crates/ctx-cli
 
 This source build path is not release approval. It proves that a local checkout
 can build the CLI; it does not prove a public binary, package, signature,
-notarization result, SBOM, provenance statement, or R2 object upload.
+notarization result, dependency advisory review, license inventory, SBOM,
+provenance statement, R2 object upload, or R2 readback.
 
 Public install instructions stay blocked until all of the following are true:
 
@@ -25,7 +26,8 @@ Public install instructions stay blocked until all of the following are true:
   from installing or extracting the exact staged artifact and running
   `ctx --version`, `setup`, `import`, `search`, `context`, `doctor`, and
   `validate` against the fixture data.
+- Dependency advisory/license evidence is approved.
 - Signing, notarization, SBOM, and provenance evidence is approved.
-- R2 staging has passed with approved credentials.
+- R2 staging upload/readback has passed with approved credentials.
 - The completion certificate records real release evidence, not a contract
   fixture self-test.
