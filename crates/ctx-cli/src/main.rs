@@ -2025,6 +2025,13 @@ fn low_disk_space_warning(db_path: &Path, planned_total_bytes: u64) -> Option<St
 fn available_space_bytes(path: &Path) -> Option<u64> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
 
+    fn statvfs_field_to_u64<T>(value: T) -> Option<u64>
+    where
+        T: TryInto<u64>,
+    {
+        value.try_into().ok()
+    }
+
     let path = CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     let rc = unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) };
@@ -2032,7 +2039,9 @@ fn available_space_bytes(path: &Path) -> Option<u64> {
         return None;
     }
     let stat = unsafe { stat.assume_init() };
-    Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+    let available_blocks = statvfs_field_to_u64(stat.f_bavail)?;
+    let fragment_size = statvfs_field_to_u64(stat.f_frsize)?;
+    Some(available_blocks.saturating_mul(fragment_size))
 }
 
 #[cfg(not(unix))]
