@@ -7308,7 +7308,7 @@ mod tests {
     }
 
     fn incremental_perf_noop_p95_threshold_ms(file_count: usize) -> f64 {
-        env_f64("CTX_CODEX_INCREMENTAL_PERF_NOOP_P95_MS").unwrap_or_else(|| {
+        env_f64("CTX_CODEX_INCREMENTAL_PERF_NOOP_P95_MS").unwrap_or({
             if file_count >= 30_000 {
                 1_000.0
             } else {
