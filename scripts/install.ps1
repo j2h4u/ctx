@@ -11,6 +11,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Local development and explicit-metadata testing helper. The production hosted
+# installer is https://cli.ctx.rs/install.ps1 and verifies detached metadata
+# signatures before trusting artifact URLs or checksums.
+
 function Fail([string]$Message) {
     throw "install.ps1: $Message"
 }

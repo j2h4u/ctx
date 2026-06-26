@@ -16,9 +16,11 @@ use uuid::Uuid;
 
 pub const SEARCH_PACKET_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_RESULT_LIMIT: usize = 10;
+pub const MAX_RESULT_LIMIT: usize = 200;
 pub const DEFAULT_SNIPPET_CHARS: usize = 320;
 const LARGE_EVENT_CORPUS_THRESHOLD: i64 = 1_024;
 const FILTERED_SEARCH_PAGE_SIZE: usize = 500;
+const FILTERED_SEARCH_MAX_PAGES: usize = 20;
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -169,6 +171,11 @@ struct HitMetadata {
     cursor: Option<String>,
 }
 
+struct CandidateSearch {
+    candidates: Vec<Candidate>,
+    scan_budget_exhausted: bool,
+}
+
 pub fn search_packet(store: &Store, query: &str, options: &PacketOptions) -> Result<SearchPacket> {
     let options = normalized_options(options);
     if let Some(provider) = options.filters.provider {
@@ -179,7 +186,10 @@ pub fn search_packet(store: &Store, query: &str, options: &PacketOptions) -> Res
     if let Some(packet) = fast_event_search_packet(store, query, &options)? {
         return Ok(packet);
     }
-    let candidates = ranked_candidates(store, Some(query), &options)?;
+    let CandidateSearch {
+        candidates,
+        scan_budget_exhausted,
+    } = ranked_candidates(store, Some(query), &options)?;
     let mut truncation = ContextTruncation::default();
     let mut results = Vec::new();
 
@@ -234,8 +244,12 @@ pub fn search_packet(store: &Store, query: &str, options: &PacketOptions) -> Res
         });
     }
 
-    let has_more = candidates.len() > results.len();
-    if has_more {
+    let has_more = candidates.len() > results.len() || scan_budget_exhausted;
+    if scan_budget_exhausted {
+        truncation.truncated = true;
+        truncation.omitted_results = 1;
+        truncation.reason = Some("scan_budget".to_owned());
+    } else if candidates.len() > results.len() {
         truncation.truncated = true;
         truncation.omitted_results = (candidates.len() - results.len()) as u32;
         truncation.reason = Some("limit".to_owned());
@@ -274,8 +288,11 @@ fn fast_event_search_packet(
     };
     let mut results = Vec::new();
     let mut offset = 0_usize;
+    let mut pages_scanned = 0_usize;
+    let mut scan_budget_exhausted = false;
 
     loop {
+        pages_scanned = pages_scanned.saturating_add(1);
         let hits = if filtered {
             store.search_event_hits_page(query, page_size, offset)?
         } else {
@@ -296,6 +313,10 @@ fn fast_event_search_packet(
         if !filtered || results.len() >= target_results || page_len < page_size {
             break;
         }
+        if pages_scanned >= FILTERED_SEARCH_MAX_PAGES {
+            scan_budget_exhausted = true;
+            break;
+        }
         let next_offset = offset.saturating_add(page_size);
         if next_offset == offset {
             break;
@@ -303,13 +324,19 @@ fn fast_event_search_packet(
         offset = next_offset;
     }
 
-    let has_more = results.len() > options.limit;
+    let has_more = results.len() > options.limit || scan_budget_exhausted;
     if results.len() > options.limit {
         results.truncate(options.limit);
     }
     normalize_search_result_ranks(&mut results);
 
-    let truncation = if has_more {
+    let truncation = if scan_budget_exhausted {
+        ContextTruncation {
+            truncated: true,
+            reason: Some("scan_budget".to_owned()),
+            omitted_results: 1,
+        }
+    } else if has_more {
         ContextTruncation {
             truncated: true,
             reason: Some("limit".to_owned()),
@@ -527,7 +554,7 @@ pub fn redacted_snippet(input: &str, max_chars: usize) -> String {
 
 fn normalized_options(options: &PacketOptions) -> PacketOptions {
     PacketOptions {
-        limit: options.limit.max(1),
+        limit: options.limit.clamp(1, MAX_RESULT_LIMIT),
         snippet_chars: options.snippet_chars.clamp(32, 2_000),
         filters: options.filters.clone(),
     }
@@ -537,17 +564,20 @@ fn ranked_candidates(
     store: &Store,
     query: Option<&str>,
     options: &PacketOptions,
-) -> Result<Vec<Candidate>> {
+) -> Result<CandidateSearch> {
     let target_candidates = options.limit.saturating_add(1);
     let filtered = has_filters(&options.filters);
     let terms = query_terms(query.unwrap_or_default());
     let mut candidates = Vec::new();
     let mut seen = BTreeSet::<Uuid>::new();
+    let mut scan_budget_exhausted = false;
 
     if filtered {
         let page_size = FILTERED_SEARCH_PAGE_SIZE.max(target_candidates);
         let mut offset = 0_usize;
+        let mut pages_scanned = 0_usize;
         loop {
+            pages_scanned = pages_scanned.saturating_add(1);
             let records = match query {
                 Some(query) if !query.trim().is_empty() => {
                     store.search_records_page(query, page_size, offset)?
@@ -568,6 +598,10 @@ fn ranked_candidates(
             }
 
             if candidates.len() >= target_candidates || page_len < page_size {
+                break;
+            }
+            if pages_scanned >= FILTERED_SEARCH_MAX_PAGES {
+                scan_budget_exhausted = true;
                 break;
             }
             let next_offset = offset.saturating_add(page_size);
@@ -605,7 +639,10 @@ fn ranked_candidates(
     if candidates.len() > target_candidates {
         candidates.truncate(target_candidates);
     }
-    Ok(candidates)
+    Ok(CandidateSearch {
+        candidates,
+        scan_budget_exhausted,
+    })
 }
 
 fn candidate_for_record(
@@ -2371,6 +2408,118 @@ mod tests {
                 "{name} filter failed to page past decoys"
             );
         }
+    }
+
+    #[test]
+    fn filtered_search_stops_at_scan_budget_when_no_candidates_match() {
+        let (_temp, store) = test_store();
+        let query = "scan-budget-needle";
+        let mut records = Vec::new();
+        for index in 0..=(FILTERED_SEARCH_PAGE_SIZE * FILTERED_SEARCH_MAX_PAGES) {
+            let mut record = HistoryRecord::new(
+                "Scan budget decoy",
+                format!("{query} decoy record {index:05}"),
+                Vec::new(),
+                "task",
+                Some("/workspace/no-match".into()),
+            );
+            record.id = Uuid::parse_str(&format!("018f45d0-0000-7000-8000-{index:012x}")).unwrap();
+            record.created_at = fixed_time() - chrono::Duration::seconds(index as i64);
+            record.updated_at = record.created_at;
+            records.push(record);
+        }
+        store.upsert_records(&records).unwrap();
+
+        let packet = search_packet(
+            &store,
+            query,
+            &PacketOptions {
+                limit: 1,
+                filters: SearchFilters {
+                    file: Some("path/that/does/not/exist.rs".into()),
+                    ..SearchFilters::default()
+                },
+                ..PacketOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(packet.results.is_empty());
+        assert!(packet.truncation.truncated);
+        assert_eq!(packet.truncation.reason.as_deref(), Some("scan_budget"));
+    }
+
+    #[test]
+    fn empty_query_filtered_search_stops_at_scan_budget() {
+        let (_temp, store) = test_store();
+        let mut records = Vec::new();
+        for index in 0..=(FILTERED_SEARCH_PAGE_SIZE * FILTERED_SEARCH_MAX_PAGES) {
+            let mut record = HistoryRecord::new(
+                "Empty query scan budget decoy",
+                format!("empty query decoy record {index:05}"),
+                Vec::new(),
+                "task",
+                Some("/workspace/no-match".into()),
+            );
+            record.id = Uuid::parse_str(&format!("018f45d0-0000-7000-8001-{index:012x}")).unwrap();
+            record.created_at = fixed_time() - chrono::Duration::seconds(index as i64);
+            record.updated_at = record.created_at;
+            records.push(record);
+        }
+        store.upsert_records(&records).unwrap();
+
+        let packet = search_packet(
+            &store,
+            "",
+            &PacketOptions {
+                limit: 1,
+                filters: SearchFilters {
+                    file: Some("path/that/does/not/exist.rs".into()),
+                    ..SearchFilters::default()
+                },
+                ..PacketOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(packet.results.is_empty());
+        assert!(packet.truncation.truncated);
+        assert_eq!(packet.truncation.reason.as_deref(), Some("scan_budget"));
+    }
+
+    #[test]
+    fn search_result_limit_is_capped() {
+        let (_temp, store) = test_store();
+        let query = "limit-cap-needle";
+        let mut records = Vec::new();
+        for index in 0..250_usize {
+            let mut record = HistoryRecord::new(
+                "Limit cap candidate",
+                format!("{query} candidate {index:03}"),
+                Vec::new(),
+                "task",
+                Some("/workspace/limit-cap".into()),
+            );
+            record.id = Uuid::parse_str(&format!("018f45d0-0000-7000-8002-{index:012x}")).unwrap();
+            record.created_at = fixed_time() - chrono::Duration::seconds(index as i64);
+            record.updated_at = fixed_time() - chrono::Duration::seconds(index as i64);
+            records.push(record);
+        }
+        store.upsert_records(&records).unwrap();
+
+        let packet = search_packet(
+            &store,
+            query,
+            &PacketOptions {
+                limit: usize::MAX,
+                ..PacketOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(packet.results.len(), MAX_RESULT_LIMIT);
+        assert!(packet.truncation.truncated);
+        assert_eq!(packet.truncation.reason.as_deref(), Some("limit"));
     }
 
     #[test]

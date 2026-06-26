@@ -61,7 +61,7 @@ machine. Current rows include:
   Copilot CLI, and Factory AI Droid local history locations.
 
 Each JSON row includes `provider`, `path`, `exists`, `source_format`, `status`,
-`import_support`, `native_import`, `raw_retention`, and any
+`import_support`, `native_import`, `importable`, `raw_retention`, and any
 `unsupported_reason`. `sources` reads home-directory path metadata and writes
 nothing to provider files or source repositories.
 
@@ -158,18 +158,27 @@ ctx search "sqlite storage" --provider codex
 ctx search "retry handling" --repo checkout --since 60d
 ctx search "tool output" --event-type tool_output
 ctx search --file crates/foo/src/lib.rs
+ctx search "token budget" --refresh off
 ctx search "token budget" --limit 5 --json
 ```
 
-`search` quietly refreshes discovered native provider history before querying
-indexed sessions and events. The refresh is best-effort and keeps JSON stdout
-reserved for the search result object. The query argument is optional so file
-or metadata filters can drive a search. Results are local hits over indexed
+`search` defaults to `--refresh auto`, which quietly refreshes discovered Codex
+session sources before querying indexed sessions and events. The refresh is
+best-effort and keeps JSON stdout reserved for the search result object. On
+large discovered sources or already-cataloged indexes, `auto` serves current
+results without a foreground catch-up scan; use `--refresh strict` or
+`ctx import --provider codex` when you need a full catch-up before querying.
+Use `--refresh off` to search the existing index without refreshing, or
+`--refresh strict` to fail when the pre-search refresh cannot run or import
+successfully. The current pre-search refresh path is limited to discovered
+Codex session sources; other providers are searched from the existing index
+until they are explicitly imported. The query argument is optional so file or
+metadata filters can drive a search. Results are local hits over indexed
 history. Event hits include `ctx_event_id`; hits with known session context
 include `ctx_session_id`; provider metadata including `provider_session_id` is
 included when known. Results also include title, snippet, rank, match reasons,
-source-path/cursor data, citations, `suggested_next_commands`, and
-pagination/truncation fields.
+source-path/cursor data, citations, `suggested_next_commands`, a JSON
+`freshness` object, and pagination/truncation fields.
 
 Filters:
 
@@ -180,10 +189,12 @@ Filters:
 - `--file <path>`;
 - `--primary-only`;
 - `--include-subagents`;
-- `--limit <n>`.
+- `--limit <n>`, capped at `200`;
+- `--refresh auto|off|strict`.
 
-`search` reads provider history and SQLite, and may write newly discovered
-history into the local index before querying.
+`search` reads Codex session files for pre-search refresh plus SQLite, and may
+write newly discovered Codex session history into the local index before
+querying.
 
 ## Progress Output
 

@@ -15,6 +15,9 @@ If ctx is not installed:
 curl -fsSL https://cli.ctx.rs/install | sh
 ```
 
+The Unix installer requires `curl` and OpenSSL to verify signed release
+metadata. On Windows, use `irm https://cli.ctx.rs/install.ps1 | iex`.
+
 ## 2. Set Up And Index
 
 ```bash
@@ -40,7 +43,9 @@ ctx sources --json
 Expect rows for supported local import providers such as Codex, Pi,
 Antigravity, Claude, OpenCode, Gemini, Cursor, Copilot CLI, and Factory AI
 Droid. A row with `exists: false` means ctx knows the default path but did not
-find local history there.
+find local history there. A JSON row with `status: "empty"` means the path
+exists but no provider-specific transcript files were found. A row with
+`status: "unknown"` means the bounded transcript probe hit its scan budget.
 
 ## 4. Re-Run Or Target Imports
 
@@ -63,6 +68,10 @@ ctx import --provider cursor --path ~/.cursor/projects
 ctx search "build failure" --limit 5
 ctx search "build failure" --limit 5 --json
 ```
+
+`--limit` is capped at `200`. Search defaults to `--refresh auto`, which
+best-effort refreshes discovered Codex session sources before querying; use
+`--refresh off` to search only the existing index.
 
 Copy ctx-owned IDs from the result and inspect the hit or transcript:
 

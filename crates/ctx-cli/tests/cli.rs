@@ -1,6 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -462,6 +462,29 @@ fn setup_imports_discovered_codex_sessions_by_default() {
 }
 
 #[test]
+fn setup_skips_empty_codex_session_tree() {
+    let temp = tempdir();
+    fs::create_dir_all(temp.path().join(".codex").join("sessions")).unwrap();
+
+    let setup = json_output(ctx(&temp).args(["setup", "--json", "--progress", "none"]));
+    assert_eq!(setup["catalog"]["cataloged_sessions"], 0);
+    assert_eq!(setup["catalog"]["source_files"], 0);
+    assert_eq!(setup["import"]["totals"]["imported_sources"], 0);
+
+    let sources = json_output(ctx(&temp).args(["sources", "--json"]));
+    let codex_sessions = sources["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|source| {
+            source["provider"] == "codex" && source["source_format"] == "codex_session_jsonl_tree"
+        })
+        .unwrap();
+    assert_eq!(codex_sessions["status"], "empty");
+    assert_eq!(codex_sessions["importable"], false);
+}
+
+#[test]
 fn import_progress_json_goes_to_stderr_without_polluting_stdout() {
     let temp = tempdir();
     let fixture = provider_history_fixture("codex-sessions");
@@ -523,6 +546,37 @@ fn import_all_discovers_and_imports_providers_together() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains(r#""type":"ctx_progress""#), "{stderr}");
     assert!(stderr.contains(r#""phase":"finalizing""#), "{stderr}");
+}
+
+#[test]
+fn import_all_skips_empty_gemini_source() {
+    let temp = tempdir();
+    copy_dir_all(
+        Path::new(&provider_history_fixture("codex-sessions")),
+        &temp.path().join(".codex").join("sessions"),
+    );
+    fs::create_dir_all(temp.path().join(".gemini")).unwrap();
+
+    let sources = json_output(ctx(&temp).args(["sources", "--json"]));
+    let gemini = sources["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|source| source["provider"] == "gemini")
+        .unwrap();
+    assert_eq!(gemini["status"], "empty");
+    assert_eq!(gemini["native_import"], true);
+    assert_eq!(gemini["importable"], false);
+
+    let imported =
+        json_output(ctx(&temp).args(["import", "--all", "--json", "--progress", "none"]));
+    assert_eq!(imported["totals"]["imported_sources"], 1);
+    assert_eq!(imported["totals"]["failed_sources"], 0);
+    assert!(imported["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|source| source["provider"] != "gemini"));
 }
 
 #[test]
@@ -649,6 +703,10 @@ fn public_subcommand_help_is_golden_enough_for_session_retrieval() {
                 "--include-subagents",
                 "--event-type <EVENT_TYPE>",
                 "--file <FILE>",
+                "--limit <LIMIT>",
+                "Maximum results to return, from 1 to 200",
+                "--refresh <REFRESH>",
+                "Pre-search refresh behavior. auto best-effort refreshes",
                 "--json",
             ],
         ),
@@ -1076,11 +1134,154 @@ fn search_refreshes_discovered_codex_sessions_before_query() {
     let search =
         json_output(ctx(&temp).args(["search", "onboarding", "--provider", "codex", "--json"]));
     assert_search_provider_oracle(&search, "codex", "onboarding", 1, "message");
+    assert_eq!(search["freshness"]["mode"], "auto");
+    assert_eq!(search["freshness"]["status"], "completed");
+    assert_eq!(search["freshness"]["source_count"], 1);
+    assert_eq!(search["freshness"]["totals"]["imported_sessions"], 2);
 
     let status = json_output(ctx(&temp).args(["status", "--json"]));
     assert_eq!(status["cataloged_sessions"], 2);
     assert_eq!(status["indexed_catalog_sessions"], 2);
     assert_eq!(status["pending_catalog_sessions"], 0);
+}
+
+#[test]
+fn search_refresh_off_serves_existing_index_without_importing() {
+    let temp = tempdir();
+    let fixture = PathBuf::from(provider_history_fixture("codex-sessions"));
+    let discovered = temp.path().join(".codex").join("sessions");
+    copy_dir_all(&fixture, &discovered);
+
+    let stale = json_output(ctx(&temp).args([
+        "search",
+        "onboarding",
+        "--provider",
+        "codex",
+        "--refresh",
+        "off",
+        "--json",
+    ]));
+    assert_eq!(stale["freshness"]["mode"], "off");
+    assert_eq!(stale["freshness"]["status"], "skipped");
+    assert!(stale["results"].as_array().unwrap().is_empty());
+
+    let status = json_output(ctx(&temp).args(["status", "--json"]));
+    assert_eq!(status["cataloged_sessions"], 0);
+    assert_eq!(status["indexed_catalog_sessions"], 0);
+
+    let fresh =
+        json_output(ctx(&temp).args(["search", "onboarding", "--provider", "codex", "--json"]));
+    assert_search_provider_oracle(&fresh, "codex", "onboarding", 1, "message");
+}
+
+#[test]
+fn search_refresh_auto_skips_large_catalog_refresh_before_querying() {
+    let temp = tempdir();
+    let discovered = temp.path().join(".codex").join("sessions");
+    fs::create_dir_all(&discovered).unwrap();
+    fs::write(discovered.join("session.jsonl"), "{}\n").unwrap();
+    let _ = json_output(ctx(&temp).args(["search", "anything", "--refresh", "off", "--json"]));
+
+    let mut conn = Connection::open(temp.path().join("work.sqlite")).unwrap();
+    let tx = conn.transaction().unwrap();
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO catalog_sessions (
+                    source_path, provider, source_format, source_root,
+                    external_session_id, agent_type, file_size_bytes,
+                    file_modified_at_ms, cataloged_at_ms, indexed_status,
+                    indexed_at_ms, indexed_file_size_bytes,
+                    indexed_file_modified_at_ms, metadata_json
+                ) VALUES (?1, 'codex', 'codex_session_jsonl_tree', ?2, ?3,
+                    'primary', 2, 1782259200000, 1782259200000, 'indexed',
+                    1782259200000, 2, 1782259200000, '{}')",
+            )
+            .unwrap();
+        for index in 0..10_000 {
+            stmt.execute(params![
+                format!("{}/seed-{index:05}.jsonl", discovered.display()),
+                discovered.display().to_string(),
+                format!("large-catalog-session-{index:05}"),
+            ])
+            .unwrap();
+        }
+    }
+    tx.commit().unwrap();
+    let search = json_output(ctx(&temp).args(["search", "anything", "--json"]));
+    assert_eq!(search["freshness"]["mode"], "auto");
+    assert_eq!(search["freshness"]["status"], "skipped_large_index");
+    assert_eq!(search["freshness"]["source_count"], 1);
+
+    ctx(&temp)
+        .args(["search", "anything"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "search refresh skipped a large Codex source or index",
+        ));
+}
+
+#[test]
+fn search_refresh_auto_skips_large_discovered_source_on_fresh_database() {
+    let temp = tempdir();
+    let discovered = temp.path().join(".codex").join("sessions");
+    fs::create_dir_all(&discovered).unwrap();
+    let large = fs::File::create(discovered.join("large.jsonl")).unwrap();
+    large.set_len(1024 * 1024 * 1024 + 1).unwrap();
+
+    let search = json_output(ctx(&temp).args(["search", "anything", "--json"]));
+    assert_eq!(search["freshness"]["mode"], "auto");
+    assert_eq!(search["freshness"]["status"], "skipped_large_index");
+    assert_eq!(search["freshness"]["source_count"], 1);
+    assert!(search["results"].as_array().unwrap().is_empty());
+
+    let status = json_output(ctx(&temp).args(["status", "--json"]));
+    assert_eq!(status["cataloged_sessions"], 0);
+}
+
+#[test]
+fn search_refresh_auto_skips_many_small_discovered_source_files() {
+    let temp = tempdir();
+    let discovered = temp.path().join(".codex").join("sessions");
+    fs::create_dir_all(&discovered).unwrap();
+    for index in 0..10_000 {
+        fs::write(
+            discovered.join(format!("small-{index:05}.jsonl")),
+            format!("{{\"type\":\"noop\",\"index\":{index}}}\n"),
+        )
+        .unwrap();
+    }
+
+    let search = json_output(ctx(&temp).args(["search", "anything", "--json"]));
+    assert_eq!(search["freshness"]["mode"], "auto");
+    assert_eq!(search["freshness"]["status"], "skipped_large_index");
+    assert_eq!(search["freshness"]["source_count"], 1);
+
+    let status = json_output(ctx(&temp).args(["status", "--json"]));
+    assert_eq!(status["cataloged_sessions"], 0);
+}
+
+#[test]
+fn search_refresh_strict_fails_when_no_supported_refresh_source_exists() {
+    let temp = tempdir();
+    ctx(&temp)
+        .args(["search", "anything", "--refresh", "strict", "--json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "strict search refresh found no supported",
+        ));
+}
+
+#[test]
+fn search_rejects_unbounded_limit() {
+    let temp = tempdir();
+    ctx(&temp)
+        .args(["search", "anything", "--limit", "201"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid value"));
 }
 
 #[test]

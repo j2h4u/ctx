@@ -30,9 +30,10 @@ use uuid::Uuid;
 
 pub mod provider_sources;
 pub use provider_sources::{
-    discover_provider_sources, provider_source_for_path, provider_source_spec,
-    provider_source_specs, ProviderCatalogSupport, ProviderDefaultLocation, ProviderImportSupport,
-    ProviderSource, ProviderSourceKind, ProviderSourceSpec, ProviderSourceStatus,
+    discover_provider_sources, discover_provider_sources_for_provider, provider_source_for_path,
+    provider_source_spec, provider_source_specs, ProviderCatalogSupport, ProviderDefaultLocation,
+    ProviderImportSupport, ProviderSource, ProviderSourceKind, ProviderSourceSpec,
+    ProviderSourceStatus,
 };
 
 pub const CAPTURE_SCHEMA_VERSION: u32 = 1;
@@ -2345,11 +2346,18 @@ pub fn catalog_codex_session_tree(
             metadata_failures.remove(0)
         )));
     }
+    let stale_session_count =
+        store.catalog_source_stale_session_count(CaptureProvider::Codex, &source_root)?;
+    let current_path_set = current_paths.iter().cloned().collect::<BTreeSet<_>>();
+    let has_missing_existing_paths = existing
+        .keys()
+        .any(|source_path| !current_path_set.contains(source_path));
     if paths_to_parse.is_empty()
         && metadata_failures.is_empty()
         && cached_sessions.len() == current_paths.len()
         && existing.len() == current_paths.len()
-        && store.catalog_source_stale_session_count(CaptureProvider::Codex, &source_root)? == 0
+        && !has_missing_existing_paths
+        && stale_session_count == 0
     {
         summary.cataloged_sessions = cached_sessions.len();
         return Ok(summary);
@@ -2363,19 +2371,27 @@ pub fn catalog_codex_session_tree(
     )?;
     summary.failed_sessions += scan_summary.failed_sessions;
     summary.parsed_sessions += scan_summary.parsed_sessions;
-    let mut sessions = sessions;
-    sessions.extend(cached_sessions);
-    summary.cataloged_sessions = sessions.len();
+    let parsed_session_count = sessions.len();
+    let cached_session_count = cached_sessions.len();
+    let mut sessions_to_persist = sessions;
+    if stale_session_count > 0 {
+        sessions_to_persist.extend(cached_sessions);
+    }
+    summary.cataloged_sessions = parsed_session_count.saturating_add(cached_session_count);
 
     store.begin_immediate_batch()?;
     let persist = (|| -> Result<()> {
-        store.upsert_catalog_sessions(&sessions)?;
-        store.mark_catalog_source_missing_paths_stale(
-            CaptureProvider::Codex,
-            &source_root,
-            &current_paths,
-            cataloged_at_ms,
-        )?;
+        if !sessions_to_persist.is_empty() {
+            store.upsert_catalog_sessions(&sessions_to_persist)?;
+        }
+        if stale_session_count > 0 || has_missing_existing_paths {
+            store.mark_catalog_source_missing_paths_stale(
+                CaptureProvider::Codex,
+                &source_root,
+                &current_paths,
+                cataloged_at_ms,
+            )?;
+        }
         Ok(())
     })();
     match persist {
@@ -7789,6 +7805,56 @@ mod tests {
         assert_eq!(third.cached_sessions, session_count - 1);
         assert_eq!(third.parsed_sessions, 1);
         assert_eq!(third.failed_sessions, 0);
+    }
+
+    #[test]
+    fn codex_session_catalog_marks_deleted_paths_stale_when_additions_outnumber_deletions() {
+        let temp = tempdir();
+        let root = temp.path().join("sessions");
+        synthetic_codex_session_tree(&root, 2);
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let source_root = root.display().to_string();
+
+        let first = catalog_codex_session_tree(
+            &root,
+            &store,
+            CodexSessionCatalogOptions {
+                source_root: Some(root.clone()),
+                cataloged_at: "2026-06-26T12:00:00Z".parse().unwrap(),
+                allow_partial_failures: false,
+                ..CodexSessionCatalogOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(first.cataloged_sessions, 2);
+
+        fs::remove_file(
+            root.join("2026/06/26/00")
+                .join("synthetic-session-000000.jsonl"),
+        )
+        .unwrap();
+        write_synthetic_codex_session(&root, 2, "addition-one");
+        write_synthetic_codex_session(&root, 3, "addition-two");
+
+        let second = catalog_codex_session_tree(
+            &root,
+            &store,
+            CodexSessionCatalogOptions {
+                source_root: Some(root.clone()),
+                cataloged_at: "2026-06-26T12:01:00Z".parse().unwrap(),
+                allow_partial_failures: false,
+                ..CodexSessionCatalogOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(second.source_files, 3);
+        assert_eq!(second.cataloged_sessions, 3);
+        assert_eq!(
+            store
+                .catalog_source_stale_session_count(CaptureProvider::Codex, &source_root)
+                .unwrap(),
+            1
+        );
     }
 
     #[test]

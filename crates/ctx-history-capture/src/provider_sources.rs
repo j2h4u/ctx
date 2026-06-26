@@ -23,6 +23,8 @@ pub enum ProviderCatalogSupport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderSourceStatus {
     Available,
+    Empty,
+    Unknown,
     Missing,
     Unsupported,
 }
@@ -31,6 +33,8 @@ impl ProviderSourceStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Available => "available",
+            Self::Empty => "empty",
+            Self::Unknown => "unknown",
             Self::Missing => "missing",
             Self::Unsupported => "unsupported",
         }
@@ -248,6 +252,25 @@ pub fn discover_provider_sources(home: &Path) -> Vec<ProviderSource> {
         .collect()
 }
 
+pub fn discover_provider_sources_for_provider(
+    home: &Path,
+    provider: CaptureProvider,
+) -> Vec<ProviderSource> {
+    PROVIDER_SPECS
+        .iter()
+        .filter(|spec| spec.provider == provider)
+        .flat_map(|spec| {
+            spec.default_locations.iter().map(|location| {
+                let path = location
+                    .path_components
+                    .iter()
+                    .fold(home.to_path_buf(), |path, component| path.join(component));
+                provider_source_from_location(spec, location, path)
+            })
+        })
+        .collect()
+}
+
 pub fn provider_source_for_path(provider: CaptureProvider, path: PathBuf) -> ProviderSource {
     let unknown_spec = ProviderSourceSpec {
         provider,
@@ -322,10 +345,19 @@ fn provider_source_from_location(
     let exists = path.exists();
     let status = if matches!(spec.import_support, ProviderImportSupport::Unsupported) {
         ProviderSourceStatus::Unsupported
-    } else if exists {
-        ProviderSourceStatus::Available
-    } else {
+    } else if !exists {
         ProviderSourceStatus::Missing
+    } else {
+        match default_location_import_probe(spec.provider, location, &path) {
+            BoundedProbe::Found => ProviderSourceStatus::Available,
+            BoundedProbe::NotFound => ProviderSourceStatus::Empty,
+            BoundedProbe::BudgetExhausted => ProviderSourceStatus::Unknown,
+        }
+    };
+    let unsupported_reason = match status {
+        ProviderSourceStatus::Empty => empty_source_reason(spec.provider),
+        ProviderSourceStatus::Unknown => unknown_source_reason(spec.provider),
+        _ => spec.unsupported_reason,
     };
     ProviderSource {
         provider: spec.provider,
@@ -338,6 +370,319 @@ fn provider_source_from_location(
         status,
         raw_retention: spec.raw_retention,
         redaction_boundary: spec.redaction_boundary,
-        unsupported_reason: spec.unsupported_reason,
+        unsupported_reason,
+    }
+}
+
+fn empty_source_reason(provider: CaptureProvider) -> Option<&'static str> {
+    match provider {
+        CaptureProvider::Codex => Some("path exists but no Codex JSONL sessions were found"),
+        CaptureProvider::Pi => Some("path exists but no Pi session JSONL file was found"),
+        CaptureProvider::Claude => {
+            Some("path exists but no Claude project JSONL transcripts were found")
+        }
+        CaptureProvider::OpenCode => Some("path exists but no OpenCode SQLite database was found"),
+        CaptureProvider::Antigravity => {
+            Some("path exists but no Antigravity transcript JSONL files were found")
+        }
+        CaptureProvider::Gemini => Some(
+            "path exists but no Gemini CLI chat JSONL transcripts were found under tmp/*/chats",
+        ),
+        CaptureProvider::Cursor => {
+            Some("path exists but no Cursor agent JSONL transcripts were found")
+        }
+        CaptureProvider::CopilotCli => {
+            Some("path exists but no Copilot CLI session event JSONL files were found")
+        }
+        CaptureProvider::FactoryAiDroid => {
+            Some("path exists but no Factory AI Droid session JSONL files were found")
+        }
+        _ => None,
+    }
+}
+
+fn unknown_source_reason(provider: CaptureProvider) -> Option<&'static str> {
+    match provider {
+        CaptureProvider::Codex => {
+            Some("path exists but the Codex session transcript probe hit its scan budget")
+        }
+        CaptureProvider::Claude => {
+            Some("path exists but the Claude transcript probe hit its scan budget")
+        }
+        CaptureProvider::Antigravity => {
+            Some("path exists but the Antigravity transcript probe hit its scan budget")
+        }
+        CaptureProvider::Gemini => {
+            Some("path exists but the Gemini transcript probe hit its scan budget")
+        }
+        CaptureProvider::Cursor => {
+            Some("path exists but the Cursor transcript probe hit its scan budget")
+        }
+        CaptureProvider::CopilotCli => {
+            Some("path exists but the Copilot CLI transcript probe hit its scan budget")
+        }
+        CaptureProvider::FactoryAiDroid => {
+            Some("path exists but the Factory AI Droid transcript probe hit its scan budget")
+        }
+        _ => None,
+    }
+}
+
+fn default_location_import_probe(
+    provider: CaptureProvider,
+    location: &ProviderDefaultLocation,
+    path: &Path,
+) -> BoundedProbe {
+    match provider {
+        CaptureProvider::Codex if location.source_format == "codex_history_jsonl" => {
+            BoundedProbe::from_bool(path.is_file())
+        }
+        CaptureProvider::Codex => has_jsonl_file_under_matching(path, 10_000, |_| true),
+        CaptureProvider::Pi => BoundedProbe::from_bool(path.is_file()),
+        CaptureProvider::OpenCode => BoundedProbe::from_bool(path.is_file()),
+        CaptureProvider::Claude => has_jsonl_file_under_matching(path, 10_000, |_| true),
+        CaptureProvider::Antigravity => has_jsonl_file_under_matching(path, 10_000, |candidate| {
+            matches!(
+                candidate.file_name().and_then(|name| name.to_str()),
+                Some("transcript_full.jsonl" | "transcript.jsonl")
+            )
+        }),
+        CaptureProvider::Gemini => has_gemini_chat_jsonl(path, 10_000),
+        CaptureProvider::Cursor => has_jsonl_file_under_matching(path, 10_000, |candidate| {
+            path_has_component(candidate, "agent-transcripts")
+        }),
+        CaptureProvider::CopilotCli => has_jsonl_file_under_matching(path, 10_000, |candidate| {
+            candidate.file_name().and_then(|name| name.to_str()) == Some("events.jsonl")
+        }),
+        CaptureProvider::FactoryAiDroid => has_jsonl_file_under_matching(path, 10_000, |_| true),
+        _ => BoundedProbe::from_bool(path.exists()),
+    }
+}
+
+fn has_gemini_chat_jsonl(root: &Path, max_entries: usize) -> BoundedProbe {
+    let tmp = root.join("tmp");
+    if !tmp.is_dir() {
+        return BoundedProbe::NotFound;
+    }
+    has_jsonl_file_under_matching(&tmp, max_entries, |path| path_has_component(path, "chats"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundedProbe {
+    Found,
+    NotFound,
+    BudgetExhausted,
+}
+
+impl BoundedProbe {
+    fn from_bool(value: bool) -> Self {
+        if value {
+            Self::Found
+        } else {
+            Self::NotFound
+        }
+    }
+}
+
+fn has_jsonl_file_under_matching(
+    root: &Path,
+    max_entries: usize,
+    matches_path: impl Fn(&Path) -> bool,
+) -> BoundedProbe {
+    if root.is_file() {
+        return if root.extension().and_then(|ext| ext.to_str()) == Some("jsonl")
+            && matches_path(root)
+        {
+            BoundedProbe::Found
+        } else {
+            BoundedProbe::NotFound
+        };
+    }
+    if !root.is_dir() {
+        return BoundedProbe::NotFound;
+    }
+
+    let mut visited = 0usize;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            visited = visited.saturating_add(1);
+            if visited > max_entries {
+                return BoundedProbe::BudgetExhausted;
+            }
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file()
+                && path.extension().and_then(|ext| ext.to_str()) == Some("jsonl")
+                && matches_path(&path)
+            {
+                return BoundedProbe::Found;
+            }
+        }
+    }
+    BoundedProbe::NotFound
+}
+
+fn path_has_component(path: &Path, expected: &str) -> bool {
+    path.components()
+        .any(|component| component.as_os_str().to_str() == Some(expected))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gemini_default_source_is_empty_until_chat_transcripts_exist() {
+        let temp = tempfile::tempdir().unwrap();
+        let gemini = temp.path().join(".gemini");
+        std::fs::create_dir_all(&gemini).unwrap();
+
+        let source = discover_provider_sources(temp.path())
+            .into_iter()
+            .find(|source| source.provider == CaptureProvider::Gemini)
+            .unwrap();
+        assert!(source.exists);
+        assert_eq!(source.status, ProviderSourceStatus::Empty);
+        assert_eq!(source.import_support, ProviderImportSupport::Native);
+        assert!(source
+            .unsupported_reason
+            .unwrap()
+            .contains("no Gemini CLI chat JSONL transcripts"));
+
+        let chats = gemini.join("tmp/project/chats");
+        std::fs::create_dir_all(&chats).unwrap();
+        std::fs::write(chats.join("session.jsonl"), "{}\n").unwrap();
+
+        let source = discover_provider_sources(temp.path())
+            .into_iter()
+            .find(|source| source.provider == CaptureProvider::Gemini)
+            .unwrap();
+        assert_eq!(source.status, ProviderSourceStatus::Available);
+        assert_eq!(source.unsupported_reason, None);
+    }
+
+    #[test]
+    fn codex_default_source_is_empty_until_jsonl_sessions_exist() {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions = temp.path().join(".codex/sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        let source = discover_provider_sources(temp.path())
+            .into_iter()
+            .find(|source| {
+                source.provider == CaptureProvider::Codex
+                    && source.source_format == "codex_session_jsonl_tree"
+            })
+            .unwrap();
+        assert_eq!(source.status, ProviderSourceStatus::Empty);
+
+        std::fs::write(sessions.join("session.jsonl"), "{}\n").unwrap();
+        let source = discover_provider_sources(temp.path())
+            .into_iter()
+            .find(|source| {
+                source.provider == CaptureProvider::Codex
+                    && source.source_format == "codex_session_jsonl_tree"
+            })
+            .unwrap();
+        assert_eq!(source.status, ProviderSourceStatus::Available);
+    }
+
+    #[test]
+    fn native_provider_default_discovery_uses_importer_specific_file_predicates() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let antigravity = temp.path().join(".gemini/antigravity-cli/brain");
+        std::fs::create_dir_all(antigravity.join("session/.system_generated/logs")).unwrap();
+        std::fs::write(
+            antigravity.join("session/.system_generated/logs/not-a-transcript.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+        assert_source_status(
+            temp.path(),
+            CaptureProvider::Antigravity,
+            ProviderSourceStatus::Empty,
+        );
+        std::fs::write(
+            antigravity.join("session/.system_generated/logs/transcript_full.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+        assert_source_status(
+            temp.path(),
+            CaptureProvider::Antigravity,
+            ProviderSourceStatus::Available,
+        );
+
+        let cursor = temp.path().join(".cursor/projects");
+        std::fs::create_dir_all(cursor.join("project")).unwrap();
+        std::fs::write(cursor.join("project/session.jsonl"), "{}\n").unwrap();
+        assert_source_status(
+            temp.path(),
+            CaptureProvider::Cursor,
+            ProviderSourceStatus::Empty,
+        );
+        std::fs::create_dir_all(cursor.join("project/agent-transcripts/session")).unwrap();
+        std::fs::write(
+            cursor.join("project/agent-transcripts/session/events.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+        assert_source_status(
+            temp.path(),
+            CaptureProvider::Cursor,
+            ProviderSourceStatus::Available,
+        );
+
+        let copilot = temp.path().join(".copilot/session-state");
+        std::fs::create_dir_all(copilot.join("session")).unwrap();
+        std::fs::write(copilot.join("session/session.jsonl"), "{}\n").unwrap();
+        assert_source_status(
+            temp.path(),
+            CaptureProvider::CopilotCli,
+            ProviderSourceStatus::Empty,
+        );
+        std::fs::write(copilot.join("session/events.jsonl"), "{}\n").unwrap();
+        assert_source_status(
+            temp.path(),
+            CaptureProvider::CopilotCli,
+            ProviderSourceStatus::Available,
+        );
+    }
+
+    #[test]
+    fn bounded_probe_reports_budget_exhausted_source_as_unknown() {
+        let temp = tempfile::tempdir().unwrap();
+        let claude = temp.path().join(".claude/projects");
+        std::fs::create_dir_all(&claude).unwrap();
+        for index in 0..10_001 {
+            std::fs::create_dir(claude.join(format!("project-{index:05}"))).unwrap();
+        }
+
+        assert_source_status(
+            temp.path(),
+            CaptureProvider::Claude,
+            ProviderSourceStatus::Unknown,
+        );
+    }
+
+    fn assert_source_status(
+        home: &Path,
+        provider: CaptureProvider,
+        expected: ProviderSourceStatus,
+    ) {
+        let source = discover_provider_sources(home)
+            .into_iter()
+            .find(|source| source.provider == provider)
+            .unwrap();
+        assert_eq!(source.status, expected, "{provider:?}");
     }
 }

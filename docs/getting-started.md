@@ -9,9 +9,12 @@ it repeats work.
 curl -fsSL https://cli.ctx.rs/install | sh
 ```
 
+The Unix installer requires `curl` and OpenSSL to verify signed release
+metadata. On Windows, use `irm https://cli.ctx.rs/install.ps1 | iex`.
+
 The install script installs `ctx` and runs `ctx setup` so discovered local
-history is indexed before it exits. Use `sh -s -- --no-setup` for install-only
-CI or packaging flows.
+history is indexed before it exits. Use `sh -s -- --no-setup` on Unix, or set
+`CTX_INSTALL_NO_SETUP=1` on Windows, for install-only CI or packaging flows.
 
 When working from source, use `cargo build -p ctx` or
 `cargo install --path crates/ctx-cli`.
@@ -47,7 +50,10 @@ ctx sources --json
 
 `sources` checks known provider locations on the current machine. Today it
 reports supported Codex, Pi, Antigravity, Claude, OpenCode, Gemini, Cursor,
-Copilot CLI, and Factory AI Droid local history paths.
+Copilot CLI, and Factory AI Droid local history paths. JSON rows include
+`status` and `importable`; `status: "empty"` means the default location exists
+but no provider-specific transcript files were found there, and
+`status: "unknown"` means the bounded transcript probe hit its scan budget.
 
 ## 4. Re-Run Or Target Imports
 
@@ -81,7 +87,13 @@ Use `ctx_event_id` with `ctx show event` when you need a hit plus surrounding
 events. Use `ctx_session_id` with `ctx show session` when you need the
 transcript. Search also accepts filters such as `--provider`, `--repo`,
 `--since`, `--event-type`, `--file`, `--primary-only`, `--include-subagents`,
-and `--limit`.
+`--limit`, and `--refresh auto|off|strict`. `--limit` is capped at `200`.
+Search defaults to `--refresh auto`, a best-effort refresh of discovered Codex
+session sources before querying. On large discovered sources or
+already-cataloged indexes, `auto` serves current results without a foreground
+catch-up scan; use
+`--refresh strict` or `ctx import --provider codex` when you need a full
+catch-up before querying.
 
 ## 6. Use Search JSON For Agents
 

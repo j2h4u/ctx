@@ -232,6 +232,7 @@
           ],
           "notes": [
             "Reads Antigravity transcript JSONL mirrors under ~/.gemini/antigravity-cli/brain/*/.system_generated/logs, preferring transcript_full.jsonl when present.",
+            "Native source discovery marks Antigravity available only when transcript_full.jsonl or transcript.jsonl exists.",
             "Preserves typed tool call arguments as bounded, redacted JSON previews."
           ]
         }
@@ -283,7 +284,8 @@
             "ctx import --provider gemini"
           ],
           "notes": [
-            "Reads Gemini CLI chat JSONL records under ~/.gemini, including nested subagent chats when present."
+            "Reads Gemini CLI chat JSONL records under ~/.gemini/tmp/**/chats, including nested subagent chats when present.",
+            "Native source discovery marks Gemini available only when chat JSONL files exist under the chats path."
           ]
         }
       ],
@@ -328,6 +330,7 @@
           ],
           "notes": [
             "Reads Cursor CLI agent transcript JSONL files under ~/.cursor/projects/*/agent-transcripts/*/*.jsonl.",
+            "Native source discovery marks Cursor available only when JSONL files exist under an agent-transcripts path.",
             "Cursor auth stores and ai-tracking code metadata are not imported."
           ]
         }
@@ -375,7 +378,8 @@
             "ctx import --provider copilot-cli"
           ],
           "notes": [
-            "Reads Copilot CLI session event logs under ~/.copilot/session-state."
+            "Reads Copilot CLI session event logs named events.jsonl under ~/.copilot/session-state.",
+            "Native source discovery marks Copilot CLI available only when events.jsonl exists."
           ]
         }
       ],

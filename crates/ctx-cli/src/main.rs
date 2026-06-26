@@ -22,18 +22,18 @@ mod net;
 use analytics::{AnalyticsEvent, AnalyticsProperties};
 use config::{AppConfig, CONFIG_FILE};
 use ctx_history_capture::{
-    catalog_codex_session_tree, discover_provider_sources, import_antigravity_cli_history,
-    import_claude_projects_jsonl_tree, import_codex_history_jsonl, import_codex_session_jsonl,
-    import_codex_session_paths, import_codex_session_tree, import_copilot_cli_session_events,
-    import_cursor_native_history, import_factory_ai_droid_sessions, import_gemini_cli_history,
-    import_opencode_sqlite, import_pi_session_jsonl, provider_source_for_path,
-    provider_source_spec, stable_capture_uuid, AntigravityCliImportOptions, CatalogSummary,
-    ClaudeProjectsImportOptions, CodexEventImportMode, CodexHistoryImportOptions,
-    CodexSessionCatalogOptions, CodexSessionImportOptions, CodexSessionImportProgress,
-    CodexSessionImportProgressCallback, CodexToolOutputMode, CopilotCliImportOptions,
-    CursorNativeImportOptions, FactoryAiDroidImportOptions, GeminiCliImportOptions,
-    OpenCodeSqliteImportOptions, PiSessionImportOptions, ProviderImportSummary,
-    ProviderImportSupport, ProviderSource,
+    catalog_codex_session_tree, discover_provider_sources, discover_provider_sources_for_provider,
+    import_antigravity_cli_history, import_claude_projects_jsonl_tree, import_codex_history_jsonl,
+    import_codex_session_jsonl, import_codex_session_paths, import_codex_session_tree,
+    import_copilot_cli_session_events, import_cursor_native_history,
+    import_factory_ai_droid_sessions, import_gemini_cli_history, import_opencode_sqlite,
+    import_pi_session_jsonl, provider_source_for_path, provider_source_spec, stable_capture_uuid,
+    AntigravityCliImportOptions, CatalogSummary, ClaudeProjectsImportOptions, CodexEventImportMode,
+    CodexHistoryImportOptions, CodexSessionCatalogOptions, CodexSessionImportOptions,
+    CodexSessionImportProgress, CodexSessionImportProgressCallback, CodexToolOutputMode,
+    CopilotCliImportOptions, CursorNativeImportOptions, FactoryAiDroidImportOptions,
+    GeminiCliImportOptions, OpenCodeSqliteImportOptions, PiSessionImportOptions,
+    ProviderImportSummary, ProviderImportSupport, ProviderSource, ProviderSourceStatus,
 };
 use ctx_history_core::{
     database_path, default_data_root, CaptureProvider, ContextCitation, ContextCitationType, Event,
@@ -42,6 +42,10 @@ use ctx_history_core::{
 use ctx_history_store::{CatalogSession, CatalogSourceIndexUpdate, Store};
 
 const WAL_TRUNCATE_MIN_BYTES: u64 = 64 * 1024 * 1024;
+const LARGE_IMPORT_SOURCE_FILES_WARNING: usize = 10_000;
+const LARGE_IMPORT_SOURCE_BYTES_WARNING: u64 = 1024 * 1024 * 1024;
+const AUTO_REFRESH_DEFER_CATALOG_SESSION_THRESHOLD: usize = 10_000;
+const MAX_SEARCH_LIMIT: usize = 200;
 
 #[derive(Debug, Parser)]
 #[command(name = "ctx", version, about = "Search local agent history")]
@@ -228,7 +232,12 @@ struct ExportSessionArgs {
 #[derive(Debug, Args)]
 struct SearchArgs {
     query: Option<String>,
-    #[arg(long, default_value_t = 20)]
+    #[arg(
+        long,
+        default_value_t = 20,
+        value_parser = parse_search_limit,
+        help = "Maximum results to return, from 1 to 200"
+    )]
     limit: usize,
     #[arg(long)]
     provider: Option<ProviderArg>,
@@ -244,6 +253,14 @@ struct SearchArgs {
     event_type: Option<String>,
     #[arg(long)]
     file: Option<PathBuf>,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RefreshArg::Auto,
+        help = "Pre-search refresh behavior: auto, off, or strict",
+        long_help = "Pre-search refresh behavior. auto best-effort refreshes discovered Codex session sources and serves the existing index if refresh fails or the source/index is large; off searches the existing index only; strict fails if the refresh cannot run or import successfully."
+    )]
+    refresh: RefreshArg,
     #[arg(long)]
     json: bool,
 }
@@ -327,6 +344,23 @@ impl TranscriptMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum RefreshArg {
+    Auto,
+    Off,
+    Strict,
+}
+
+impl RefreshArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Off => "off",
+            Self::Strict => "strict",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum OutputFormat {
     Text,
     Markdown,
@@ -405,7 +439,7 @@ impl ProviderArg {
 
 type SourceInfo = ProviderSource;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct ImportTotals {
     source_files: usize,
     source_bytes: u64,
@@ -510,6 +544,67 @@ struct SourceStats {
 struct SourceProgressSnapshot {
     completed_bytes: u64,
     total_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+struct SearchRefreshReport {
+    mode: RefreshArg,
+    status: &'static str,
+    source_count: usize,
+    totals: ImportTotals,
+    error: Option<String>,
+}
+
+impl SearchRefreshReport {
+    fn skipped(mode: RefreshArg, status: &'static str) -> Self {
+        Self {
+            mode,
+            status,
+            source_count: 0,
+            totals: ImportTotals::default(),
+            error: None,
+        }
+    }
+
+    fn completed(mode: RefreshArg, source_count: usize, totals: ImportTotals) -> Self {
+        Self {
+            mode,
+            status: "completed",
+            source_count,
+            totals,
+            error: None,
+        }
+    }
+
+    fn deferred(mode: RefreshArg, source_count: usize, status: &'static str) -> Self {
+        Self {
+            mode,
+            status,
+            source_count,
+            totals: ImportTotals::default(),
+            error: None,
+        }
+    }
+
+    fn failed(mode: RefreshArg, source_count: usize, error: String) -> Self {
+        Self {
+            mode,
+            status: "failed",
+            source_count,
+            totals: ImportTotals::default(),
+            error: Some(error),
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        compact_json(json!({
+            "mode": self.mode.as_str(),
+            "status": self.status,
+            "source_count": self.source_count,
+            "totals": import_totals_json(&self.totals),
+            "error": self.error,
+        }))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1382,7 +1477,9 @@ fn run_sources(args: JsonArgs, analytics_properties: &mut AnalyticsProperties) -
     let importable = sources
         .iter()
         .filter(|source| {
-            source.exists && matches!(source.import_support, ProviderImportSupport::Native)
+            source.exists
+                && matches!(source.import_support, ProviderImportSupport::Native)
+                && source.status == ProviderSourceStatus::Available
         })
         .count();
     analytics::insert_count_bucket(
@@ -1429,6 +1526,7 @@ fn catalog_available_sources(
         if source.provider != CaptureProvider::Codex
             || source.source_format != "codex_session_jsonl_tree"
             || !source.exists
+            || source.status != ProviderSourceStatus::Available
         {
             continue;
         }
@@ -1539,6 +1637,9 @@ fn run_import_internal(
         ),
     );
     if let Some(warning) = low_disk_space_warning(&db_path, planned_total_bytes) {
+        progress.warning(warning);
+    }
+    if let Some(warning) = large_import_warning(&planned_sources, planned_total_bytes) {
         progress.warning(warning);
     }
 
@@ -1910,6 +2011,26 @@ fn should_parallelize_import(planned_sources: &[(SourceInfo, SourceStats)]) -> b
     planned_sources
         .iter()
         .any(|(source, _)| source.provider.as_str() != first.provider.as_str())
+}
+
+fn large_import_warning(
+    planned_sources: &[(SourceInfo, SourceStats)],
+    planned_total_bytes: u64,
+) -> Option<String> {
+    let planned_total_files = planned_sources
+        .iter()
+        .map(|(_, stats)| stats.files)
+        .sum::<usize>();
+    if planned_total_files < LARGE_IMPORT_SOURCE_FILES_WARNING
+        && planned_total_bytes < LARGE_IMPORT_SOURCE_BYTES_WARNING
+    {
+        return None;
+    }
+    Some(format!(
+        "large import: {} source file(s), {}; initial indexing may use sustained CPU and disk",
+        planned_total_files,
+        format_bytes(planned_total_bytes)
+    ))
 }
 
 fn source_import_json(
@@ -2892,11 +3013,16 @@ impl ShowDto {
 }
 
 impl SearchDto {
-    fn packet(store: &Store, packet: &ctx_history_search::SearchPacket) -> Value {
+    fn packet(
+        store: &Store,
+        packet: &ctx_history_search::SearchPacket,
+        refresh: &SearchRefreshReport,
+    ) -> Value {
         compact_json(json!({
             "schema_version": packet.schema_version,
             "query": packet.query,
             "filters": packet.filters,
+            "freshness": refresh.to_json(),
             "generated_at": packet.generated_at,
             "results": packet
                 .results
@@ -3059,6 +3185,18 @@ fn compact_json(mut value: Value) -> Value {
     value
 }
 
+fn parse_search_limit(value: &str) -> std::result::Result<usize, String> {
+    let limit = value
+        .parse::<usize>()
+        .map_err(|err| format!("invalid search limit: {err}"))?;
+    if !(1..=MAX_SEARCH_LIMIT).contains(&limit) {
+        return Err(format!(
+            "search limit must be between 1 and {MAX_SEARCH_LIMIT}"
+        ));
+    }
+    Ok(limit)
+}
+
 fn prune_null_json(value: &mut Value) {
     match value {
         Value::Object(map) => {
@@ -3081,7 +3219,7 @@ fn run_search(
     data_root: PathBuf,
     analytics_properties: &mut AnalyticsProperties,
 ) -> Result<()> {
-    refresh_before_search(&args, &data_root)?;
+    let refresh = refresh_before_search(&args, &data_root)?;
     let store = Store::open(database_path(data_root))?;
     let query = args.query.unwrap_or_default();
     let options = ctx_history_search::PacketOptions {
@@ -3116,8 +3254,19 @@ fn run_search(
         citation_count as u64,
     );
     if args.json {
-        print_share_safe_value(SearchDto::packet(&store, &packet))?;
+        print_share_safe_value(SearchDto::packet(&store, &packet, &refresh))?;
     } else {
+        if refresh.status == "failed" && args.refresh == RefreshArg::Auto {
+            if let Some(error) = &refresh.error {
+                eprintln!(
+                    "warning: search refresh failed; serving existing index; use --refresh strict to fail instead: {error}"
+                );
+            }
+        } else if refresh.status == "skipped_large_index" && args.refresh == RefreshArg::Auto {
+            eprintln!(
+                "note: search refresh skipped a large Codex source or index; serving existing results; run `ctx import --provider codex` or use `--refresh strict` when you need a full catch-up first"
+            );
+        }
         if packet.results.is_empty() {
             println!("no results");
             if query.trim().is_empty() {
@@ -3155,17 +3304,106 @@ fn run_search(
     Ok(())
 }
 
-fn refresh_before_search(args: &SearchArgs, data_root: &Path) -> Result<()> {
+fn refresh_before_search(args: &SearchArgs, data_root: &Path) -> Result<SearchRefreshReport> {
+    if args.refresh == RefreshArg::Off {
+        return Ok(SearchRefreshReport::skipped(RefreshArg::Off, "skipped"));
+    }
     let sources = search_refresh_sources(args.provider);
     if sources.is_empty() {
-        return Ok(());
+        if args.refresh == RefreshArg::Strict {
+            return Err(anyhow!(
+                "strict search refresh found no supported discovered Codex session sources; strict refresh is only supported for Codex in this release, so use --refresh off to search the existing index"
+            ));
+        }
+        return Ok(SearchRefreshReport::skipped(args.refresh, "no_sources"));
     }
-    let _ = refresh_sources_quietly(data_root, sources);
-    Ok(())
+    let source_count = sources.len();
+    if args.refresh == RefreshArg::Auto && should_skip_large_auto_refresh(data_root, &sources)? {
+        return Ok(SearchRefreshReport::deferred(
+            RefreshArg::Auto,
+            source_count,
+            "skipped_large_index",
+        ));
+    }
+    match refresh_sources_quietly(data_root, sources) {
+        Ok(totals) => Ok(SearchRefreshReport::completed(
+            args.refresh,
+            source_count,
+            totals,
+        )),
+        Err(err) if args.refresh == RefreshArg::Auto => Ok(SearchRefreshReport::failed(
+            RefreshArg::Auto,
+            source_count,
+            error_summary(&err),
+        )),
+        Err(err) => Err(err.context("search refresh failed")),
+    }
+}
+
+fn should_skip_large_auto_refresh(data_root: &Path, sources: &[SourceInfo]) -> Result<bool> {
+    let db_path = database_path(data_root.to_path_buf());
+    if db_path.exists() {
+        let store = Store::open(db_path)?;
+        if store.catalog_session_count()? >= AUTO_REFRESH_DEFER_CATALOG_SESSION_THRESHOLD {
+            return Ok(true);
+        }
+    }
+    for source in sources {
+        if source_exceeds_auto_refresh_threshold(&source.path)
+            .with_context(|| format!("scan {}", source.path.display()))?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn source_exceeds_auto_refresh_threshold(path: &Path) -> Result<bool> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_file() {
+        return Ok(metadata.len() >= LARGE_IMPORT_SOURCE_BYTES_WARNING);
+    }
+    if !metadata.file_type().is_dir() {
+        return Ok(false);
+    }
+
+    let mut entries = 0usize;
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            entries = entries.saturating_add(1);
+            if entries >= AUTO_REFRESH_DEFER_CATALOG_SESSION_THRESHOLD {
+                return Ok(true);
+            }
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                stack.push(entry.path());
+            } else if file_type.is_file() {
+                let metadata = entry.metadata()?;
+                files = files.saturating_add(1);
+                bytes = bytes.saturating_add(metadata.len());
+                if files >= AUTO_REFRESH_DEFER_CATALOG_SESSION_THRESHOLD
+                    || bytes >= LARGE_IMPORT_SOURCE_BYTES_WARNING
+                {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn search_refresh_sources(provider: Option<ProviderArg>) -> Vec<SourceInfo> {
-    discovered_sources()
+    let Some(home) = home_dir() else {
+        return Vec::new();
+    };
+    if provider.is_some_and(|provider| provider.capture_provider() != CaptureProvider::Codex) {
+        return Vec::new();
+    }
+    discover_provider_sources_for_provider(&home, CaptureProvider::Codex)
         .into_iter()
         .filter(|source| {
             provider.map_or(true, |provider| {
@@ -3173,13 +3411,16 @@ fn search_refresh_sources(provider: Option<ProviderArg>) -> Vec<SourceInfo> {
             })
         })
         .filter(|source| {
-            source.exists && matches!(source.import_support, ProviderImportSupport::Native)
+            source.exists
+                && matches!(source.import_support, ProviderImportSupport::Native)
+                && source.status == ProviderSourceStatus::Available
+                && source.source_format == "codex_session_jsonl_tree"
         })
         .filter(|source| source.provider == CaptureProvider::Codex)
         .collect()
 }
 
-fn refresh_sources_quietly(data_root: &Path, sources: Vec<SourceInfo>) -> Result<()> {
+fn refresh_sources_quietly(data_root: &Path, sources: Vec<SourceInfo>) -> Result<ImportTotals> {
     fs::create_dir_all(data_root)?;
     config::write_default_config(data_root)?;
     let db_path = database_path(data_root.to_path_buf());
@@ -3188,7 +3429,7 @@ fn refresh_sources_quietly(data_root: &Path, sources: Vec<SourceInfo>) -> Result
         .map(|source| (source, SourceStats::default()))
         .collect::<Vec<_>>();
     if planned_sources.is_empty() {
-        return Ok(());
+        return Ok(ImportTotals::default());
     }
 
     let progress = ProgressReporter::new(ProgressArg::None, true, "search-refresh", 0);
@@ -3260,11 +3501,8 @@ fn refresh_sources_quietly(data_root: &Path, sources: Vec<SourceInfo>) -> Result
         }
     }
 
-    if totals.imported_sessions > 0 || totals.imported_events > 0 || totals.imported_edges > 0 {
-        Store::open(&db_path)?.optimize_search_index()?;
-    }
     Store::open(&db_path)?.checkpoint_wal_truncate_if_larger_than(WAL_TRUNCATE_MIN_BYTES)?;
-    Ok(())
+    Ok(totals)
 }
 
 fn run_doctor(
@@ -3340,14 +3578,20 @@ fn import_requests(args: &ImportArgs) -> Result<Vec<SourceInfo>> {
         return Ok(discovered_sources()
             .into_iter()
             .filter(|source| {
-                source.exists && matches!(source.import_support, ProviderImportSupport::Native)
+                source.exists
+                    && matches!(source.import_support, ProviderImportSupport::Native)
+                    && source.status == ProviderSourceStatus::Available
             })
             .collect());
     }
     let provider = args.provider.expect("checked provider").capture_provider();
     let sources = discovered_sources()
         .into_iter()
-        .filter(|source| source.provider == provider && source.exists)
+        .filter(|source| {
+            source.provider == provider
+                && source.exists
+                && source.status == ProviderSourceStatus::Available
+        })
         .collect::<Vec<_>>();
     if sources.is_empty() {
         let spec = provider_source_spec(provider);
@@ -3809,6 +4053,8 @@ fn sources_json(sources: &[SourceInfo]) -> Vec<Value> {
                 "status": source.status.as_str(),
                 "import_support": import_support_json(source.import_support),
                 "native_import": matches!(source.import_support, ProviderImportSupport::Native),
+                "importable": source.status == ProviderSourceStatus::Available
+                    && matches!(source.import_support, ProviderImportSupport::Native),
                 "raw_retention": raw_retention_json(source.raw_retention),
                 "unsupported_reason": source.unsupported_reason,
             })

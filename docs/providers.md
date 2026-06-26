@@ -15,10 +15,13 @@ The current CLI imports local history for:
 - Claude Code project JSONL transcripts under `~/.claude/projects`;
 - OpenCode SQLite history under `~/.local/share/opencode/opencode.db`;
 - Antigravity transcript JSONL mirrors under
-  `~/.gemini/antigravity-cli/brain/*/.system_generated/logs/`;
-- Gemini CLI chat JSONL records under `~/.gemini`;
-- Cursor CLI agent transcript JSONL files under `~/.cursor/projects`;
-- Copilot CLI session event logs under `~/.copilot/session-state`;
+  `~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript_full.jsonl`
+  or `transcript.jsonl`;
+- Gemini CLI chat JSONL records under `~/.gemini/tmp/**/chats/**/*.jsonl`;
+- Cursor CLI agent transcript JSONL files under
+  `~/.cursor/projects/**/agent-transcripts/**/*.jsonl`;
+- Copilot CLI session event logs named `events.jsonl` under
+  `~/.copilot/session-state`;
 - Factory AI Droid session JSONL files under `~/.factory/sessions`.
 
 Use `ctx sources` for the truth on the current machine:
@@ -29,8 +32,11 @@ ctx sources --json
 ```
 
 `ctx sources --json` reports each known provider source with `import_support`
-and `native_import` fields. Sources with `import_support: "unsupported"` are
-detections or blockers, not importable native history.
+and `importable` fields. A native source is marked available/importable only
+when provider-specific transcript files exist. Sources with
+`status: "unknown"` hit the bounded transcript probe budget before proving
+history exists, and sources with `import_support: "unsupported"` are detections
+or blockers, not importable native history.
 
 If a provider is selected without a proven native importer, `ctx import`
 returns a provider-specific native-history blocker. Do not document a provider

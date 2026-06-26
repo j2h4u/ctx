@@ -9,6 +9,10 @@ Installs the ctx binary from explicit release metadata with pinned SHA-256
 checksums, then runs ctx setup to index discovered local history. The installer
 never evaluates remote scripts or metadata as shell.
 
+This helper is for local development and explicit-metadata testing. The
+production hosted installer is https://cli.ctx.rs/install and verifies detached
+metadata signatures before trusting artifact URLs or checksums.
+
 Options:
   --metadata PATH_OR_URL  Required. Local metadata file or HTTPS URL.
   --platform PLATFORM    linux-x64, macos-arm64, macos-x64, or freebsd-x64.

@@ -69,13 +69,17 @@ Each source includes:
 - `status`;
 - `import_support`;
 - `native_import`;
+- `importable`;
 - `raw_retention`;
 - `unsupported_reason`.
 
-`status` is `available`, `missing`, or `unsupported`. `import_support` is
-`native` or `unsupported`. `native_import` is a boolean derived from
-`import_support == "native"`. `unsupported_reason` is a string for unsupported
-rows and otherwise null.
+`status` is `available`, `empty`, `unknown`, `missing`, or `unsupported`.
+`import_support` is `native` or `unsupported`. `native_import` is a boolean
+derived from `import_support == "native"`. `importable` is true only when the
+source is both available and natively importable. `unknown` means the bounded
+provider-specific transcript probe hit its scan budget before proving the
+source available or empty. `unsupported_reason` is a string for unsupported,
+empty, or unknown rows and otherwise null.
 
 ## Import
 
@@ -220,6 +224,7 @@ Returns:
 - `schema_version`;
 - `query`;
 - `filters`;
+- `freshness`;
 - `generated_at`;
 - `results[]`;
 - `pagination`;
@@ -245,6 +250,15 @@ Each result can include:
 - `citations[]`;
 - `suggested_next_commands[]`;
 - `visibility`.
+
+`freshness` describes the pre-search refresh attempt:
+
+- `mode`, one of `auto`, `off`, or `strict`;
+- `status`, such as `completed`, `skipped`, `no_sources`,
+  `skipped_large_index`, or `failed`;
+- `source_count`;
+- `totals`, using the same import total fields as `ctx import --json`;
+- `error`, present when refresh failed but results were still served.
 
 `suggested_next_commands` can include `ctx show event`, `ctx show session`,
 `ctx locate event`, `ctx locate session`, and `ctx export session` command

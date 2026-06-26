@@ -1,9 +1,9 @@
 # Search
 
 `ctx search` finds matching indexed history, with event hits preferred when
-event context is available. It first performs a
-quiet best-effort refresh of discovered native provider history, then queries
-the local SQLite store.
+event context is available. By default it first performs a quiet best-effort
+refresh of discovered Codex session sources, then queries the local SQLite
+store.
 
 ## Search
 
@@ -15,6 +15,7 @@ ctx search "sqlite storage" --provider codex
 ctx search "retry handling" --repo checkout --since 60d
 ctx search "tool output" --event-type tool_output
 ctx search --file crates/foo/src/lib.rs
+ctx search "token budget" --refresh off
 ctx search "token budget" --limit 5 --json
 ```
 
@@ -53,7 +54,8 @@ Search filters narrow both human output and JSON:
 - `--file <path>`;
 - `--primary-only`;
 - `--include-subagents`;
-- `--limit <n>`.
+- `--limit <n>`;
+- `--refresh auto|off|strict`.
 
 `--since` accepts RFC 3339 timestamps such as `2026-06-01T00:00:00Z` or a day
 window such as `30d`.
@@ -61,9 +63,24 @@ window such as `30d`.
 The default includes subagent material. `--primary-only` excludes it unless
 `--include-subagents` is also passed.
 
+`--limit` defaults to `20` and is capped at `200`.
+
+`--refresh` defaults to `auto`. `auto` attempts a best-effort pre-search import
+of discovered Codex session sources and serves the existing index if that
+refresh fails. On large discovered sources or already-cataloged indexes, `auto`
+serves current results without a foreground catch-up scan; use
+`--refresh strict` or `ctx import --provider codex` when you need a full
+catch-up before querying. `off` skips the pre-search refresh. `strict` fails
+the search if the refresh cannot run or import successfully. The current
+pre-search refresh path is limited to discovered Codex session sources; other
+providers are searched from the existing index until they are explicitly
+imported.
+
 ## Machine Output
 
 Use `ctx search --json` for agent workflows and scripts. JSON results include
-the same result metadata and citations as the human output. A citation with
-`source_exists: false` means ctx can return indexed text, but the raw provider
-file was not available at the stored path when the result was built.
+the same result metadata and citations as the human output, plus a top-level
+`freshness` object describing the pre-search refresh mode and outcome. A
+citation with `source_exists: false` means ctx can return indexed text, but the
+raw provider file was not available at the stored path when the result was
+built.

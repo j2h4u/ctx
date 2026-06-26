@@ -26,10 +26,10 @@ is:
 | Pi | `local_import_when_supported` | `~/.pi/sessions.jsonl` or an explicit Pi JSONL path. | Static local-history fixture smoke. |
 | Claude | `local_import_when_supported` | `~/.claude/projects` or an explicit Claude projects JSONL tree. | Static local-history fixture smoke. |
 | OpenCode | `local_import_when_supported` | `~/.local/share/opencode/opencode.db` or an explicit OpenCode SQLite DB. | Static local-history fixture smoke. |
-| Antigravity | `local_import_when_supported` | `~/.gemini/antigravity-cli/brain` or an explicit Antigravity transcript JSONL tree. | Static local-history fixture smoke. |
-| Gemini | `local_import_when_supported` | `~/.gemini` or an explicit Gemini CLI history tree. | Static local-history fixture smoke. |
-| Cursor | `local_import_when_supported` | `~/.cursor/projects` agent transcript JSONL tree or an explicit Cursor agent transcript path. | Static local-history fixture smoke. |
-| Copilot CLI | `local_import_when_supported` | `~/.copilot/session-state` or an explicit Copilot CLI session-state tree. | Static local-history fixture smoke. |
+| Antigravity | `local_import_when_supported` | Antigravity `transcript_full.jsonl` or `transcript.jsonl` files under `~/.gemini/antigravity-cli/brain`, or an explicit Antigravity transcript JSONL tree. | Static local-history fixture smoke. |
+| Gemini | `local_import_when_supported` | Gemini chat JSONL files under `~/.gemini/tmp/**/chats`, or an explicit Gemini CLI history tree. | Static local-history fixture smoke. |
+| Cursor | `local_import_when_supported` | Cursor agent transcript JSONL files under `~/.cursor/projects/**/agent-transcripts`, or an explicit Cursor agent transcript path. | Static local-history fixture smoke. |
+| Copilot CLI | `local_import_when_supported` | Copilot CLI `events.jsonl` files under `~/.copilot/session-state`, or an explicit Copilot CLI session-state tree. | Static local-history fixture smoke. |
 | Factory AI Droid | `local_import_when_supported` | `~/.factory/sessions` or an explicit Factory AI Droid sessions tree. | Static local-history fixture smoke. |
 
 Fidelity fields in the machine-readable matrix describe the default public CLI

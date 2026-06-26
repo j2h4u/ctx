@@ -12,12 +12,13 @@ product boundary is retrieval, not interpretation.
 
 - `ctx setup` initializes local storage and indexes discovered supported local
   transcript formats.
-- `ctx sources` reports known local provider history paths.
+- `ctx sources` reports known local provider history paths, including whether a
+  native source is currently importable.
 - `ctx import` indexes supported local transcript formats.
 - `ctx list` reports indexed session rows.
-- `ctx search` refreshes discovered supported local transcript formats before
-  returning ranked local hits from the local index, with event IDs when a hit
-  maps to an indexed event.
+- `ctx search` can refresh discovered Codex session sources before returning
+  ranked local hits from the local index, with event IDs when a hit maps to an
+  indexed event.
 - `ctx show session` and `ctx show event` render transcripts, hits, and context
   windows using ctx-owned IDs.
 - `ctx locate session` and `ctx locate event` report provenance and resume

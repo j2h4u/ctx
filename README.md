@@ -32,9 +32,13 @@ Install the latest stable CLI release:
 curl -fsSL https://cli.ctx.rs/install | sh
 ```
 
+The Unix installer requires `curl` and OpenSSL to verify signed release
+metadata. On Windows, use `irm https://cli.ctx.rs/install.ps1 | iex`.
+
 The install script installs the binary and runs `ctx setup` so discovered local
 history is indexed before the command returns. Use
-`sh -s -- --no-setup` when you only want to install the binary.
+`sh -s -- --no-setup` on Unix, or set `CTX_INSTALL_NO_SETUP=1` on Windows, when
+you only want to install the binary.
 
 Build from this checkout:
 
@@ -74,6 +78,7 @@ Search and inspect results:
 ```bash
 ctx list
 ctx search "checkout retry"
+ctx search "checkout retry" --refresh off
 ctx show event <ctx-event-id> --window 3
 ctx show session <ctx-session-id> --mode lite
 ctx locate event <ctx-event-id>
@@ -146,6 +151,14 @@ source paths/cursors, snippets, match reasons, citations, and suggested next
 commands. Raw provider transcript files remain in provider-owned locations such
 as `~/.codex/sessions`; ctx stores the searchable text and metadata it needs in
 SQLite.
+
+Search defaults to `--refresh auto`, which best-effort refreshes discovered
+Codex session sources before querying. On large discovered sources or
+already-cataloged indexes, `auto` serves current results without a foreground
+catch-up scan; use `--refresh strict` or `ctx import --provider codex` when you
+need a full catch-up before querying. `--refresh off` searches the existing
+index, and `--limit` is capped at `200`. Search JSON includes a `freshness`
+object describing the refresh mode and outcome.
 
 ## Docs
 
