@@ -359,6 +359,8 @@ pub struct CatalogSummary {
     pub source_files: usize,
     pub source_bytes: u64,
     pub cataloged_sessions: usize,
+    pub cached_sessions: usize,
+    pub parsed_sessions: usize,
     pub skipped_sessions: usize,
     pub failed_sessions: usize,
 }
@@ -2331,6 +2333,7 @@ pub fn catalog_codex_session_tree(
             &metadata,
             cataloged_at_ms,
         ) {
+            summary.cached_sessions += 1;
             cached_sessions.push(session);
         } else {
             paths_to_parse.push(path);
@@ -2342,6 +2345,15 @@ pub fn catalog_codex_session_tree(
             metadata_failures.remove(0)
         )));
     }
+    if paths_to_parse.is_empty()
+        && metadata_failures.is_empty()
+        && cached_sessions.len() == current_paths.len()
+        && existing.len() == current_paths.len()
+        && store.catalog_source_stale_session_count(CaptureProvider::Codex, &source_root)? == 0
+    {
+        summary.cataloged_sessions = cached_sessions.len();
+        return Ok(summary);
+    }
     let (scan_summary, sessions) = catalog_codex_session_paths(
         paths_to_parse,
         &source_root,
@@ -2350,6 +2362,7 @@ pub fn catalog_codex_session_tree(
         options.parallelism,
     )?;
     summary.failed_sessions += scan_summary.failed_sessions;
+    summary.parsed_sessions += scan_summary.parsed_sessions;
     let mut sessions = sessions;
     sessions.extend(cached_sessions);
     summary.cataloged_sessions = sessions.len();
@@ -2452,6 +2465,7 @@ fn catalog_codex_session_paths(
         summary.source_bytes = summary
             .source_bytes
             .saturating_add(batch.summary.source_bytes);
+        summary.parsed_sessions += batch.summary.parsed_sessions;
         summary.failed_sessions += batch.summary.failed_sessions;
         sessions.append(&mut batch.sessions);
         failures.append(&mut batch.failures);
@@ -2486,7 +2500,10 @@ fn catalog_codex_session_chunk(
         batch.summary.source_files += 1;
         batch.summary.source_bytes = batch.summary.source_bytes.saturating_add(metadata.len());
         match catalog_codex_session_file(&path, source_root.as_str(), &metadata, cataloged_at_ms) {
-            Ok(session) => batch.sessions.push(session),
+            Ok(session) => {
+                batch.summary.parsed_sessions += 1;
+                batch.sessions.push(session);
+            }
             Err(err) => {
                 batch.summary.failed_sessions += 1;
                 batch.failures.push(format!("{}: {err}", path.display()));
@@ -7075,6 +7092,219 @@ mod tests {
         }
     }
 
+    fn synthetic_codex_session_tree(root: &Path, sessions: usize) -> u64 {
+        (0..sessions)
+            .map(|index| write_synthetic_codex_session(root, index, "baseline"))
+            .sum()
+    }
+
+    fn write_synthetic_codex_session(root: &Path, index: usize, marker: &str) -> u64 {
+        let shard = format!("{:02}", index / 1000);
+        let dir = root.join("2026").join("06").join("26").join(shard);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("synthetic-session-{index:06}.jsonl"));
+        let seconds = index % 86_400;
+        let timestamp = format!(
+            "2026-06-26T{:02}:{:02}:{:02}.000Z",
+            seconds / 3600,
+            (seconds / 60) % 60,
+            seconds % 60
+        );
+        let session_id = format!("synthetic-codex-session-{index:06}");
+        let meta = json!({
+            "timestamp": timestamp,
+            "type": "session_meta",
+            "payload": {
+                "id": session_id,
+                "timestamp": timestamp,
+                "cwd": "/repo/ctx",
+                "originator": "codex-cli",
+                "cli_version": "0.2.0-test",
+                "source": "cli",
+                "model_provider": "openai"
+            }
+        });
+        let message = json!({
+            "timestamp": timestamp,
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": format!("incremental import synthetic corpus {index:06} {marker}")
+                }]
+            }
+        });
+        let body = format!("{meta}\n{message}\n");
+        fs::write(&path, body.as_bytes()).unwrap();
+        body.len() as u64
+    }
+
+    #[derive(Debug)]
+    struct IncrementalCatchUpSummary {
+        catalog: CatalogSummary,
+        import: ProviderImportSummary,
+        pending_sessions: usize,
+    }
+
+    fn incremental_codex_catch_up(
+        root: &Path,
+        store: &mut Store,
+        observed_at: DateTime<Utc>,
+    ) -> IncrementalCatchUpSummary {
+        let source_root = root.display().to_string();
+        let catalog = catalog_codex_session_tree(
+            root,
+            store,
+            CodexSessionCatalogOptions {
+                source_root: Some(root.to_path_buf()),
+                cataloged_at: observed_at,
+                allow_partial_failures: false,
+                ..CodexSessionCatalogOptions::default()
+            },
+        )
+        .unwrap();
+        let pending = store
+            .list_pending_catalog_sessions(CaptureProvider::Codex, &source_root)
+            .unwrap();
+        let pending_sessions = pending.len();
+        if pending.is_empty() {
+            return IncrementalCatchUpSummary {
+                catalog,
+                import: ProviderImportSummary::default(),
+                pending_sessions,
+            };
+        }
+
+        let paths = pending
+            .iter()
+            .map(|session| PathBuf::from(&session.source_path))
+            .collect::<Vec<_>>();
+        let import = import_codex_session_paths(
+            paths,
+            store,
+            CodexSessionImportOptions {
+                source_path: Some(root.to_path_buf()),
+                imported_at: observed_at,
+                allow_partial_failures: false,
+                ..CodexSessionImportOptions::default()
+            },
+        )
+        .unwrap();
+        let indexed_at_ms = observed_at.timestamp_millis();
+        for session in pending {
+            store
+                .mark_catalog_source_indexed(
+                    CaptureProvider::Codex,
+                    ctx_history_store::CatalogSourceIndexUpdate {
+                        source_root: &session.source_root,
+                        source_path: &session.source_path,
+                        file_size_bytes: session.file_size_bytes,
+                        file_modified_at_ms: session.file_modified_at_ms,
+                        event_count: 1,
+                        indexed_at_ms,
+                    },
+                )
+                .unwrap();
+        }
+
+        IncrementalCatchUpSummary {
+            catalog,
+            import,
+            pending_sessions,
+        }
+    }
+
+    #[derive(Debug)]
+    struct TimingStats {
+        min_ms: f64,
+        p50_ms: f64,
+        p95_ms: f64,
+        max_ms: f64,
+    }
+
+    impl TimingStats {
+        fn to_json(&self) -> Value {
+            json!({
+                "min_ms": rounded(self.min_ms),
+                "p50_ms": rounded(self.p50_ms),
+                "p95_ms": rounded(self.p95_ms),
+                "max_ms": rounded(self.max_ms),
+            })
+        }
+    }
+
+    fn timing_stats(samples: &[f64]) -> TimingStats {
+        assert!(!samples.is_empty(), "timing samples must not be empty");
+        let mut sorted = samples.to_vec();
+        sorted.sort_by(f64::total_cmp);
+        TimingStats {
+            min_ms: sorted[0],
+            p50_ms: percentile(&sorted, 0.50),
+            p95_ms: percentile(&sorted, 0.95),
+            max_ms: *sorted.last().unwrap(),
+        }
+    }
+
+    fn percentile(sorted: &[f64], percentile: f64) -> f64 {
+        let index = ((sorted.len() - 1) as f64 * percentile).ceil() as usize;
+        sorted[index.min(sorted.len() - 1)]
+    }
+
+    fn elapsed_ms(duration: std::time::Duration) -> f64 {
+        duration.as_secs_f64() * 1000.0
+    }
+
+    fn rounded(value: f64) -> f64 {
+        (value * 100.0).round() / 100.0
+    }
+
+    fn env_flag(name: &str) -> bool {
+        std::env::var_os(name).is_some_and(|value| {
+            let value = value.to_string_lossy();
+            !matches!(value.as_ref(), "" | "0" | "false" | "False" | "FALSE")
+        })
+    }
+
+    fn env_usize(name: &str) -> Option<usize> {
+        std::env::var(name).ok()?.parse().ok()
+    }
+
+    fn env_f64(name: &str) -> Option<f64> {
+        std::env::var(name).ok()?.parse().ok()
+    }
+
+    fn incremental_perf_file_count() -> usize {
+        env_usize("CTX_CODEX_INCREMENTAL_PERF_FILES").unwrap_or_else(|| {
+            if env_flag("CTX_CODEX_INCREMENTAL_PERF_SLOW") {
+                32_000
+            } else {
+                5_000
+            }
+        })
+    }
+
+    fn incremental_perf_repeats() -> usize {
+        env_usize("CTX_CODEX_INCREMENTAL_PERF_REPEATS")
+            .unwrap_or(5)
+            .max(1)
+    }
+
+    fn incremental_perf_noop_p95_threshold_ms(file_count: usize) -> f64 {
+        env_f64("CTX_CODEX_INCREMENTAL_PERF_NOOP_P95_MS").unwrap_or_else(|| {
+            if file_count >= 30_000 {
+                1_000.0
+            } else {
+                500.0
+            }
+        })
+    }
+
+    fn incremental_perf_noop_us_per_file_threshold() -> f64 {
+        env_f64("CTX_CODEX_INCREMENTAL_PERF_NOOP_US_PER_FILE").unwrap_or(50.0)
+    }
+
     fn fixed_import_options(path: PathBuf) -> ProviderFixtureImportOptions {
         ProviderFixtureImportOptions {
             machine_id: "test-machine".into(),
@@ -7498,6 +7728,223 @@ mod tests {
         assert!(child_events
             .iter()
             .any(|event| event.payload.to_string().contains("local history search")));
+    }
+
+    #[test]
+    fn codex_session_catalog_large_noop_uses_metadata_cache() {
+        let temp = tempdir();
+        let root = temp.path().join("sessions");
+        let session_count = 1_024;
+        synthetic_codex_session_tree(&root, session_count);
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+
+        let first = catalog_codex_session_tree(
+            &root,
+            &store,
+            CodexSessionCatalogOptions {
+                source_root: Some(root.clone()),
+                cataloged_at: "2026-06-26T12:00:00Z".parse().unwrap(),
+                allow_partial_failures: false,
+                ..CodexSessionCatalogOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(first.source_files, session_count);
+        assert_eq!(first.cataloged_sessions, session_count);
+        assert_eq!(first.cached_sessions, 0);
+        assert_eq!(first.parsed_sessions, session_count);
+        assert_eq!(first.failed_sessions, 0);
+
+        let second = catalog_codex_session_tree(
+            &root,
+            &store,
+            CodexSessionCatalogOptions {
+                source_root: Some(root.clone()),
+                cataloged_at: "2026-06-26T12:01:00Z".parse().unwrap(),
+                allow_partial_failures: false,
+                ..CodexSessionCatalogOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(second.source_files, session_count);
+        assert_eq!(second.cataloged_sessions, session_count);
+        assert_eq!(second.cached_sessions, session_count);
+        assert_eq!(second.parsed_sessions, 0);
+        assert_eq!(second.failed_sessions, 0);
+
+        write_synthetic_codex_session(&root, 17, "changed-size-for-incremental-refresh");
+        let third = catalog_codex_session_tree(
+            &root,
+            &store,
+            CodexSessionCatalogOptions {
+                source_root: Some(root.clone()),
+                cataloged_at: "2026-06-26T12:02:00Z".parse().unwrap(),
+                allow_partial_failures: false,
+                ..CodexSessionCatalogOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(third.source_files, session_count);
+        assert_eq!(third.cataloged_sessions, session_count);
+        assert_eq!(third.cached_sessions, session_count - 1);
+        assert_eq!(third.parsed_sessions, 1);
+        assert_eq!(third.failed_sessions, 0);
+    }
+
+    #[test]
+    #[ignore = "manual perf gate; run through //:codex_incremental_import_perf_bench"]
+    fn synthetic_codex_incremental_import_perf_records_thresholded_evidence() {
+        let out_dir = std::env::var_os("CTX_ARTIFACT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .ancestors()
+                    .nth(2)
+                    .unwrap()
+                    .join("target/ctx-artifacts/codex_incremental_import_perf_bench")
+            });
+        fs::create_dir_all(&out_dir).unwrap();
+        let artifact_path = out_dir.join("synthetic-codex-incremental-import-perf.json");
+
+        let temp = tempdir();
+        let root = temp.path().join("sessions");
+        let file_count = incremental_perf_file_count();
+        let repeats = incremental_perf_repeats();
+        let generation_started = std::time::Instant::now();
+        let source_bytes = synthetic_codex_session_tree(&root, file_count);
+        let generation_ms = elapsed_ms(generation_started.elapsed());
+
+        let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let first_started = std::time::Instant::now();
+        let first =
+            incremental_codex_catch_up(&root, &mut store, "2026-06-26T13:00:00Z".parse().unwrap());
+        let first_ms = elapsed_ms(first_started.elapsed());
+        assert_eq!(first.catalog.parsed_sessions, file_count);
+        assert_eq!(first.catalog.cached_sessions, 0);
+        assert_eq!(first.pending_sessions, file_count);
+        assert_eq!(first.import.imported_sessions, file_count);
+
+        let warmup =
+            incremental_codex_catch_up(&root, &mut store, "2026-06-26T13:01:00Z".parse().unwrap());
+        assert_eq!(warmup.catalog.cached_sessions, file_count);
+        assert_eq!(warmup.catalog.parsed_sessions, 0);
+        assert_eq!(warmup.pending_sessions, 0);
+        assert_eq!(warmup.import.imported_sessions, 0);
+        assert_eq!(warmup.import.imported_events, 0);
+
+        let mut noop_samples = Vec::with_capacity(repeats);
+        let noop_base_time: DateTime<Utc> = "2026-06-26T13:02:00Z".parse().unwrap();
+        for index in 0..repeats {
+            let observed_at = noop_base_time + chrono::Duration::minutes(index as i64);
+            let started = std::time::Instant::now();
+            let noop = incremental_codex_catch_up(&root, &mut store, observed_at);
+            let elapsed = elapsed_ms(started.elapsed());
+            assert_eq!(noop.catalog.cached_sessions, file_count);
+            assert_eq!(noop.catalog.parsed_sessions, 0);
+            assert_eq!(noop.pending_sessions, 0);
+            assert_eq!(noop.import.imported_sessions, 0);
+            assert_eq!(noop.import.imported_events, 0);
+            noop_samples.push(elapsed);
+        }
+
+        let noop_stats = timing_stats(&noop_samples);
+        let noop_us_per_file = (noop_stats.p95_ms * 1000.0) / file_count as f64;
+        let noop_p95_threshold_ms = incremental_perf_noop_p95_threshold_ms(file_count);
+        let noop_us_per_file_threshold = incremental_perf_noop_us_per_file_threshold();
+        let checks = vec![
+            json!({
+                "name": "no_op_catalog_parses_zero_sessions",
+                "passed": warmup.catalog.parsed_sessions == 0,
+                "actual": warmup.catalog.parsed_sessions,
+                "threshold": 0
+            }),
+            json!({
+                "name": "no_op_pending_sessions_zero",
+                "passed": warmup.pending_sessions == 0,
+                "actual": warmup.pending_sessions,
+                "threshold": 0
+            }),
+            json!({
+                "name": "no_op_p95_ms",
+                "passed": noop_stats.p95_ms <= noop_p95_threshold_ms,
+                "actual": rounded(noop_stats.p95_ms),
+                "threshold": noop_p95_threshold_ms
+            }),
+            json!({
+                "name": "no_op_us_per_file",
+                "passed": noop_us_per_file <= noop_us_per_file_threshold,
+                "actual": rounded(noop_us_per_file),
+                "threshold": noop_us_per_file_threshold
+            }),
+        ];
+        let passed = checks
+            .iter()
+            .all(|check| check["passed"].as_bool().unwrap_or(false));
+
+        let artifact = json!({
+            "schema_version": 1,
+            "profile": "synthetic-codex-incremental-import-perf",
+            "mode": if file_count >= 30_000 { "slow" } else { "standard" },
+            "status": if passed { "passed" } else { "failed" },
+            "corpus": {
+                "source_files": file_count,
+                "source_bytes": source_bytes,
+                "events_per_session": 1
+            },
+            "thresholds": {
+                "noop_p95_ms": noop_p95_threshold_ms,
+                "noop_us_per_file": noop_us_per_file_threshold,
+                "env_overrides": [
+                    "CTX_CODEX_INCREMENTAL_PERF_FILES",
+                    "CTX_CODEX_INCREMENTAL_PERF_REPEATS",
+                    "CTX_CODEX_INCREMENTAL_PERF_SLOW",
+                    "CTX_CODEX_INCREMENTAL_PERF_NOOP_P95_MS",
+                    "CTX_CODEX_INCREMENTAL_PERF_NOOP_US_PER_FILE"
+                ]
+            },
+            "profiles": {
+                "generation": {
+                    "duration_ms": rounded(generation_ms)
+                },
+                "first_incremental_catch_up": {
+                    "duration_ms": rounded(first_ms),
+                    "catalog": {
+                        "source_files": first.catalog.source_files,
+                        "source_bytes": first.catalog.source_bytes,
+                        "cached_sessions": first.catalog.cached_sessions,
+                        "parsed_sessions": first.catalog.parsed_sessions,
+                        "failed_sessions": first.catalog.failed_sessions
+                    },
+                    "pending_sessions": first.pending_sessions,
+                    "imported_sessions": first.import.imported_sessions,
+                    "imported_events": first.import.imported_events
+                },
+                "noop_incremental_catch_up": {
+                    "timings": noop_stats.to_json(),
+                    "repeats": repeats,
+                    "cached_sessions": warmup.catalog.cached_sessions,
+                    "parsed_sessions": warmup.catalog.parsed_sessions,
+                    "pending_sessions": warmup.pending_sessions,
+                    "p95_us_per_file": rounded(noop_us_per_file)
+                }
+            },
+            "checks": checks
+        });
+        fs::write(
+            &artifact_path,
+            serde_json::to_vec_pretty(&artifact).unwrap(),
+        )
+        .unwrap();
+        println!(
+            "synthetic Codex incremental import perf artifact: {}",
+            artifact_path.display()
+        );
+
+        assert!(
+            passed,
+            "synthetic Codex incremental import perf thresholds failed; see {}",
+            artifact_path.display()
+        );
     }
 
     #[test]

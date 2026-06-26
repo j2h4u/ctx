@@ -116,6 +116,14 @@ sh_test(
     data = CTX_GATE_DATA,
 )
 
+sh_test(
+    name = "codex_incremental_import_perf_bench",
+    srcs = ["scripts/bazel-test.sh"],
+    args = ["codex_incremental_import_perf_bench"],
+    data = CTX_GATE_DATA,
+    tags = ["manual"],
+)
+
 test_suite(
     name = "fast",
     tests = [

@@ -481,6 +481,8 @@ struct CatalogTotals {
     source_files: usize,
     source_bytes: u64,
     cataloged_sessions: usize,
+    cached_sessions: usize,
+    parsed_sessions: usize,
     skipped_sessions: usize,
     failed_sessions: usize,
 }
@@ -491,6 +493,8 @@ impl CatalogTotals {
         self.source_files += summary.source_files;
         self.source_bytes = self.source_bytes.saturating_add(summary.source_bytes);
         self.cataloged_sessions += summary.cataloged_sessions;
+        self.cached_sessions += summary.cached_sessions;
+        self.parsed_sessions += summary.parsed_sessions;
         self.skipped_sessions += summary.skipped_sessions;
         self.failed_sessions += summary.failed_sessions;
     }
@@ -1188,6 +1192,8 @@ fn run_setup(
                 "source_files": catalog.source_files,
                 "source_bytes": catalog.source_bytes,
                 "cataloged_sessions": catalog.cataloged_sessions,
+                "cached_sessions": catalog.cached_sessions,
+                "parsed_sessions": catalog.parsed_sessions,
                 "indexed_sessions": catalog_counts.indexed,
                 "pending_sessions": catalog_counts.pending,
                 "skipped_sessions": catalog.skipped_sessions,
@@ -1213,6 +1219,8 @@ fn run_setup(
         println!("config_path: {}", config_path.display());
         println!("indexed_items: {indexed_items}");
         println!("cataloged_sessions: {}", catalog.cataloged_sessions);
+        println!("cached_catalog_sessions: {}", catalog.cached_sessions);
+        println!("parsed_catalog_sessions: {}", catalog.parsed_sessions);
         println!("indexed_catalog_sessions: {}", catalog_counts.indexed);
         println!("pending_catalog_sessions: {}", catalog_counts.pending);
         println!("failed_catalog_sessions: {}", catalog_counts.failed);
@@ -1442,6 +1450,8 @@ fn catalog_available_sources(
             "source_files": summary.source_files,
             "source_bytes": summary.source_bytes,
             "cataloged_sessions": summary.cataloged_sessions,
+            "cached_sessions": summary.cached_sessions,
+            "parsed_sessions": summary.parsed_sessions,
             "skipped_sessions": summary.skipped_sessions,
             "failed_sessions": summary.failed_sessions,
         }));
@@ -3173,24 +3183,15 @@ fn refresh_sources_quietly(data_root: &Path, sources: Vec<SourceInfo>) -> Result
     fs::create_dir_all(data_root)?;
     config::write_default_config(data_root)?;
     let db_path = database_path(data_root.to_path_buf());
-    let mut planned_sources = Vec::new();
-    let mut planned_total_bytes = 0u64;
-    for source in sources {
-        let stats = source_stats(&source.path)
-            .with_context(|| format!("scan import source {}", source.path.display()))?;
-        planned_total_bytes = planned_total_bytes.saturating_add(stats.bytes);
-        planned_sources.push((source, stats));
-    }
+    let planned_sources = sources
+        .into_iter()
+        .map(|source| (source, SourceStats::default()))
+        .collect::<Vec<_>>();
     if planned_sources.is_empty() {
         return Ok(());
     }
 
-    let progress = ProgressReporter::new(
-        ProgressArg::None,
-        true,
-        "search-refresh",
-        planned_total_bytes,
-    );
+    let progress = ProgressReporter::new(ProgressArg::None, true, "search-refresh", 0);
     let mut totals = ImportTotals::default();
     if should_parallelize_import(&planned_sources) {
         let store = Store::open(&db_path)?;

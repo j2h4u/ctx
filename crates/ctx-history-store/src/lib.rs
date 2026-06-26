@@ -1174,6 +1174,26 @@ impl Store {
         collect_rows(rows)
     }
 
+    pub fn catalog_source_stale_session_count(
+        &self,
+        provider: CaptureProvider,
+        source_root: &str,
+    ) -> Result<usize> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM catalog_sessions
+                WHERE provider = ?1
+                  AND source_root = ?2
+                  AND is_stale != 0
+                "#,
+                params![provider.as_str(), source_root],
+                |row| row.get::<_, usize>(0),
+            )
+            .map_err(Into::into)
+    }
+
     pub fn mark_catalog_source_missing_paths_stale(
         &self,
         provider: CaptureProvider,
@@ -5814,6 +5834,15 @@ mod catalog_tests {
         assert_eq!(counts.failed, 0);
         assert_eq!(
             store
+                .catalog_source_stale_session_count(
+                    CaptureProvider::Codex,
+                    "/home/user/.codex/sessions"
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
                 .list_pending_catalog_sessions(CaptureProvider::Codex, "/home/user/.codex/sessions")
                 .unwrap()
                 .len(),
@@ -5852,6 +5881,15 @@ mod catalog_tests {
         assert_eq!(counts.indexed, 0);
         assert_eq!(counts.stale, 1);
         assert_eq!(counts.pending, 0);
+        assert_eq!(
+            store
+                .catalog_source_stale_session_count(
+                    CaptureProvider::Codex,
+                    "/home/user/.codex/sessions"
+                )
+                .unwrap(),
+            1
+        );
     }
 
     #[test]

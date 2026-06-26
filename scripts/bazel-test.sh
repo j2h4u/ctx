@@ -112,6 +112,9 @@ case "${mode}" in
   search_determinism_tests)
     run_cargo_test -p ctx-history-search search_packet_is_deterministic_for_large_history_and_equal_ties_use_record_id
     ;;
+  codex_incremental_import_perf_bench)
+    run_cargo_test -p ctx-history-capture synthetic_codex_incremental_import_perf_records_thresholded_evidence -- --ignored --nocapture
+    ;;
   *)
     fail "unknown bazel test mode: ${mode}"
     ;;
