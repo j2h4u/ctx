@@ -196,6 +196,19 @@ Filters:
 write newly discovered Codex session history into the local index before
 querying.
 
+## Agent Skill
+
+```bash
+ctx skill install
+ctx skill install --dry-run
+ctx skill install --json
+```
+
+`skill install` writes the universal `ctx-agent-history-search` skill file into
+the configured ctx data root and prints the next steps for Claude Code, Codex,
+Cursor, and manual agent setup. It does not silently write agent configuration
+files. Use `--dry-run` to print the plan without writing the skill file.
+
 ## Progress Output
 
 `setup` and `import` accept `--progress auto|plain|json|none`. `auto` writes
@@ -228,6 +241,7 @@ ctx locate session <ctx-session-id> --format json
 ctx locate event <ctx-event-id> --format json
 ctx export session <ctx-session-id> --mode full --format json
 ctx search [query] --json
+ctx skill install --json
 ctx doctor --json
 ctx validate --json
 ```

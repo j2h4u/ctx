@@ -15,6 +15,8 @@ the local retrieval product.
   mode.
 - `ctx export session` writes only the explicit `--out` path when one is
   provided.
+- `ctx skill install` writes only the local skill file under the configured ctx
+  data root and does not silently write agent configuration files.
 - In local-only security mode, setup/import/search do not use network access or
   API keys.
 - Provider files are read as sources and not modified.

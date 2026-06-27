@@ -12,7 +12,7 @@ ctx status
 If ctx is not installed:
 
 ```bash
-curl -fsSL https://cli.ctx.rs/install | sh
+curl -fsSL https://ctx.rs/install | sh
 ```
 
 The Unix installer requires `curl` and OpenSSL to verify signed release
@@ -31,6 +31,12 @@ search index. The default root is `~/.ctx`. Use a temporary root for trials:
 
 ```bash
 ctx --data-root /tmp/ctx-first-10 setup
+```
+
+To install the reusable agent skill:
+
+```bash
+ctx skill install
 ```
 
 ## 3. Check Sources

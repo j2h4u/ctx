@@ -69,6 +69,7 @@ analytics marker described under network behavior.
 | `ctx locate` | SQLite index and raw source path metadata | none |
 | `ctx export` | SQLite index | selected `--out` path when provided |
 | `ctx search` | Codex session files, path metadata, and SQLite index | SQLite index for newly discovered Codex session history |
+| `ctx skill install` | packaged `ctx-agent-history-search` skill content | local skill file under the configured ctx data root |
 | `ctx doctor` | SQLite index and data root metadata | none |
 | `ctx validate` | SQLite index | none |
 

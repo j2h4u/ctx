@@ -47,6 +47,9 @@ const WAL_TRUNCATE_MIN_BYTES: u64 = 64 * 1024 * 1024;
 const LARGE_IMPORT_SOURCE_FILES_WARNING: usize = 10_000;
 const LARGE_IMPORT_SOURCE_BYTES_WARNING: u64 = 1024 * 1024 * 1024;
 const MAX_SEARCH_LIMIT: usize = 200;
+const AGENT_HISTORY_SKILL_NAME: &str = "ctx-agent-history-search";
+const AGENT_HISTORY_SKILL_MARKDOWN: &str =
+    include_str!("../../../skills/ctx-agent-history-search/SKILL.md");
 
 #[derive(Debug, Parser)]
 #[command(name = "ctx", version, about = "Search local agent history")]
@@ -77,6 +80,8 @@ enum CommandRoot {
     Export(ExportArgs),
     #[command(about = "Search indexed agent history")]
     Search(SearchArgs),
+    #[command(about = "Install or print agent skill guidance")]
+    Skill(SkillArgs),
     #[command(about = "Check local ctx health")]
     Doctor(JsonArgs),
     #[command(about = "Validate local ctx storage")]
@@ -266,6 +271,26 @@ struct SearchArgs {
     json: bool,
 }
 
+#[derive(Debug, Args)]
+struct SkillArgs {
+    #[command(subcommand)]
+    target: SkillTarget,
+}
+
+#[derive(Debug, Subcommand)]
+enum SkillTarget {
+    #[command(about = "Install the universal ctx agent-history search skill locally")]
+    Install(SkillInstallArgs),
+}
+
+#[derive(Debug, Args)]
+struct SkillInstallArgs {
+    #[arg(long, help = "Print the install plan without writing files")]
+    dry_run: bool,
+    #[arg(long)]
+    json: bool,
+}
+
 impl CommandRoot {
     fn name(&self) -> &'static str {
         match self {
@@ -278,6 +303,7 @@ impl CommandRoot {
             Self::Locate(_) => "locate",
             Self::Export(_) => "export",
             Self::Search(_) => "search",
+            Self::Skill(_) => "skill",
             Self::Doctor(_) => "doctor",
             Self::Validate(_) => "validate",
         }
@@ -294,8 +320,17 @@ impl CommandRoot {
             Self::Locate(args) => args.json_output(),
             Self::Export(args) => args.json_output(),
             Self::Search(args) => args.json,
+            Self::Skill(args) => args.json_output(),
             Self::Doctor(args) => args.json,
             Self::Validate(args) => args.json,
+        }
+    }
+}
+
+impl SkillArgs {
+    fn json_output(&self) -> bool {
+        match &self.target {
+            SkillTarget::Install(args) => args.json,
         }
     }
 }
@@ -1041,6 +1076,7 @@ fn main() -> Result<()> {
         CommandRoot::Locate(args) => run_locate(args, data_root.clone(), &mut analytics_properties),
         CommandRoot::Export(args) => run_export(args, data_root.clone(), &mut analytics_properties),
         CommandRoot::Search(args) => run_search(args, data_root.clone(), &mut analytics_properties),
+        CommandRoot::Skill(args) => run_skill(args, data_root.clone(), &mut analytics_properties),
         CommandRoot::Doctor(args) => run_doctor(args, data_root.clone(), &mut analytics_properties),
         CommandRoot::Validate(args) => {
             run_validate(args, data_root.clone(), &mut analytics_properties)
@@ -1182,6 +1218,12 @@ fn command_analytics_properties(command: &CommandRoot) -> AnalyticsProperties {
                 );
             }
         }
+        CommandRoot::Skill(args) => match &args.target {
+            SkillTarget::Install(args) => {
+                analytics::insert_str(&mut properties, "target_kind", "install");
+                analytics::insert_bool(&mut properties, "dry_run", args.dry_run);
+            }
+        },
     }
     properties
 }
@@ -3291,6 +3333,112 @@ fn run_search(
         }
     }
     Ok(())
+}
+
+fn run_skill(
+    args: SkillArgs,
+    data_root: PathBuf,
+    analytics_properties: &mut AnalyticsProperties,
+) -> Result<()> {
+    match args.target {
+        SkillTarget::Install(args) => run_skill_install(args, data_root, analytics_properties),
+    }
+}
+
+fn run_skill_install(
+    args: SkillInstallArgs,
+    data_root: PathBuf,
+    analytics_properties: &mut AnalyticsProperties,
+) -> Result<()> {
+    let skill_dir = data_root.join("skills").join(AGENT_HISTORY_SKILL_NAME);
+    let skill_path = skill_dir.join("SKILL.md");
+    analytics::insert_bool(analytics_properties, "agent_config_writes", false);
+    analytics::insert_bool(analytics_properties, "writes_skill_file", !args.dry_run);
+
+    if !args.dry_run {
+        fs::create_dir_all(&skill_dir)
+            .with_context(|| format!("create skill directory {}", skill_dir.display()))?;
+        fs::write(&skill_path, AGENT_HISTORY_SKILL_MARKDOWN)
+            .with_context(|| format!("write skill file {}", skill_path.display()))?;
+    }
+
+    if args.json {
+        print_json(json!({
+            "schema_version": 1,
+            "skill": {
+                "name": AGENT_HISTORY_SKILL_NAME,
+                "path": skill_path,
+                "installed": !args.dry_run,
+                "dry_run": args.dry_run,
+            },
+            "network_required": false,
+            "repo_writes": false,
+            "agent_config_writes": false,
+            "next_steps": skill_install_next_steps(&skill_path),
+        }))?;
+    } else {
+        if args.dry_run {
+            println!("ctx agent skill install plan");
+        } else {
+            println!("ctx agent skill installed");
+        }
+        println!("skill_name: {AGENT_HISTORY_SKILL_NAME}");
+        println!("skill_path: {}", skill_path.display());
+        println!("agent_config_writes: false");
+        println!("next_steps:");
+        println!("  Claude Code:");
+        println!("    /plugin marketplace add ctxrs/ctx");
+        println!("    /plugin install ctx-agent-history-search@ctx");
+        println!("  Codex:");
+        println!("    codex plugin marketplace add ctxrs/ctx");
+        println!("    open /plugins and install ctx-agent-history-search");
+        println!("  Cursor:");
+        println!("    /add-plugin ctx-agent-history-search");
+        println!("    if unavailable, attach the skill file above as agent instructions");
+        println!("  Any shell-capable agent:");
+        println!(
+            "    ask the agent to read {} and use ctx before editing",
+            skill_path.display()
+        );
+    }
+
+    Ok(())
+}
+
+fn skill_install_next_steps(skill_path: &Path) -> Value {
+    json!([
+        {
+            "agent": "Claude Code",
+            "kind": "plugin",
+            "commands": [
+                "/plugin marketplace add ctxrs/ctx",
+                "/plugin install ctx-agent-history-search@ctx",
+            ],
+        },
+        {
+            "agent": "Codex",
+            "kind": "plugin",
+            "commands": [
+                "codex plugin marketplace add ctxrs/ctx",
+                "open /plugins and install ctx-agent-history-search",
+            ],
+        },
+        {
+            "agent": "Cursor",
+            "kind": "plugin_or_manual",
+            "commands": [
+                "/add-plugin ctx-agent-history-search",
+            ],
+            "fallback": "If plugin install is unavailable, attach the installed skill file as agent instructions.",
+        },
+        {
+            "agent": "Any shell-capable agent",
+            "kind": "manual",
+            "commands": [
+                format!("read {} and use ctx before editing", skill_path.display()),
+            ],
+        },
+    ])
 }
 
 fn refresh_before_search(args: &SearchArgs, data_root: &Path) -> Result<SearchRefreshReport> {

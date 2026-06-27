@@ -256,8 +256,8 @@ fn help_exposes_session_retrieval_commands() {
         .unwrap_or(&help);
 
     for expected in [
-        "setup", "status", "sources", "import", "list", "show", "search", "locate", "export",
-        "doctor", "validate",
+        "setup", "status", "sources", "import", "list", "show", "search", "skill", "locate",
+        "export", "doctor", "validate",
     ] {
         assert!(
             commands.contains(expected),
@@ -711,6 +711,7 @@ fn public_subcommand_help_is_golden_enough_for_session_retrieval() {
                 "--json",
             ],
         ),
+        ("skill", vec!["Usage: ctx skill", "install"]),
         ("doctor", vec!["Usage: ctx doctor", "--json"]),
         ("validate", vec!["Usage: ctx validate", "--json"]),
     ] {
@@ -735,6 +736,110 @@ fn public_subcommand_help_is_golden_enough_for_session_retrieval() {
             );
         }
     }
+}
+
+#[test]
+fn skill_install_help_exposes_safe_install_flags() {
+    let temp = tempdir();
+    let output = ctx(&temp)
+        .args(["skill", "install", "--help"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let help = String::from_utf8(output).unwrap();
+
+    for expected in [
+        "Usage: ctx skill install",
+        "--dry-run",
+        "--json",
+        "Install the universal ctx agent-history search skill locally",
+    ] {
+        assert!(help.contains(expected), "missing {expected} in\n{help}");
+    }
+}
+
+#[test]
+fn skill_install_writes_universal_skill_without_agent_config_writes() {
+    let temp = tempdir();
+    let skill_path = temp
+        .path()
+        .join("skills")
+        .join("ctx-agent-history-search")
+        .join("SKILL.md");
+
+    let output = ctx(&temp)
+        .args(["skill", "install"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ctx agent skill installed"))
+        .stdout(predicate::str::contains("agent_config_writes: false"))
+        .stdout(predicate::str::contains(
+            "/plugin install ctx-agent-history-search@ctx",
+        ))
+        .stdout(predicate::str::contains(
+            "codex plugin marketplace add ctxrs/ctx",
+        ))
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+
+    assert!(
+        stdout.contains(&skill_path.display().to_string()),
+        "stdout did not include skill path {skill_path:?}: {stdout}"
+    );
+    let skill = fs::read_to_string(&skill_path).unwrap();
+    assert!(skill.contains("name: ctx-agent-history-search"));
+    assert!(skill.contains("Use ctx as a local retrieval tool"));
+    assert!(!temp.path().join(".codex").exists());
+    assert!(!temp.path().join(".claude").exists());
+    assert!(!temp.path().join(".cursor").exists());
+}
+
+#[test]
+fn skill_install_json_reports_next_steps_and_local_write_boundary() {
+    let temp = tempdir();
+    let output = json_output(ctx(&temp).args(["skill", "install", "--json"]));
+    let skill_path = temp
+        .path()
+        .join("skills")
+        .join("ctx-agent-history-search")
+        .join("SKILL.md");
+
+    assert_eq!(output["schema_version"], 1);
+    assert_eq!(output["skill"]["name"], "ctx-agent-history-search");
+    assert_eq!(output["skill"]["installed"], true);
+    assert_eq!(output["skill"]["dry_run"], false);
+    assert_eq!(output["network_required"], false);
+    assert_eq!(output["repo_writes"], false);
+    assert_eq!(output["agent_config_writes"], false);
+    assert_eq!(output["skill"]["path"], skill_path.display().to_string());
+    assert!(skill_path.exists());
+
+    let next_steps = output["next_steps"].as_array().unwrap();
+    assert!(next_steps.iter().any(|step| step["agent"] == "Claude Code"));
+    assert!(next_steps.iter().any(|step| step["agent"] == "Codex"));
+    assert!(next_steps
+        .iter()
+        .any(|step| step["agent"] == "Any shell-capable agent"));
+}
+
+#[test]
+fn skill_install_dry_run_does_not_write_skill_file() {
+    let temp = tempdir();
+    let output = json_output(ctx(&temp).args(["skill", "install", "--dry-run", "--json"]));
+    let skill_path = temp
+        .path()
+        .join("skills")
+        .join("ctx-agent-history-search")
+        .join("SKILL.md");
+
+    assert_eq!(output["skill"]["installed"], false);
+    assert_eq!(output["skill"]["dry_run"], true);
+    assert_eq!(output["agent_config_writes"], false);
+    assert!(!skill_path.exists());
 }
 
 #[test]

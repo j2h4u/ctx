@@ -6,7 +6,7 @@ it repeats work.
 ## 1. Install The CLI
 
 ```bash
-curl -fsSL https://cli.ctx.rs/install | sh
+curl -fsSL https://ctx.rs/install | sh
 ```
 
 The Unix installer requires `curl` and OpenSSL to verify signed release
@@ -19,7 +19,17 @@ history is indexed before it exits. Use `sh -s -- --no-setup` on Unix, or set
 When working from source, use `cargo build -p ctx` or
 `cargo install --path crates/ctx-cli`.
 
-## 2. Set Up And Index
+## 2. Install The Agent Skill
+
+```bash
+ctx skill install
+```
+
+This writes the shared `ctx-agent-history-search` skill into your local ctx
+data root and prints the next steps for Claude Code, Codex, Cursor, and manual
+agent setup.
+
+## 3. Set Up And Index
 
 ```bash
 ctx setup
@@ -41,7 +51,7 @@ CTX_DATA_ROOT=/tmp/ctx-demo ctx status
 Setup does not write to source repositories, call model APIs, require API keys,
 or start a background process.
 
-## 3. See Available Sources
+## 4. See Available Sources
 
 ```bash
 ctx sources
@@ -55,7 +65,7 @@ Copilot CLI, and Factory AI Droid local history paths. JSON rows include
 but no provider-specific transcript files were found there, and
 `status: "unknown"` means the bounded transcript probe hit its scan budget.
 
-## 4. Re-Run Or Target Imports
+## 5. Re-Run Or Target Imports
 
 ```bash
 ctx import --all
@@ -74,7 +84,7 @@ native cursor-resume API.
 
 When `--path` is used without `--provider`, ctx treats the path as Codex format.
 
-## 5. Search
+## 6. Search
 
 ```bash
 ctx search "failed migration"
@@ -95,7 +105,7 @@ catch-up scan; use
 `--refresh strict` or `ctx import --provider codex` when you need a full
 catch-up before querying.
 
-## 6. Use Search JSON For Agents
+## 7. Use Search JSON For Agents
 
 ```bash
 ctx search "failed migration" --json

@@ -284,6 +284,28 @@ Citations can include:
 `source_exists: false` means indexed text is available but the raw source
 was not present at the stored path when checked.
 
+## Skill Install
+
+```bash
+ctx skill install --json
+```
+
+Writes the local skill file unless `--dry-run` is passed and returns:
+
+- `schema_version`;
+- `skill.name`;
+- `skill.path`;
+- `skill.installed`;
+- `skill.dry_run`;
+- `network_required: false`;
+- `repo_writes: false`;
+- `agent_config_writes: false`;
+- `next_steps[]`.
+
+`next_steps` describes agent-specific follow-up for Claude Code, Codex, Cursor,
+and manual shell-capable agents. The command does not silently write agent
+configuration files.
+
 ## Doctor And Validate
 
 ```bash

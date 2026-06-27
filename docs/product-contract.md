@@ -24,6 +24,8 @@ product boundary is retrieval, not interpretation.
 - `ctx locate session` and `ctx locate event` report provenance and resume
   metadata.
 - `ctx export session` writes or prints transcript artifacts.
+- `ctx skill install` writes the local `ctx-agent-history-search` skill file
+  and prints agent-specific setup steps without silently changing agent config.
 - `ctx doctor` and `ctx validate` report local storage health.
 - JSON output supports local agents and scripts.
 

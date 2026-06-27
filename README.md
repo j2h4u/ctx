@@ -63,16 +63,15 @@ Support means ctx can discover or read that harness's persisted local history an
 | Factory AI Droid | Supported |
 | Copilot | Supported |
 
-## Install the skill
+## Use ctx in your agent
 
-The agent-history search skill teaches an agent to use ctx before it edits:
+After the CLI is installed, add the agent-history search skill so your agent knows when to search prior sessions and how to cite retrieved context:
 
-```text
-Search prior local agent sessions with ctx. Inspect the best event or session.
-If retrieved history affects your answer, cite the ctx ID you used.
+```bash
+ctx skill install
 ```
 
-See [Agent History Search Skill](https://ctx.rs/agent-history-search-skill) for the installable skill, prompt pattern, and agent-specific setup links.
+The command installs the universal skill file locally and prints the exact next steps for Claude Code, Codex, Cursor, and manual setup. See [Use ctx in your agent](https://ctx.rs/skill).
 
 ## How ctx compares
 
@@ -88,7 +87,7 @@ ctx keeps retrieval tied to sessions and events, so another agent can inspect th
 | --- | --- |
 | [Install](https://ctx.rs/getting-started/install) | Install ctx, initialize local storage, and index discovered local history. |
 | [Quickstart](https://ctx.rs/first-search) | Search local history, inspect an event, open the session, and use JSON output. |
-| [Install the skill](https://ctx.rs/agent-history-search-skill) | Teach agents to search prior sessions, inspect cited hits, and report the ctx ID they used. |
+| [Use ctx in your agent](https://ctx.rs/skill) | Install the agent-history search skill and connect it to Claude Code, Codex, Cursor, or another shell-capable agent. |
 | [Cursor](https://ctx.rs/agents/cursor) | Import Cursor agent transcripts and ask Cursor to cite retrieved local history before editing. |
 | [How it works](https://ctx.rs/concepts/how-it-works) | Understand discovery, import, SQLite storage, search refresh, and cited retrieval. |
 | [Supported agents](https://ctx.rs/concepts/supported-agents) | See which agent histories ctx can discover, import, and search today. |

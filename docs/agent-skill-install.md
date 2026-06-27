@@ -2,48 +2,38 @@
 
 The ctx agent skill is named `ctx-agent-history-search`.
 
-The name follows the public product language: ctx is local agent history search,
-not a model memory or graph database. Use the skill when an agent should query
-past local coding-agent sessions before starting work.
-
-## Codex
-
-This repository includes a Codex marketplace catalog at
-`.agents/plugins/marketplace.json` and a plugin at
-`plugins/ctx-agent-history-search`.
-
-For an unreleased branch or tag, add the marketplace with an explicit ref:
+Install the CLI first, then install the local skill file:
 
 ```bash
-codex plugin marketplace add ctxrs/ctx --ref ctx/search-sdlc-maturity
+curl -fsSL https://ctx.rs/install | sh
+ctx skill install
 ```
 
-After the branch is released on the default branch, the ref can be omitted:
-
-```bash
-codex plugin marketplace add ctxrs/ctx
-```
-
-Then open `/plugins` and install `ctx-agent-history-search`.
+`ctx skill install` writes the universal skill file under the configured ctx
+data root and prints the next steps for supported agents. It does not silently
+write Claude Code, Codex, Cursor, or other agent configuration files.
 
 ## Claude Code
 
-This repository includes a Claude Code marketplace catalog at
-`.claude-plugin/marketplace.json`.
-
-For local testing from a checkout:
-
-```text
-/plugin marketplace add <path-to-ctx-checkout>
-/plugin install ctx-agent-history-search@ctx
-```
-
-For GitHub distribution after release:
+After `ctx skill install`, add the ctx plugin marketplace in Claude Code and
+install the skill:
 
 ```text
 /plugin marketplace add ctxrs/ctx
 /plugin install ctx-agent-history-search@ctx
 ```
+
+For local testing from a checkout, replace `ctxrs/ctx` with the checkout path.
+
+## Codex
+
+After `ctx skill install`, add the ctx plugin marketplace:
+
+```bash
+codex plugin marketplace add ctxrs/ctx
+```
+
+Then open `/plugins` in Codex and install `ctx-agent-history-search`.
 
 ## Cursor
 
@@ -51,17 +41,31 @@ This repository includes a Cursor plugin manifest at
 `plugins/ctx-agent-history-search/.cursor-plugin/plugin.json` and a root
 `.cursor-plugin/marketplace.json` catalog for submission.
 
-After marketplace acceptance, install it from Cursor Marketplace or with
-`/add-plugin` using the name `ctx-agent-history-search`.
-
-## Direct Skill Folder
-
-For agents that support raw Agent Skills, install or copy:
+If plugin install is available, add `ctx-agent-history-search` from Cursor:
 
 ```text
-skills/ctx-agent-history-search
+/add-plugin ctx-agent-history-search
 ```
 
-The plugin copy under `plugins/ctx-agent-history-search/skills/` is intentionally
-self-contained so marketplace installs do not depend on files outside the
-plugin directory.
+If that is not available, use the skill file installed by `ctx skill install`
+as project or user instructions.
+
+## Any Shell-Capable Agent
+
+Ask the agent to read the `SKILL.md` path printed by `ctx skill install`, or
+give it this prompt:
+
+```text
+Use ctx to search prior local coding-agent sessions before you answer or edit.
+
+Run:
+ctx search "<focused query>" --json
+
+Inspect the best result:
+ctx show event <ctx-event-id> --window 3
+or:
+ctx show session <ctx-session-id> --mode lite
+
+If retrieved history affects your answer, cite the ctx_event_id or
+ctx_session_id and include the ctx command you ran.
+```
