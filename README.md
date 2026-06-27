@@ -63,7 +63,7 @@ Support means ctx can discover or read that harness's persisted local history an
 | Factory AI Droid | Supported |
 | Copilot | Supported |
 
-## Use ctx in your agent
+## Install the ctx skill
 
 After the CLI is installed, add the agent-history search skill so your agent knows when to search prior sessions and how to cite retrieved context:
 
@@ -71,7 +71,7 @@ After the CLI is installed, add the agent-history search skill so your agent kno
 ctx skill install
 ```
 
-The command installs the universal skill file locally and prints the exact next steps for Claude Code, Codex, Cursor, and manual setup. See [Use ctx in your agent](https://ctx.rs/skill).
+The command installs the universal skill file locally and prints the exact next steps for Claude Code, Codex, Cursor, and manual setup. See [Install the ctx skill](https://ctx.rs/skill).
 
 ## How ctx compares
 
@@ -87,7 +87,7 @@ ctx keeps retrieval tied to sessions and events, so another agent can inspect th
 | --- | --- |
 | [Install](https://ctx.rs/getting-started/install) | Install ctx, initialize local storage, and index discovered local history. |
 | [Quickstart](https://ctx.rs/first-search) | Search local history, inspect an event, open the session, and use JSON output. |
-| [Use ctx in your agent](https://ctx.rs/skill) | Install the agent-history search skill and connect it to Claude Code, Codex, Cursor, or another shell-capable agent. |
+| [Install the ctx skill](https://ctx.rs/skill) | Install the agent-history search skill and connect it to Claude Code, Codex, Cursor, or another shell-capable agent. |
 | [Cursor](https://ctx.rs/agents/cursor) | Import Cursor agent transcripts and ask Cursor to cite retrieved local history before editing. |
 | [How it works](https://ctx.rs/concepts/how-it-works) | Understand discovery, import, SQLite storage, search refresh, and cited retrieval. |
 | [Supported agents](https://ctx.rs/concepts/supported-agents) | See which agent histories ctx can discover, import, and search today. |
