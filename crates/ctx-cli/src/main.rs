@@ -1386,12 +1386,7 @@ fn setup_has_indexed_content(indexed_items: usize) -> bool {
 }
 
 fn indexed_history_item_count(store: &Store) -> Result<usize> {
-    let sessions = store.list_sessions()?;
-    let mut count = sessions.len();
-    for session in sessions {
-        count = count.saturating_add(store.events_for_session(session.id)?.len());
-    }
-    Ok(count)
+    Ok(store.indexed_history_item_count()?)
 }
 
 fn setup_has_failed_sources(report: Option<&ImportReport>) -> bool {
@@ -3233,7 +3228,6 @@ fn run_search(
     };
     let packet = ctx_history_search::search_packet(&store, &query, &options)?;
     let result_count = packet.results.len();
-    let indexed_items = indexed_history_item_count(&store)?;
     let citation_count = packet
         .results
         .iter()
@@ -3263,10 +3257,13 @@ fn run_search(
             println!("no results");
             if query.trim().is_empty() {
                 println!("next: ctx list --limit 20");
-            } else if indexed_items == 0 {
-                println!("next: ctx import --all");
             } else {
-                println!("next: ctx list --limit 20");
+                let indexed_items = indexed_history_item_count(&store)?;
+                if indexed_items == 0 {
+                    println!("next: ctx import --all");
+                } else {
+                    println!("next: ctx list --limit 20");
+                }
             }
         }
         for result in packet.results {

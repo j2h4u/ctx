@@ -1767,6 +1767,16 @@ impl Store {
         collect_rows(rows)
     }
 
+    pub fn indexed_history_item_count(&self) -> Result<usize> {
+        let sessions: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))?;
+        let events: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
+        Ok((sessions as usize).saturating_add(events as usize))
+    }
+
     pub fn upsert_session_edge(&self, edge: &SessionEdge) -> Result<()> {
         self.conn.execute(
             r#"
@@ -6049,6 +6059,65 @@ mod search_order_tests {
         DateTime::parse_from_rfc3339("2026-06-23T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn indexed_history_item_count_uses_sessions_and_events() {
+        let temp = tempdir();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+
+        for (idx, session_id) in [
+            "018f45d0-0000-7000-8000-000000050001",
+            "018f45d0-0000-7000-8000-000000050002",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            store
+                .conn
+                .execute(
+                    r#"
+                    INSERT INTO sessions
+                    (id, provider, external_session_id, agent_type, is_primary, status, fidelity,
+                     started_at_ms, created_at_ms, updated_at_ms)
+                    VALUES (?1, 'codex', ?2, 'primary', 1, 'imported', 'full', 1, 1, 1)
+                    "#,
+                    params![session_id, format!("external-session-{idx}")],
+                )
+                .unwrap();
+        }
+
+        for (seq, event_id, session_id) in [
+            (
+                1_i64,
+                "018f45d0-0000-7000-8000-000000060001",
+                "018f45d0-0000-7000-8000-000000050001",
+            ),
+            (
+                2_i64,
+                "018f45d0-0000-7000-8000-000000060002",
+                "018f45d0-0000-7000-8000-000000050001",
+            ),
+            (
+                3_i64,
+                "018f45d0-0000-7000-8000-000000060003",
+                "018f45d0-0000-7000-8000-000000050002",
+            ),
+        ] {
+            store
+                .conn
+                .execute(
+                    r#"
+                    INSERT INTO events
+                    (id, seq, session_id, event_type, role, occurred_at_ms, payload_json)
+                    VALUES (?1, ?2, ?3, 'message', 'user', 1, '{}')
+                    "#,
+                    params![event_id, seq, session_id],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(store.indexed_history_item_count().unwrap(), 5);
     }
 
     fn stable_tie_record(index: u16) -> HistoryRecord {
