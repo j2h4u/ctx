@@ -32,8 +32,11 @@ ctx setup
 # Your agent can search prior work with normal language
 ctx search "failed migration"
 
-# Results include matching sessions, snippets, and ctx IDs
-# evt_01h...  ses_01h...  codex  "migration expected the old cursor name" ...
+# Results are compact by default and include an inspect command
+# 1. codex session...
+#    codex | importance 4.23 | session 2f4a0b9c | event 9d01c8e1
+#    migration expected the old cursor name...
+#    inspect: ctx show event <ctx-event-id> --window 10
 
 # Print the matching part of the old transcript
 ctx show event <ctx-event-id> --window 3
@@ -42,7 +45,8 @@ ctx show event <ctx-event-id> --window 3
 ctx show session <ctx-session-id>
 ```
 
-Those IDs let your current agent recover arbitrary amount of context from previous sessions as needed.
+The inspect command lets your current agent recover as much context from
+previous sessions as needed.
 
 The CLI does not send your prompts, transcripts, or indexed history to a cloud service, call model APIs, require API keys, or write into your source repositories.
 
@@ -97,7 +101,7 @@ ctx keeps retrieval tied to sessions and events, so another agent can inspect th
 | Page | What it covers |
 | --- | --- |
 | [Install](https://ctx.rs/getting-started/install) | Install ctx, initialize local storage, and index discovered local history. |
-| [Quickstart](https://ctx.rs/first-search) | Search local history, inspect an event, open the session, and use JSON output. |
+| [Quickstart](https://ctx.rs/first-search) | Search local history, inspect an event, open the session, and use script-friendly JSON only when needed. |
 | [Install the skill](https://ctx.rs/agent-history-search-skill) | Teach agents to search prior sessions, inspect cited hits, and report the ctx ID they used. |
 | [Cursor](https://ctx.rs/agents/cursor) | Import Cursor agent transcripts and ask Cursor to cite retrieved local history before editing. |
 | [How it works](https://ctx.rs/concepts/how-it-works) | Understand discovery, import, SQLite storage, search refresh, and cited retrieval. |

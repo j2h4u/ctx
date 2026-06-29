@@ -64,4 +64,13 @@ skills/ctx-agent-history-search
 
 The plugin copy under `plugins/ctx-agent-history-search/skills/` is intentionally
 self-contained so marketplace installs do not depend on files outside the
-plugin directory.
+plugin directory. Keep the standalone and plugin copies in sync with:
+
+```bash
+scripts/sync-plugin-skills.sh --check
+scripts/sync-plugin-skills.sh --write
+```
+
+The plugin also includes a `/ctx-history` command. The command is a thin entry
+point that delegates to the `ctx-agent-history-search` skill instead of
+duplicating the full workflow instructions.

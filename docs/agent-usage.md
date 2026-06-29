@@ -6,22 +6,21 @@ Agents should query ctx before repeating investigation work.
 
 1. Run `ctx status --json` to confirm the local store is readable.
 2. Run `ctx sources --json` to see which local provider paths currently exist.
-3. Search narrowly with provider, repository, file, or date filters.
-4. Use `ctx show event --format json` for the best matching result before
-   changing code.
+3. Search narrowly with provider, workspace, file, or date filters.
+4. Use `ctx show event` for the best matching result before changing code.
 5. Cite ctx material in notes or final answers when it influenced the work.
 
 Example:
 
 ```bash
-ctx search "sqlite migration failed" --repo ctx --json
-ctx show event <ctx-event-id> --window 5 --format json
+ctx search "sqlite migration failed" --workspace ctx
+ctx show event <ctx-event-id> --window 5
 ```
 
 Normal `ctx search` uses `--refresh auto`, which can import newly discovered
 provider history into the local ctx index before querying. Use
-`ctx search ... --refresh off --json` when the task requires a strictly
-read-only query over the existing index.
+`ctx search ... --refresh off` when the task requires a strictly read-only
+query over the existing index.
 
 When ctx runs inside Codex and `CODEX_THREAD_ID` is available, search excludes
 the active Codex session tree by default to avoid returning the current prompt
@@ -43,12 +42,12 @@ The agent writes the report from retrieved evidence; ctx does not synthesize
 reports. A practical command sequence is:
 
 ```bash
-ctx research "<topic>" --refresh off --json
-ctx search "<topic>" --refresh off --json
-ctx search "<topic variant>" --repo <repo> --refresh off --json
-ctx search "<topic>" --session <ctx-session-id> --refresh off --json
-ctx show event <ctx-event-id> --window 5 --format json
-ctx show session <ctx-session-id> --format json
+ctx research "<topic>" --refresh off
+ctx search "<topic>" --refresh off
+ctx search "<topic variant>" --workspace <workspace> --refresh off
+ctx search "<topic>" --session <ctx-session-id> --refresh off
+ctx show event <ctx-event-id> --window 5
+ctx show session <ctx-session-id>
 ```
 
 Start with `ctx research` when the topic may span multiple sessions. It returns
@@ -81,12 +80,15 @@ guarantee that every provider has native cursor resume.
 
 ## JSON For Harnesses
 
-Agent harnesses should prefer JSON for routing and ranking:
+Agents should prefer default text for reading search, research, show, and
+locate output. JSON is for scripts, harnesses, `jq`, or exact field extraction;
+it is usually much larger and consumes more context.
 
 ```bash
 ctx status --json
 ctx sources --json
-ctx search "release blocker" --json
+ctx search "release blocker"
+ctx search "release blocker" --json | jq '.results[0].ctx_event_id'
 ctx show event <ctx-event-id> --window 5 --format json
 ctx show session <ctx-session-id> --format json
 ```

@@ -29,6 +29,8 @@ required_paths=(
   docs/agent-skill-install.md
   skills/ctx-agent-history-search/SKILL.md
   plugins/ctx-agent-history-search/skills/ctx-agent-history-search/SKILL.md
+  plugins/ctx-agent-history-search/commands/ctx-history.md
+  scripts/sync-plugin-skills.sh
 )
 
 for path in "${required_paths[@]}"; do
@@ -46,6 +48,7 @@ public_docs=(
   docs/contracts/*.md
   skills/ctx-agent-history-search/SKILL.md
   plugins/ctx-agent-history-search/skills/ctx-agent-history-search/SKILL.md
+  plugins/ctx-agent-history-search/commands/ctx-history.md
 )
 
 analytics_scope=()
@@ -84,8 +87,30 @@ if scan_docs 'analytics|telemetry' "${analytics_scope[@]}"; then
   exit 1
 fi
 
-if ! diff -u skills/ctx-agent-history-search/SKILL.md plugins/ctx-agent-history-search/skills/ctx-agent-history-search/SKILL.md >/dev/null; then
-  printf 'plugin skill copy differs from public skill source\n' >&2
+bash scripts/sync-plugin-skills.sh --check
+
+for manifest in \
+  plugins/ctx-agent-history-search/.codex-plugin/plugin.json \
+  plugins/ctx-agent-history-search/.cursor-plugin/plugin.json \
+  plugins/ctx-agent-history-search/.claude-plugin/plugin.json; do
+  for required in \
+    '"name": "ctx-agent-history-search"' \
+    '"version": "0.1.0"' \
+    '"skills": "./skills/"'; do
+    if ! grep -F -q "${required}" "${manifest}"; then
+      printf 'plugin manifest %s missing required snippet: %s\n' "${manifest}" "${required}" >&2
+      exit 1
+    fi
+  done
+done
+
+if ! grep -F -q 'ctx-agent-history-search' plugins/ctx-agent-history-search/commands/ctx-history.md; then
+  printf 'ctx-history command must reference the ctx-agent-history-search skill\n' >&2
+  exit 1
+fi
+
+if scan_docs 'ctx search "[^"]*" --json[[:space:]]*$' docs/agent-usage.md docs/getting-started.md docs/first-10-minutes.md skills/ctx-agent-history-search/SKILL.md plugins/ctx-agent-history-search/skills/ctx-agent-history-search/SKILL.md plugins/ctx-agent-history-search/commands/ctx-history.md; then
+  printf 'agent-facing docs should not recommend ctx search --json for normal reading\n' >&2
   exit 1
 fi
 

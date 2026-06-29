@@ -13,12 +13,13 @@ Examples:
 ```bash
 ctx search "build failure"
 ctx search "sqlite storage" --provider codex
-ctx search "retry handling" --repo checkout --since 60d
+ctx search "retry handling" --workspace checkout --since 60d
 ctx search "tool output" --event-type tool_output
 ctx search --file crates/foo/src/lib.rs
 ctx search "token budget" --refresh off
-ctx search "token budget" --limit 5 --json
-ctx search "token budget" --session <ctx-session-id> --json
+ctx search "signed metadata" --term buildkite --term release
+ctx search "token budget" --limit 5
+ctx search "token budget" --session <ctx-session-id>
 ctx search "this current task" --include-current-session
 ```
 
@@ -52,11 +53,12 @@ support it.
 Search filters narrow both human output and JSON:
 
 - `--provider codex|pi|claude|opencode|antigravity|gemini|cursor|copilot-cli|factory-ai-droid`;
-- `--repo <name-or-path>`;
+- `--workspace <name-or-path>`;
 - `--since <rfc3339-or-days>d`;
 - `--event-type <event-type>`;
 - `--file <path>`;
 - `--session <ctx-session-id>`;
+- `--term <query-or-keyword>`, repeatable broadening terms merged with the main query;
 - `--events`;
 - `--primary-only`;
 - `--include-subagents`;
@@ -103,7 +105,7 @@ plain ranked hit list:
 
 ```bash
 ctx research "foobar migration" --refresh off --json
-ctx research "foobar migration" --repo checkout --provider codex --limit 5
+ctx research "foobar migration" --workspace checkout --provider codex --limit 5
 ```
 
 `research` is deterministic. It does not summarize or infer conclusions. It
@@ -114,9 +116,9 @@ history-search skill to turn that packet into a cited human report.
 
 ## Machine Output
 
-Use `ctx search --json` for agent workflows and scripts. JSON results include
-the same result metadata and citations as the human output, plus a top-level
-`freshness` object describing the pre-search refresh mode and outcome. A
-citation with `source_exists: false` means ctx can return indexed text, but the
-raw provider file was not available at the stored path when the result was
-built.
+Use default text output for agent reading. Use `ctx search --json` for scripts,
+`jq`, or exact field extraction. JSON results include the same result metadata
+and citations as the human output, plus a top-level `freshness` object
+describing the pre-search refresh mode and outcome. A citation with
+`source_exists: false` means ctx can return indexed text, but the raw provider
+file was not available at the stored path when the result was built.

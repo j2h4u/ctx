@@ -51,15 +51,21 @@ Use this skill in two modes:
 4. Search with normal language first, then add tight filters when useful:
 
    ```bash
-   ctx research "<topic>" --refresh off --json
-   ctx search "<query>" --json
-   ctx search "<query>" --refresh off --json
-   ctx search "<query>" --provider codex --json
-   ctx search "<query>" --repo <repo> --json
-   ctx search "<query>" --file <path> --json
-   ctx search "<query>" --since 30d --json
-   ctx search "<query>" --session <ctx-session-id> --json
+   ctx research "<topic>" --refresh off
+   ctx search "<query>"
+   ctx search "<query>" --refresh off
+   ctx search "<query>" --provider codex
+   ctx search "<query>" --workspace <workspace>
+   ctx search "<query>" --file <path>
+   ctx search "<query>" --since 30d
+   ctx search "<query>" --session <ctx-session-id>
    ```
+
+   Use default text output for agent reading. Do not add `--json` for
+   search, research, show, or locate unless you are piping it into `jq` or a
+   script, or you need exact machine-readable fields. JSON output is much
+   larger and can quickly consume the context window. If JSON is necessary,
+   keep `--limit` small and extract only the fields you need.
 
    Use `ctx research` when the prompt asks for a topic history or report across
    multiple sessions. It returns a deterministic packet grouped by UTC date and
@@ -79,15 +85,15 @@ Use this skill in two modes:
 5. Inspect the best cited result before relying on it:
 
    ```bash
-   ctx show event <ctx-event-id> --window 5 --format json
-   ctx show session <ctx-session-id> --format json
+   ctx show event <ctx-event-id> --window 5
+   ctx show session <ctx-session-id>
    ```
 
 6. Locate original provider material when source identity or resume hints matter:
 
    ```bash
-   ctx locate event <ctx-event-id> --format json
-   ctx locate session <ctx-session-id> --format json
+   ctx locate event <ctx-event-id>
+   ctx locate session <ctx-session-id>
    ```
 
 7. Export a transcript only when another agent or artifact needs a file:
@@ -107,8 +113,8 @@ material.
    chronology, alternatives, or detailed evidence.
 2. Run several targeted searches. Vary query terms across user wording, file or
    module names, error text, commands, branch names, and decision terms. Start
-   with `ctx research "<topic>" --refresh off --json` for a multi-session map,
-   then narrow with default `ctx search`, `--repo`, `--provider`, `--file`,
+   with `ctx research "<topic>" --refresh off` for a multi-session map,
+   then narrow with default `ctx search`, `--workspace`, `--provider`, `--file`,
    `--since`, or `--session <ctx-session-id>`.
    Add `--refresh off` when the report must not update the local ctx index.
 3. Inspect focused sources before drawing conclusions. Prefer `ctx show event`
@@ -116,8 +122,8 @@ material.
    arc matters:
 
    ```bash
-   ctx show event <ctx-event-id> --window 5 --format json
-   ctx show session <ctx-session-id> --format json
+   ctx show event <ctx-event-id> --window 5
+   ctx show session <ctx-session-id>
    ```
 
    Use full or log mode only when lite output omits necessary evidence.
@@ -154,7 +160,8 @@ Long report shape:
 
 ## Safety Rules
 
-- Prefer JSON for ranking and routing.
+- Prefer text output for agent reading. Use JSON only for scripts, `jq`, or
+  exact field extraction, and keep JSON outputs small.
 - Do not say ctx inferred a decision unless the cited text explicitly states
   that decision.
 - Do not state that ctx wrote model analysis.

@@ -66,7 +66,7 @@ ctx import --provider cursor --path ~/.cursor/projects
 
 ```bash
 ctx search "build failure" --limit 5
-ctx search "build failure" --limit 5 --json
+ctx search "build failure" --term buildkite --term release --limit 5
 ```
 
 `--limit` is capped at `200`. Search defaults to `--refresh auto`, which
@@ -85,8 +85,9 @@ ctx show session <ctx-session-id>
 ctx locate event <ctx-event-id>
 ```
 
-Use citations from `ctx search --json` or `ctx show` when the retrieved material
-affects an answer or implementation.
+Use citations from `ctx search` or `ctx show` when the retrieved material
+affects an answer or implementation. Add `--json` only when a script or `jq`
+needs exact fields.
 
 ## Failure Paths
 

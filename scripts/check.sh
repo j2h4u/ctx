@@ -47,12 +47,11 @@ Modes:
   presubmit  fast plus clippy, workspace tests, fresh-home, and provider smoke
   smoke      fast plus fresh-home and provider smoke
   ci         presubmit plus release/content gates used by Buildkite
-  perf       synthetic CLI/search/import performance budget gates
 USAGE
 }
 
 list_modes() {
-  printf '%s\n' fast presubmit smoke ci perf
+  printf '%s\n' fast presubmit smoke ci
 }
 
 mode="ci"
@@ -112,9 +111,6 @@ case "${mode}" in
     ;;
   smoke)
     run_bazel test //:smoke --config=ci
-    ;;
-  perf)
-    run_bazel test //:perf_smoke //:search_perf_bench //:codex_incremental_import_perf_bench --config=ci
     ;;
   *)
     printf 'unknown check mode: %s\n' "${mode}" >&2

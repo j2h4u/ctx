@@ -1041,9 +1041,11 @@ fn public_subcommand_help_is_golden_enough_for_session_retrieval() {
                 "Usage: ctx search",
                 "[QUERY]",
                 "Natural-language query to search local agent history",
+                "--term <TERM>",
+                "Add another search query or keyword",
                 "--provider <PROVIDER>",
-                "--repo <REPO>",
-                "Filter by repository/workspace path text",
+                "--workspace <WORKSPACE>",
+                "Filter by workspace path or name text",
                 "--since <SINCE>",
                 "Filter to recent history, as RFC3339 or a day window like 30d",
                 "--primary-only",
@@ -1062,6 +1064,8 @@ fn public_subcommand_help_is_golden_enough_for_session_retrieval() {
                 "Include the active Codex session tree when CODEX_THREAD_ID is set",
                 "--json",
                 "Print machine-readable JSON",
+                "--verbose",
+                "Print expanded text details",
             ],
         ),
         (
@@ -1071,8 +1075,8 @@ fn public_subcommand_help_is_golden_enough_for_session_retrieval() {
                 "<QUERY>",
                 "Historical topic to investigate in local agent history",
                 "--provider <PROVIDER>",
-                "--repo <REPO>",
-                "Filter by repository/workspace path text",
+                "--workspace <WORKSPACE>",
+                "Filter by workspace path or name text",
                 "--since <SINCE>",
                 "Filter to recent history, as RFC3339 or a day window like 30d",
                 "--primary-only",
@@ -1355,6 +1359,24 @@ fn fresh_home_search_mvp_flow() {
     assert!(first_result["citations"][0]["ctx_event_id"].is_string());
     assert!(first_result["citations"][0]["ctx_session_id"].is_string());
 
+    let term_search = json_output(ctx(&temp).args([
+        "search",
+        "zzzz-no-match",
+        "--term",
+        "onboarding",
+        "--provider",
+        "codex",
+        "--json",
+    ]));
+    assert_eq!(term_search["query"], "zzzz-no-match OR onboarding");
+    assert!(!term_search["results"].as_array().unwrap().is_empty());
+    assert!(term_search["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|result| { result["suggested_next_commands"].as_array().unwrap().iter() })
+        .all(|command| !command.as_str().unwrap().starts_with("ctx search ")));
+
     let event_search = json_output(ctx(&temp).args([
         "search",
         "onboarding",
@@ -1390,13 +1412,32 @@ fn fresh_home_search_mvp_flow() {
         .stdout
         .clone();
     let human_search = String::from_utf8(human_search).unwrap();
-    assert!(human_search.contains("ctx_event_id"));
-    assert!(human_search.contains("ctx_session_id"));
-    assert!(human_search.contains("provider_session_id"));
-    assert!(human_search.contains("session_importance"));
-    assert!(human_search.contains("next: ctx show session"));
-    assert!(human_search.contains("next: ctx show event"));
-    assert!(human_search.contains("next: ctx search onboarding --session"));
+    assert!(human_search.contains("1. "));
+    assert!(human_search.contains("importance"));
+    assert!(human_search.contains("session "));
+    assert!(human_search.contains("event "));
+    assert!(human_search.contains("inspect: ctx show event"));
+    assert!(!human_search.contains("ctx_event_id"));
+    assert!(!human_search.contains("provider_session_id"));
+    assert!(!human_search.contains("next:"));
+    assert!(!human_search.contains("work_record"));
+    assert!(!human_search.contains("history_record"));
+
+    let verbose_search = ctx(&temp)
+        .args(["search", "onboarding", "--verbose"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let verbose_search = String::from_utf8(verbose_search).unwrap();
+    assert!(verbose_search.contains("ctx_event_id"));
+    assert!(verbose_search.contains("ctx_session_id"));
+    assert!(verbose_search.contains("provider_session_id"));
+    assert!(verbose_search.contains("session_importance"));
+    assert!(verbose_search.contains("next: ctx show session"));
+    assert!(verbose_search.contains("next: ctx show event"));
+    assert!(verbose_search.contains("next: ctx search onboarding --session"));
     assert!(!human_search.contains("work_record"));
     assert!(!human_search.contains("history_record"));
 

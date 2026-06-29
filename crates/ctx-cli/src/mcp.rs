@@ -201,7 +201,7 @@ fn handle_tools_call(params: Value, data_root: &Path) -> Result<Value, Value> {
                     "query",
                     "limit",
                     "provider",
-                    "repo",
+                    "workspace",
                     "since",
                     "primary_only",
                     "include_subagents",
@@ -221,7 +221,7 @@ fn handle_tools_call(params: Value, data_root: &Path) -> Result<Value, Value> {
                     "query",
                     "limit",
                     "provider",
-                    "repo",
+                    "workspace",
                     "since",
                     "primary_only",
                     "include_subagents",
@@ -319,7 +319,7 @@ fn tool_search(arguments: &Value, data_root: &Path) -> Result<Value> {
     }
     let provider = optional_provider(arguments, "provider")?;
     let session = optional_uuid(arguments, "session")?;
-    let repo = optional_string(arguments, "repo")?;
+    let workspace = optional_string(arguments, "workspace")?;
     let since = optional_string(arguments, "since")?;
     let primary_only = optional_bool(arguments, "primary_only")?.unwrap_or(false);
     let include_subagents = optional_bool(arguments, "include_subagents")?.unwrap_or(!primary_only);
@@ -335,7 +335,7 @@ fn tool_search(arguments: &Value, data_root: &Path) -> Result<Value> {
             SearchFilterInput {
                 session,
                 provider,
-                repo,
+                workspace,
                 since,
                 primary_only,
                 include_subagents,
@@ -354,7 +354,7 @@ fn tool_search(arguments: &Value, data_root: &Path) -> Result<Value> {
     };
     let packet = ctx_history_search::search_packet(&store, &query, &options)?;
     let refresh = SearchRefreshReport::skipped(RefreshArg::Off, "skipped");
-    let mut value = SearchDto::packet(&store, &packet, &refresh);
+    let mut value = SearchDto::packet(&store, &packet, &refresh, Some(&query));
     mark_share_safe(&mut value);
     Ok(value)
 }
@@ -370,7 +370,7 @@ fn tool_research(arguments: &Value, data_root: &Path) -> Result<Value> {
         return Err(anyhow!("limit must be between 1 and {MAX_SEARCH_LIMIT}"));
     }
     let provider = optional_provider(arguments, "provider")?;
-    let repo = optional_string(arguments, "repo")?;
+    let workspace = optional_string(arguments, "workspace")?;
     let since = optional_string(arguments, "since")?;
     let primary_only = optional_bool(arguments, "primary_only")?.unwrap_or(false);
     let include_subagents = optional_bool(arguments, "include_subagents")?.unwrap_or(!primary_only);
@@ -382,7 +382,7 @@ fn tool_research(arguments: &Value, data_root: &Path) -> Result<Value> {
         SearchFilterInput {
             session: None,
             provider,
-            repo,
+            workspace,
             since,
             primary_only,
             include_subagents,
@@ -501,7 +501,7 @@ fn tool_definitions() -> Vec<Value> {
                 "query": { "type": "string" },
                 "limit": { "type": "integer", "minimum": 1, "maximum": MAX_SEARCH_LIMIT, "default": 20 },
                 "provider": { "type": "string", "enum": provider_names() },
-                "repo": { "type": "string" },
+                "workspace": { "type": "string", "description": "Workspace path or name text." },
                 "since": { "type": "string", "description": "RFC3339 timestamp or day window such as 30d." },
                 "primary_only": { "type": "boolean", "default": false },
                 "include_subagents": { "type": "boolean", "default": true },
@@ -521,7 +521,7 @@ fn tool_definitions() -> Vec<Value> {
                 "query": { "type": "string" },
                 "limit": { "type": "integer", "minimum": 1, "maximum": MAX_SEARCH_LIMIT, "default": 10 },
                 "provider": { "type": "string", "enum": provider_names() },
-                "repo": { "type": "string" },
+                "workspace": { "type": "string", "description": "Workspace path or name text." },
                 "since": { "type": "string", "description": "RFC3339 timestamp or day window such as 30d." },
                 "primary_only": { "type": "boolean", "default": false },
                 "include_subagents": { "type": "boolean", "default": true },

@@ -157,12 +157,13 @@ names from the current store schema, so treat it as private local data.
 ```bash
 ctx search "build failure"
 ctx search "sqlite storage" --provider codex
-ctx search "retry handling" --repo checkout --since 60d
+ctx search "retry handling" --workspace checkout --since 60d
 ctx search "tool output" --event-type tool_output
 ctx search --file crates/foo/src/lib.rs
 ctx search "token budget" --refresh off
-ctx search "token budget" --limit 5 --json
-ctx search "token budget" --session <ctx-session-id> --json
+ctx search "signed metadata" --term buildkite --term release
+ctx search "token budget" --limit 5
+ctx search "token budget" --session <ctx-session-id>
 ctx search "this current task" --include-current-session
 ```
 
@@ -183,7 +184,8 @@ returns the strongest matching span from each session, plus
 that session also matched. Use `--session <ctx-session-id>` after a default
 search has identified a session to inspect; scoped session search returns dense
 event hits. Use `--events` without `--session` for dense event-level results
-across sessions.
+across sessions. Repeat `--term <query-or-keyword>` when you want to broaden a
+search across several related words or phrases and merge the ranked results.
 
 When ctx is run from Codex and `CODEX_THREAD_ID` is available, search excludes
 the active Codex session tree by default so the current task and its subagents
@@ -196,16 +198,18 @@ hits with known session context include `ctx_session_id`; provider metadata
 including `provider_session_id` is included when known. Results also include
 title, snippet, rank, result scope, match reasons, source-path/cursor data,
 citations, `suggested_next_commands`, a JSON `freshness` object, and
-pagination/truncation fields.
+pagination/truncation fields in JSON. Default text output is compact and
+optimized for agent reading; use `--verbose` for expanded text diagnostics.
 
 Filters:
 
 - `--provider codex|pi|claude|opencode|antigravity|gemini|cursor|copilot-cli|factory-ai-droid`;
-- `--repo <name-or-path>`;
+- `--workspace <name-or-path>`;
 - `--since <rfc3339-or-days>d`, for example `2026-06-01T00:00:00Z` or `30d`;
 - `--event-type <event-type>`;
 - `--file <path>`;
 - `--session <ctx-session-id>`, for dense event results within one session;
+- `--term <query-or-keyword>`, repeatable broadening terms merged with the main query;
 - `--events`, for dense event-level results instead of the default session-diverse results;
 - `--primary-only`;
 - `--include-subagents`;
@@ -221,7 +225,7 @@ index before querying.
 
 ```bash
 ctx research "foobar migration"
-ctx research "foobar migration" --repo checkout --refresh off --json
+ctx research "foobar migration" --workspace checkout --refresh off --json
 ctx research "signed metadata Buildkite" --provider codex --limit 5
 ctx research "this current task" --include-current-session
 ```
@@ -233,7 +237,7 @@ by UTC date and ctx session, ranks `read_next` sessions, and emits copyable
 `ctx show` / `ctx locate` commands for inspection.
 
 `research` uses the same filters and active Codex session-tree exclusion as
-`search`: `--provider`, `--repo`, `--since`, `--event-type`, `--file`,
+`search`: `--provider`, `--workspace`, `--since`, `--event-type`, `--file`,
 `--primary-only`, `--include-subagents`, `--limit`, `--refresh`, and
 `--include-current-session`. Use `--refresh off` when you want a strictly
 read-only packet over the existing SQLite index.
@@ -279,8 +283,8 @@ Progress JSON is a best-effort operation stream. Each object has
 
 ## JSON Contract
 
-JSON output is intended for local agents and scripts. It is private unless a
-user explicitly reviews and redacts it.
+JSON output is intended for local scripts, harnesses, and exact field
+extraction. It is private unless a user explicitly reviews and redacts it.
 
 Structured output is available for:
 

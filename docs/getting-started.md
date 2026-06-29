@@ -78,16 +78,17 @@ When `--path` is used without `--provider`, ctx treats the path as Codex format.
 
 ```bash
 ctx search "failed migration"
-ctx search "failed migration" --json
+ctx search "failed migration" --term sqlite --term rollback
 ctx show event <ctx-event-id> --window 3
 ctx show session <ctx-session-id>
 ```
 
 Use `ctx_event_id` with `ctx show event` when you need a hit plus surrounding
 events. Use `ctx_session_id` with `ctx show session` when you need the
-transcript. Search also accepts filters such as `--provider`, `--repo`,
+transcript. Search also accepts filters such as `--provider`, `--workspace`,
 `--since`, `--event-type`, `--file`, `--primary-only`, `--include-subagents`,
-`--include-current-session`, `--limit`, and `--refresh auto|off|strict`.
+`--include-current-session`, `--term`, `--limit`, and
+`--refresh auto|off|strict`.
 `--limit` is capped at `200`.
 Search defaults to `--refresh auto`, a best-effort refresh of discovered native
 provider sources before querying. On large discovered sources or
@@ -102,14 +103,15 @@ session or its subagent work is the history you want to search. Use
 `--refresh off` when you need a strictly read-only query over the existing ctx
 index.
 
-## 6. Use Search JSON For Agents
+## 6. Use JSON For Scripts
 
 ```bash
-ctx search "failed migration" --json
+ctx search "failed migration" --json | jq '.results[0].ctx_event_id'
 ctx show event <ctx-event-id> --format json
 ctx show session <ctx-session-id> --format json
 ```
 
-Search JSON is the supported machine-readable retrieval API. It contains cited
-snippets and source metadata, but it is retrieved source material rather than
-generated analysis.
+Default text output is usually better for agent reading. Search JSON is the
+supported machine-readable retrieval API for scripts and exact field
+extraction. It contains cited snippets and source metadata, but it is retrieved
+source material rather than generated analysis.

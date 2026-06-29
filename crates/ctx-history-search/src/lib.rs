@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
@@ -61,7 +62,7 @@ pub struct SearchFilters {
     pub session: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ctx_history_core::CaptureProvider>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "workspace", skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since: Option<chrono::DateTime<Utc>>,
@@ -266,6 +267,156 @@ pub fn search_packet(store: &Store, query: &str, options: &PacketOptions) -> Res
         pagination: pagination(Some(cursor_offset), has_more),
         truncation,
     })
+}
+
+pub fn search_packet_terms(
+    store: &Store,
+    query: &str,
+    terms: &[String],
+    options: &PacketOptions,
+) -> Result<SearchPacket> {
+    let options = normalized_options(options);
+    let search_terms = composed_search_terms(query, terms);
+    if search_terms.len() <= 1 {
+        return search_packet(
+            store,
+            search_terms.first().map_or(query, String::as_str),
+            &options,
+        );
+    }
+
+    let mut child_options = options.clone();
+    child_options.limit = options
+        .limit
+        .saturating_mul(2)
+        .max(options.limit)
+        .min(MAX_RESULT_LIMIT);
+
+    let mut merged_results = Vec::<SearchPacketResult>::new();
+    let mut result_index = BTreeMap::<Uuid, usize>::new();
+    let mut truncated = false;
+    let mut omitted_results = 0_u32;
+    for term in &search_terms {
+        let packet = search_packet(store, term, &child_options)?;
+        truncated |= packet.truncation.truncated;
+        omitted_results = omitted_results.saturating_add(packet.truncation.omitted_results);
+        for mut result in packet.results {
+            push_unique_why(&mut result.why_matched, format!("term:{term}"));
+            let result_key = search_result_merge_key(&result, options.result_mode);
+            if let Some(index) = result_index.get(&result_key).copied() {
+                merge_search_result(&mut merged_results[index], result);
+            } else {
+                result_index.insert(result_key, merged_results.len());
+                merged_results.push(result);
+            }
+        }
+    }
+
+    merged_results.sort_by(compare_search_results);
+    let has_more = merged_results.len() > options.limit || truncated;
+    if merged_results.len() > options.limit {
+        omitted_results =
+            omitted_results.saturating_add((merged_results.len() - options.limit) as u32);
+        merged_results.truncate(options.limit);
+    }
+    normalize_search_result_ranks(&mut merged_results);
+
+    let truncation = if has_more {
+        ContextTruncation {
+            truncated: true,
+            reason: Some(if truncated { "source_limit" } else { "limit" }.to_owned()),
+            omitted_results: omitted_results.max(1),
+        }
+    } else {
+        ContextTruncation::default()
+    };
+    let cursor_offset = merged_results.len();
+
+    Ok(SearchPacket {
+        schema_version: SEARCH_PACKET_SCHEMA_VERSION,
+        query: search_terms.join(" OR "),
+        filters: options.filters,
+        generated_at: Utc::now(),
+        results: merged_results,
+        pagination: pagination(Some(cursor_offset), has_more),
+        truncation,
+    })
+}
+
+fn composed_search_terms(query: &str, terms: &[String]) -> Vec<String> {
+    let mut seen = BTreeSet::<String>::new();
+    let mut out = Vec::new();
+    for value in std::iter::once(query).chain(terms.iter().map(String::as_str)) {
+        let Some(term) = non_blank(value) else {
+            continue;
+        };
+        let key = term.to_lowercase();
+        if seen.insert(key) {
+            out.push(term);
+        }
+    }
+    out
+}
+
+fn search_result_merge_key(result: &SearchPacketResult, result_mode: SearchResultMode) -> Uuid {
+    if result_mode == SearchResultMode::Sessions {
+        result.session_id.unwrap_or(result.record_id)
+    } else {
+        result.event_id.unwrap_or(result.record_id)
+    }
+}
+
+fn merge_search_result(existing: &mut SearchPacketResult, incoming: SearchPacketResult) {
+    let incoming_rank = incoming.rank;
+    let existing_rank = existing.rank;
+    if incoming_rank > existing_rank {
+        existing.title = incoming.title.clone();
+        existing.snippet = incoming.snippet.clone();
+        existing.record_id = incoming.record_id;
+        existing.event_id = incoming.event_id;
+        existing.event_seq = incoming.event_seq;
+        existing.timestamp = incoming.timestamp;
+        existing.cwd = incoming.cwd.clone();
+        existing.raw_source_path = incoming.raw_source_path.clone();
+        existing.raw_source_exists = incoming.raw_source_exists;
+        existing.cursor = incoming.cursor.clone();
+    }
+    existing.rank = existing_rank.max(incoming_rank) + 0.08;
+    existing.more_matches_in_session = existing
+        .more_matches_in_session
+        .saturating_add(1)
+        .saturating_add(incoming.more_matches_in_session);
+    if existing.result_scope == SearchResultScope::Session {
+        existing.session_importance =
+            session_importance(existing.rank, existing.more_matches_in_session);
+    }
+    for reason in incoming.why_matched {
+        push_unique_why(&mut existing.why_matched, reason);
+    }
+    for citation in incoming.citations {
+        let duplicate = existing.citations.iter().any(|existing_citation| {
+            existing_citation.citation_type == citation.citation_type
+                && existing_citation.id == citation.id
+        });
+        if !duplicate {
+            existing.citations.push(citation);
+        }
+    }
+}
+
+fn push_unique_why(why_matched: &mut Vec<String>, reason: String) {
+    if !why_matched.iter().any(|value| value == &reason) {
+        why_matched.push(reason);
+    }
+}
+
+fn compare_search_results(left: &SearchPacketResult, right: &SearchPacketResult) -> Ordering {
+    right
+        .rank
+        .partial_cmp(&left.rank)
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| right.timestamp.cmp(&left.timestamp))
+        .then_with(|| left.record_id.cmp(&right.record_id))
 }
 
 fn push_candidate_results(
@@ -3079,6 +3230,53 @@ mod tests {
         value
     }
 
+    #[test]
+    fn search_packet_terms_merges_broad_queries_without_requiring_all_terms() {
+        let (_temp, store) = test_store();
+        for (id, title, body) in [
+            (
+                "018f45d0-0000-7000-8000-000000020001",
+                "Signed metadata release",
+                "signed metadata verification and trusted release manifests",
+            ),
+            (
+                "018f45d0-0000-7000-8000-000000020002",
+                "Buildkite worker setup",
+                "buildkite pipeline worker provisioning and release queue setup",
+            ),
+        ] {
+            let mut record = HistoryRecord::new(title, body, Vec::new(), "task", None);
+            record.id = Uuid::parse_str(id).unwrap();
+            record.created_at = fixed_time();
+            record.updated_at = fixed_time();
+            store.insert_record(&record).unwrap();
+        }
+        let options = PacketOptions {
+            limit: 10,
+            snippet_chars: 160,
+            ..PacketOptions::default()
+        };
+
+        let exact = search_packet(&store, "signed metadata buildkite", &options).unwrap();
+        assert_eq!(exact.results.len(), 0);
+
+        let broad = search_packet_terms(
+            &store,
+            "signed metadata",
+            &[String::from("buildkite")],
+            &options,
+        )
+        .unwrap();
+        let titles = broad
+            .results
+            .iter()
+            .map(|result| result.title.as_str())
+            .collect::<Vec<_>>();
+        assert!(titles.contains(&"Signed metadata release"));
+        assert!(titles.contains(&"Buildkite worker setup"));
+        assert_eq!(broad.query, "signed metadata OR buildkite");
+    }
+
     fn maybe_write_synthetic_search_smoke_artifact() {
         let Ok(out_dir) = std::env::var("CTX_ARTIFACT_DIR") else {
             return;
@@ -3155,8 +3353,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual perf gate; run through //:search_perf_bench"]
-    fn synthetic_search_perf_bench_records_thresholded_evidence() {
+    #[ignore = "manual perf benchmark; private release gates run scripts/public-ctx/perf-smoke.sh from ctx-private"]
+    fn synthetic_search_perf_records_thresholded_evidence() {
         let out_dir = std::env::var_os("CTX_ARTIFACT_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| {
@@ -3164,7 +3362,7 @@ mod tests {
                     .ancestors()
                     .nth(2)
                     .unwrap()
-                    .join("target/ctx-artifacts/search_perf_bench")
+                    .join("target/ctx-artifacts/synthetic_search_perf")
             });
         std::fs::create_dir_all(&out_dir).unwrap();
         let artifact_path = out_dir.join("synthetic-search-perf.json");
@@ -3532,7 +3730,7 @@ mod tests {
                 exit_code: Some(0),
                 cwd: Some("/workspace/ctx".into()),
                 command_preview: Some(format!(
-                    "bazel test //:search_perf_bench --config=ci perfneedle {record_index:05}"
+                    "ctx search perfneedle --refresh off --limit 5 # synthetic record {record_index:05}"
                 )),
                 input_blob_id: None,
                 output_blob_id: None,

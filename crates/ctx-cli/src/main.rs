@@ -243,6 +243,11 @@ struct SearchArgs {
     query: Option<String>,
     #[arg(
         long,
+        help = "Add another search query or keyword; repeat to broaden and merge results"
+    )]
+    term: Vec<String>,
+    #[arg(
+        long,
         default_value_t = 20,
         value_parser = parse_search_limit,
         help = "Maximum results to return, from 1 to 200"
@@ -250,8 +255,8 @@ struct SearchArgs {
     limit: usize,
     #[arg(long, help = "Search only one provider")]
     provider: Option<ProviderArg>,
-    #[arg(long, help = "Filter by repository/workspace path text")]
-    repo: Option<String>,
+    #[arg(long, help = "Filter by workspace path or name text")]
+    workspace: Option<String>,
     #[arg(
         long,
         help = "Filter to recent history, as RFC3339 or a day window like 30d"
@@ -290,6 +295,11 @@ struct SearchArgs {
     include_current_session: bool,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
+    #[arg(
+        long,
+        help = "Print expanded text details such as full ids, provider ids, citations, and next commands"
+    )]
+    verbose: bool,
 }
 
 #[derive(Debug, Args)]
@@ -305,8 +315,8 @@ struct ResearchArgs {
     limit: usize,
     #[arg(long, help = "Research only one provider")]
     provider: Option<ProviderArg>,
-    #[arg(long, help = "Filter by repository/workspace path text")]
-    repo: Option<String>,
+    #[arg(long, help = "Filter by workspace path or name text")]
+    workspace: Option<String>,
     #[arg(
         long,
         help = "Filter to recent history, as RFC3339 or a day window like 30d"
@@ -343,7 +353,7 @@ struct ResearchArgs {
 pub(crate) struct SearchFilterInput {
     session: Option<Uuid>,
     provider: Option<ProviderArg>,
-    repo: Option<String>,
+    workspace: Option<String>,
     since: Option<String>,
     primary_only: bool,
     include_subagents: bool,
@@ -1282,7 +1292,11 @@ fn command_analytics_properties(command: &CommandRoot) -> AnalyticsProperties {
                 "has_provider_filter",
                 args.provider.is_some(),
             );
-            analytics::insert_bool(&mut properties, "has_repo_filter", args.repo.is_some());
+            analytics::insert_bool(
+                &mut properties,
+                "has_workspace_filter",
+                args.workspace.is_some(),
+            );
             analytics::insert_bool(&mut properties, "has_since_filter", args.since.is_some());
             analytics::insert_bool(
                 &mut properties,
@@ -1323,7 +1337,11 @@ fn command_analytics_properties(command: &CommandRoot) -> AnalyticsProperties {
                 "has_provider_filter",
                 args.provider.is_some(),
             );
-            analytics::insert_bool(&mut properties, "has_repo_filter", args.repo.is_some());
+            analytics::insert_bool(
+                &mut properties,
+                "has_workspace_filter",
+                args.workspace.is_some(),
+            );
             analytics::insert_bool(&mut properties, "has_since_filter", args.since.is_some());
             analytics::insert_bool(
                 &mut properties,
@@ -2511,7 +2529,7 @@ fn resolve_session(
 ) -> Result<Session> {
     if let Some(id) = id {
         return store.get_session(id).with_context(|| {
-            format!("session {id} was not found; use `ctx search --json` to get ctx_session_id")
+            format!("session {id} was not found; use `ctx search` or `ctx search --verbose` to get ctx_session_id")
         });
     }
     let provider = provider.ok_or_else(|| {
@@ -3174,6 +3192,7 @@ impl SearchDto {
         store: &Store,
         packet: &ctx_history_search::SearchPacket,
         refresh: &SearchRefreshReport,
+        suggested_next_query: Option<&str>,
     ) -> Value {
         compact_json(json!({
             "schema_version": packet.schema_version,
@@ -3208,7 +3227,7 @@ impl SearchDto {
                         "source_path": result.raw_source_path,
                         "source_exists": result.raw_source_exists,
                         "cursor": result.cursor,
-                        "suggested_next_commands": search_next_commands(result, Some(&packet.query)),
+                        "suggested_next_commands": search_next_commands(result, suggested_next_query),
                         "why_matched": result.why_matched,
                         "citations": public_citations(&result.citations),
                         "links": result.links,
@@ -3607,7 +3626,7 @@ fn run_research(
         SearchFilterInput {
             session: None,
             provider: args.provider,
-            repo: args.repo.clone(),
+            workspace: args.workspace.clone(),
             since: args.since.clone(),
             primary_only: args.primary_only,
             include_subagents: args.include_subagents,
@@ -3999,7 +4018,7 @@ fn run_search(
             SearchFilterInput {
                 session: args.session,
                 provider: args.provider,
-                repo: args.repo.clone(),
+                workspace: args.workspace.clone(),
                 since: args.since.clone(),
                 primary_only: args.primary_only,
                 include_subagents: args.include_subagents,
@@ -4016,7 +4035,12 @@ fn run_search(
         },
         ..ctx_history_search::PacketOptions::default()
     };
-    let packet = ctx_history_search::search_packet(&store, &query, &options)?;
+    let uses_composed_terms = args.term.iter().any(|term| !term.trim().is_empty());
+    let packet = if uses_composed_terms {
+        ctx_history_search::search_packet_terms(&store, &query, &args.term, &options)?
+    } else {
+        ctx_history_search::search_packet(&store, &query, &options)?
+    };
     let result_count = packet.results.len();
     let citation_count = packet
         .results
@@ -4034,7 +4058,13 @@ fn run_search(
         citation_count as u64,
     );
     if args.json {
-        print_share_safe_value(SearchDto::packet(&store, &packet, &refresh))?;
+        let suggested_next_query = (!uses_composed_terms).then_some(query.as_str());
+        print_share_safe_value(SearchDto::packet(
+            &store,
+            &packet,
+            &refresh,
+            suggested_next_query,
+        ))?;
     } else {
         if refresh.status == "failed" && args.refresh == RefreshArg::Auto {
             if let Some(error) = &refresh.error {
@@ -4045,7 +4075,7 @@ fn run_search(
         }
         if packet.results.is_empty() {
             println!("no results");
-            if query.trim().is_empty() {
+            if query.trim().is_empty() && !uses_composed_terms {
                 println!("next: ctx list --limit 20");
             } else {
                 let indexed_items = indexed_history_item_count(&store)?;
@@ -4056,43 +4086,116 @@ fn run_search(
                 }
             }
         }
-        for result in packet.results {
-            println!("{}", result.title);
-            if let Some(event_id) = result.event_id {
-                println!("  ctx_event_id: {event_id}");
-            }
-            if let Some(session_id) = result.session_id {
-                println!("  ctx_session_id: {session_id}");
-            }
-            if let Some(provider_session_id) = &result.provider_session_id {
-                println!("  provider_session_id: {provider_session_id}");
-            }
-            println!("  {}", result.snippet);
-            if result.result_scope == ctx_history_search::SearchResultScope::Session {
-                println!("  session_importance: {:.2}", result.session_importance);
-                if result.more_matches_in_session > 0 {
-                    println!(
-                        "  more_matches_in_session: {}",
-                        result.more_matches_in_session
-                    );
-                }
-            }
-            for command in search_next_commands(&result, Some(&query))
-                .into_iter()
-                .take(3)
-            {
-                println!("  next: {command}");
-            }
-            for citation in result.citations.iter().take(2) {
-                println!(
-                    "  citation: {} {}",
-                    public_citation_item_type(citation.citation_type),
-                    citation.id
-                );
+        let suggested_next_query = (!uses_composed_terms).then_some(query.as_str());
+        for (index, result) in packet.results.iter().enumerate() {
+            if args.verbose {
+                print_search_result_verbose(result, suggested_next_query);
+            } else {
+                print_search_result_compact(index + 1, result);
             }
         }
     }
     Ok(())
+}
+
+fn print_search_result_compact(index: usize, result: &ctx_history_search::SearchPacketResult) {
+    println!("{index}. {}", result.title);
+    let summary = search_result_summary(result);
+    if !summary.is_empty() {
+        println!("   {}", summary.join(" | "));
+    }
+    let snippet = result.snippet.trim();
+    if !snippet.is_empty() {
+        println!("   {snippet}");
+    }
+    if result.result_scope == ctx_history_search::SearchResultScope::Session
+        && result.more_matches_in_session > 0
+    {
+        println!(
+            "   {} more results from this session",
+            result.more_matches_in_session
+        );
+    }
+    if let Some(command) = search_inspect_command(result) {
+        println!("   inspect: {command}");
+    }
+}
+
+fn print_search_result_verbose(
+    result: &ctx_history_search::SearchPacketResult,
+    suggested_next_query: Option<&str>,
+) {
+    println!("{}", result.title);
+    if let Some(event_id) = result.event_id {
+        println!("  ctx_event_id: {event_id}");
+    }
+    if let Some(session_id) = result.session_id {
+        println!("  ctx_session_id: {session_id}");
+    }
+    if let Some(provider_session_id) = &result.provider_session_id {
+        println!("  provider_session_id: {provider_session_id}");
+    }
+    println!("  {}", result.snippet);
+    println!("  rank: {:.2}", result.rank);
+    if result.result_scope == ctx_history_search::SearchResultScope::Session {
+        println!("  session_importance: {:.2}", result.session_importance);
+        if result.more_matches_in_session > 0 {
+            println!(
+                "  more_matches_in_session: {}",
+                result.more_matches_in_session
+            );
+        }
+    }
+    for command in search_next_commands(result, suggested_next_query)
+        .into_iter()
+        .take(3)
+    {
+        println!("  next: {command}");
+    }
+    for citation in result.citations.iter().take(2) {
+        println!(
+            "  citation: {} {}",
+            public_citation_item_type(citation.citation_type),
+            citation.id
+        );
+    }
+}
+
+fn search_result_summary(result: &ctx_history_search::SearchPacketResult) -> Vec<String> {
+    let mut summary = Vec::new();
+    if let Some(provider) = result.provider {
+        summary.push(provider.as_str().to_owned());
+    }
+    if result.result_scope == ctx_history_search::SearchResultScope::Session {
+        summary.push(format!("importance {:.2}", result.session_importance));
+    } else {
+        summary.push(format!("rank {:.2}", result.rank));
+    }
+    if let Some(session_id) = result.session_id {
+        summary.push(format!("session {}", short_uuid(session_id)));
+    }
+    if let Some(event_id) = result.event_id {
+        summary.push(format!("event {}", short_uuid(event_id)));
+    }
+    if let Some(timestamp) = result.timestamp {
+        summary.push(timestamp.to_rfc3339());
+    }
+    summary
+}
+
+fn short_uuid(id: Uuid) -> String {
+    id.to_string().chars().take(8).collect()
+}
+
+fn search_inspect_command(result: &ctx_history_search::SearchPacketResult) -> Option<String> {
+    result
+        .event_id
+        .map(|id| format!("ctx show event {id} --window 10"))
+        .or_else(|| {
+            result
+                .session_id
+                .map(|id| format!("ctx show session {id} --mode lite"))
+        })
 }
 
 fn refresh_before_search(args: &SearchArgs, data_root: &Path) -> Result<SearchRefreshReport> {
@@ -5104,7 +5207,7 @@ fn search_filters(
     Ok(ctx_history_search::SearchFilters {
         session: input.session,
         provider: input.provider.map(ProviderArg::capture_provider),
-        repo: input.repo,
+        repo: input.workspace,
         since: input.since.as_deref().map(parse_since_filter).transpose()?,
         primary_only: input.primary_only,
         include_subagents: input.include_subagents || !input.primary_only,
