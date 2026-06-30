@@ -15,6 +15,14 @@ the local retrieval product.
   `ctx show session --out` writes only the explicit path when one is provided.
 - In local-only security mode, setup/import/search do not use network access or
   API keys.
+- `ctx docs` reads embedded documentation and writes only an explicit man-page
+  output directory when `ctx docs man --out` is used.
+- `ctx upgrade` uses signed release metadata with explicit self-upgrade policy
+  and applies only to official installer-managed binaries with a matching
+  install sidecar.
+- Background auto-upgrade is managed-install-only, skipped for JSON/MCP/docs/
+  upgrade commands, requires explicit signed auto-upgrade policy, and must not
+  collect provider history or pollute command stdout/stderr.
 - Provider files are read as sources and not modified.
 - Provider transcript imports reject symlinked JSONL files by default.
 - JSON output is private by default and must not be described as share-safe.
@@ -63,9 +71,10 @@ Security-sensitive product changes should run at least `presubmit`; changes to
 setup/import/search behavior should also run `smoke` as described in
 [`docs/testing-taxonomy.md`](testing-taxonomy.md).
 
-The default product boundary remains local search only. Security docs and tests
-should continue to reject claims that setup, import, search, or doctor
-need remote accounts, background processes, repository mutation, or API keys.
+The default retrieval boundary remains local provider-history search. Security
+docs and tests should continue to reject claims that setup, import, search, or
+doctor need remote accounts, provider-history background collection,
+repository mutation, or API keys.
 
 ## Manual Review Checklist
 

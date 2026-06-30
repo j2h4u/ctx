@@ -47,6 +47,13 @@ function Get-MetadataValue([hashtable]$Values, [string]$Key) {
     return [string]$Values[$Key]
 }
 
+function Get-MetadataValueOrDefault([hashtable]$Values, [string]$Key, [string]$Default) {
+    if (-not $Values.ContainsKey($Key)) {
+        return $Default
+    }
+    return [string]$Values[$Key]
+}
+
 function Assert-SafeArtifactName([string]$Value) {
     if ($Value.Contains("..") -or $Value.Contains("/") -or $Value.Contains("\")) {
         Fail "unsafe artifact name: $Value"
@@ -86,6 +93,9 @@ try {
     $baseUrl = Get-MetadataValue $metadataValues "CTX_RELEASE_BASE_URL"
     $artifact = Get-MetadataValue $metadataValues "CTX_RELEASE_ARTIFACT_windows_x64"
     $checksum = Get-MetadataValue $metadataValues "CTX_RELEASE_SHA256_windows_x64"
+    $channel = Get-MetadataValueOrDefault $metadataValues "CTX_RELEASE_CHANNEL" "stable"
+    $sourceCommit = Get-MetadataValueOrDefault $metadataValues "CTX_RELEASE_SOURCE_COMMIT" ""
+    $publishedAt = Get-MetadataValueOrDefault $metadataValues "CTX_RELEASE_PUBLISHED_AT" ""
 
     if ($schemaVersion -ne "1") {
         Fail "unsupported metadata schema: $schemaVersion"
@@ -123,6 +133,26 @@ try {
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
     Copy-Item -LiteralPath $downloadPath -Destination $installPath -Force
     Write-Host "installed ctx to $installPath"
+
+    $markerPath = "$installPath.install.json"
+    $marker = [ordered]@{
+        schema_version = 1
+        manager = "ctx-hosted-installer"
+        install_path = $installPath
+        platform = $Platform
+        channel = $channel
+        version = $version
+        sha256 = $actualChecksum
+        metadata_url = $Metadata
+        artifact_url = $artifactUrl
+        source_commit = $sourceCommit
+        published_at = $publishedAt
+        installed_at = ([DateTime]::UtcNow.ToString("o"))
+    }
+    $markerJson = $marker | ConvertTo-Json -Depth 4
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($markerPath, $markerJson + [Environment]::NewLine, $utf8NoBom)
+    Write-Host "wrote ctx managed install marker to $markerPath"
 
     $runSetup = -not $NoSetup -and $env:CTX_INSTALL_NO_SETUP -ne "1"
     if ($runSetup) {

@@ -38,9 +38,11 @@ ctx doctor --json
 - `doctor` opens local storage and reports validation findings.
 
 Setup and health checks do not change shell startup files, install repository
-integrations, write into source repositories, call model APIs, require API keys,
-or start background processes. Core storage checks use the configured data root,
-and JSON stdout remains structured.
+integrations, write into source repositories, call model APIs, or require API
+keys. Core storage checks use the configured data root, and JSON stdout remains
+structured. Installer-managed binaries can run a signed background upgrade
+check after successful non-JSON commands; that check is separate from provider
+history indexing.
 
 ## Sources
 
@@ -209,6 +211,32 @@ Filters:
 SQLite, and may write newly discovered native provider history into the local
 index before querying.
 
+## Docs
+
+```bash
+ctx docs
+ctx docs list
+ctx docs list --json
+ctx docs search "upgrade"
+ctx docs search "file path" --limit 5 --json
+ctx docs show cli-reference
+ctx docs show search --format text
+ctx docs show json-contracts --format json
+ctx docs man --print ctx
+ctx docs man --out ~/.local/share/man/man1
+```
+
+`docs` exposes a curated copy of the public ctx docs inside the binary. It is
+intended for humans and agents that need local command help without opening the
+website. `docs list`, `docs search`, and `docs show` read embedded text and do
+not touch provider history or the local SQLite index. `docs man --print PAGE`
+prints one generated man page to stdout; `docs man --out DIR` writes generated
+section-1 man pages for `ctx` and its public subcommands.
+
+Agents should usually use `ctx docs search` or `ctx docs show` rather than
+shelling through `man`, because the docs commands return concise markdown/text
+that is easier for agents to quote and inspect.
+
 ## MCP
 
 ```bash
@@ -229,6 +257,41 @@ tool when the active session tree itself is the target.
 
 The MCP server is optional. The CLI remains the primary interface, and MCP is
 intended for agents or hosts that prefer tool discovery over shell commands.
+
+## Upgrade
+
+```bash
+ctx upgrade status
+ctx upgrade status --json
+ctx upgrade check
+ctx upgrade check --json
+ctx upgrade --dry-run
+ctx upgrade
+ctx upgrade disable
+ctx upgrade enable
+```
+
+`upgrade` checks and applies signed ctx CLI releases for binaries installed by
+the official hosted installer. The installer writes a sidecar marker next to the
+binary, such as `~/.local/bin/ctx.install.json`, recording the managed install
+path, platform, version, channel, binary SHA-256, metadata URL, and artifact
+URL. Source builds, `cargo install`, package-manager installs, copied binaries,
+and mismatched sidecars are treated as unmanaged and will not self-upgrade.
+
+Official installer-managed installs default to background auto-upgrade after
+successful normal commands when signed release metadata explicitly allows
+auto-upgrade. Background checks never run for `--json` commands, MCP, `ctx
+docs`, `ctx upgrade`, CI, or unmanaged installs. They write state and logs under
+the ctx data root and do not write to stdout or stderr. Use `CTX_UPGRADE_OFF=1`
+or `CTX_DISABLE_AUTO_UPGRADE=1` for process-level opt-out, or `ctx upgrade
+disable` to write `upgrade.auto = "off"` in `config.toml`.
+
+Manual `ctx upgrade` can print progress and errors. It verifies signed release
+metadata, explicit self-upgrade policy, artifact SHA-256, the current managed
+install marker, and the staged binary's `ctx --version` output before replacing
+the installed binary. On Windows, replacement may be scheduled by a helper that
+finishes after the running `ctx.exe` exits; JSON reports `status: "scheduled"`
+and `applied: false` until replacement completes.
 
 ## Progress Output
 
@@ -260,6 +323,12 @@ ctx show event <ctx-event-id> --format json
 ctx locate session <ctx-session-id> --format json
 ctx locate event <ctx-event-id> --format json
 ctx search [query] --json
+ctx docs list --json
+ctx docs search <query> --json
+ctx docs show <topic> --format json
+ctx upgrade --json
+ctx upgrade check --json
+ctx upgrade status --json
 ctx doctor --json
 ```
 

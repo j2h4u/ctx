@@ -64,6 +64,23 @@ Those IDs let your current agent recover as much context from previous sessions 
 
 ctx does not send your prompts, transcripts, or indexed history to a cloud service, call model APIs, require API keys, or write into your source repositories.
 
+The installed binary also includes local docs and man-page generation:
+
+```bash
+ctx docs search "upgrade"
+ctx docs show cli-reference
+ctx docs man --print ctx
+```
+
+Official installer-managed binaries support signed self-upgrades:
+
+```bash
+ctx upgrade status
+ctx upgrade check
+```
+
+Source builds and package-manager installs remain unmanaged and do not self-upgrade.
+
 For the full pipeline, see [How ctx works](https://ctx.rs/concepts/how-it-works). For a quick first run, see [Quickstart](https://ctx.rs/first-search).
 
 ## Supported agent histories

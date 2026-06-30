@@ -83,6 +83,9 @@ case "${mode}" in
     run_cargo_test -p ctx --test cli help_exposes_session_retrieval_commands
     run_cargo_test -p ctx --test cli public_subcommand_help_is_golden_enough_for_session_retrieval
     run_cargo_test -p ctx --test cli provider_help_matches_implemented_importers
+    run_cargo_test -p ctx --test cli docs_commands_expose_embedded_docs_and_man_pages
+    run_cargo_test -p ctx --test cli upgrade_status_check_and_apply_support_managed_installs
+    run_cargo_test -p ctx --test cli json_commands_do_not_spawn_background_upgrade
     ;;
   docs_check)
     run bash scripts/check-docs.sh

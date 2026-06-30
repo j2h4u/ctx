@@ -1,4 +1,9 @@
-use std::{fs::OpenOptions, io::Write, path::PathBuf};
+use std::{
+    fs,
+    fs::OpenOptions,
+    io::{Read, Write},
+    path::PathBuf,
+};
 
 use anyhow::{anyhow, Context, Result};
 
@@ -20,6 +25,23 @@ pub fn post_json(endpoint: &str, body: &[u8]) -> Result<()> {
         .send_bytes(body)
         .map(|_| ())
         .map_err(|err| anyhow!("POST {endpoint}: {err}"))
+}
+
+pub fn get_bytes(endpoint: &str) -> Result<Vec<u8>> {
+    if let Some(path) = file_url_path(endpoint) {
+        return fs::read(&path).with_context(|| format!("read {}", path.display()));
+    }
+    require_https_or_localhost(endpoint)?;
+    let response = ureq::get(endpoint)
+        .timeout(std::time::Duration::from_secs(20))
+        .call()
+        .map_err(|err| anyhow!("GET {endpoint}: {err}"))?;
+    let mut reader = response.into_reader();
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|err| anyhow!("read GET {endpoint}: {err}"))?;
+    Ok(bytes)
 }
 
 fn file_url_path(url: &str) -> Option<PathBuf> {

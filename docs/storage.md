@@ -11,11 +11,25 @@ Default root:
 ~/.ctx/
   work.sqlite
   config.toml
+  upgrade-state.json
+  upgrade.lock
   logs/
+    upgrade.log
 ```
 
 `CTX_DATA_ROOT` or `--data-root` may point ctx somewhere else. The configured
 root is used directly; ctx does not append another directory.
+
+Official installer-managed binaries also have a sidecar next to the installed
+binary, for example:
+
+```text
+~/.local/bin/ctx
+~/.local/bin/ctx.install.json
+```
+
+The sidecar is outside the ctx data root because it describes ownership of the
+installed executable, not indexed provider history.
 
 ## What SQLite Stores
 
@@ -67,6 +81,8 @@ analytics marker described under network behavior.
 | `ctx show` | SQLite index | selected `--out` path for `show session` when provided |
 | `ctx locate` | SQLite index and raw source path metadata | none |
 | `ctx search` | native provider transcript files, path metadata, and SQLite index | SQLite index for newly discovered native provider history |
+| `ctx docs` | embedded documentation in the binary | selected `--out` directory for `ctx docs man --out` |
+| `ctx upgrade` | signed release metadata and installed binary/sidecar metadata | installed binary for manual upgrade, install sidecar, `upgrade-state.json`, `upgrade.lock`, and `logs/upgrade.log` |
 | `ctx doctor` | SQLite index and data root metadata | none |
 
 Setup, import, and search do not require source repository writes, model APIs,
@@ -81,7 +97,16 @@ API keys, or remote accounts.
 The day-1 generated config is:
 
 ```toml
+[upgrade]
+auto = "apply"
+channel = "stable"
+interval_hours = 24
 ```
+
+`upgrade.auto = "apply"` only takes effect for official installer-managed
+binaries with a valid install sidecar. Unmanaged installs do not self-upgrade.
+Set `auto = "off"` or use `ctx upgrade disable` to disable background
+auto-upgrade for the configured data root.
 
 ## Index Lifecycle
 
@@ -107,7 +132,7 @@ source paths or cursors when available.
 
 ## Upgrade Reindexing
 
-When an existing `0.8.x` or `0.9.x` data root is opened by `0.10.x`, ctx keeps
+When an existing `0.8.x` or `0.9.x` data root is opened by `0.10.x` or newer, ctx keeps
 the SQLite database and migrates it in place. The migration rebuilds derived
 search projections and marks prior provider import cache rows pending so the
 next normal refresh can re-read original provider transcripts.
@@ -178,6 +203,14 @@ Core indexing work uses local filesystem and SQLite operations. The tools that
 originally produced provider transcripts may have used the network according to
 their own configuration; ctx indexing those transcripts does not repeat that
 behavior.
+
+Official installer-managed binaries can contact the signed release metadata
+endpoint for `ctx upgrade` and for background auto-upgrade checks after
+successful normal commands. These checks are skipped for JSON commands, MCP,
+`ctx docs`, `ctx upgrade`, CI, unmanaged installs, and process-level opt-outs
+such as `CTX_UPGRADE_OFF=1` or `CTX_DISABLE_AUTO_UPGRADE=1`. Upgrade metadata
+checks do not send provider transcript text, search queries, result snippets,
+source paths, repository names, or command output.
 
 First-party analytics are default-on and may create `install.json` and send
 coarse product metadata. They do not send session text, prompts, transcripts,

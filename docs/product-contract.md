@@ -24,6 +24,9 @@ product boundary is retrieval, not interpretation.
 - `ctx locate session` and `ctx locate event` report provenance and resume
   metadata.
 - `ctx doctor` reports local storage health.
+- `ctx docs` exposes embedded public documentation and generated man pages.
+- `ctx upgrade` checks and applies signed CLI releases for official
+  installer-managed binaries.
 - JSON output supports local agents and scripts.
 
 ## Out Of Scope
@@ -35,6 +38,8 @@ product boundary is retrieval, not interpretation.
 - shell startup-file modification;
 - API-key requirements for core setup/import/search;
 - background collection;
+- self-upgrade for unmanaged source builds, package-manager installs, or copied
+  binaries;
 - provider-native import claims that are not listed in the support matrix.
 
 ## Determinism

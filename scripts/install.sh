@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-usage: scripts/install.sh --metadata PATH_OR_URL [--platform PLATFORM] [--bin-dir DIR] [--no-setup]
+usage: scripts/install.sh --metadata PATH_OR_URL [--platform PLATFORM] [--bin-dir DIR] [--no-setup] [--no-man]
 
 Installs the ctx binary from explicit release metadata with pinned SHA-256
 checksums, then runs ctx setup to index discovered local history. The installer
@@ -19,6 +19,8 @@ Options:
                          Defaults to the current host when it can be detected.
   --bin-dir DIR          Install directory. Defaults to $HOME/.local/bin.
   --no-setup             Install only; do not run ctx setup after install.
+  --no-man               Do not install generated man pages.
+  --man-dir DIR          Man page directory. Defaults to $HOME/.local/share/man/man1.
   --dry-run              Validate metadata and print the planned install.
   -h, --help             Show this help.
 
@@ -116,6 +118,13 @@ metadata_value() {
   printf '%s\n' "${value}"
 }
 
+metadata_value_optional() {
+  local file="$1"
+  local key="$2"
+
+  metadata_value "${file}" "${key}" 2>/dev/null || true
+}
+
 validate_safe_value() {
   local name="$1"
   local value="$2"
@@ -148,11 +157,44 @@ sha256_file() {
   fail "sha256sum, shasum, or sha256 is required"
 }
 
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+write_install_marker() {
+  local marker_path="$1"
+  local metadata_url="$2"
+  local source_commit="$3"
+  local published_at="$4"
+  local installed_at
+  installed_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+  cat > "${marker_path}.$$" <<EOF
+{
+  "schema_version": 1,
+  "manager": "ctx-hosted-installer",
+  "install_path": "$(json_escape "${install_path}")",
+  "platform": "$(json_escape "${platform}")",
+  "channel": "$(json_escape "${channel}")",
+  "version": "$(json_escape "${version}")",
+  "sha256": "$(json_escape "${actual_checksum}")",
+  "metadata_url": "$(json_escape "${metadata_url}")",
+  "artifact_url": "$(json_escape "${artifact_url}")",
+  "source_commit": "$(json_escape "${source_commit}")",
+  "published_at": "$(json_escape "${published_at}")",
+  "installed_at": "$(json_escape "${installed_at}")"
+}
+EOF
+  mv "${marker_path}.$$" "${marker_path}"
+}
+
 metadata_source=""
 platform=""
 bin_dir="${HOME:-}/.local/bin"
+man_dir="${CTX_MAN_DIR:-${HOME:-}/.local/share/man/man1}"
 dry_run=0
 run_setup=1
+install_man=1
 
 while (($# > 0)); do
   case "$1" in
@@ -171,6 +213,13 @@ while (($# > 0)); do
     --no-setup)
       run_setup=0
       ;;
+    --no-man)
+      install_man=0
+      ;;
+    --man-dir)
+      shift
+      man_dir="${1:-}"
+      ;;
     --dry-run)
       dry_run=1
       ;;
@@ -187,6 +236,7 @@ done
 
 test -n "${metadata_source}" || fail "--metadata is required"
 test -n "${bin_dir}" || fail "--bin-dir cannot be empty"
+test -n "${man_dir}" || fail "--man-dir cannot be empty"
 
 if [[ -z "${platform}" ]]; then
   platform="$(detect_platform)" || fail "cannot detect this host platform; pass --platform"
@@ -211,6 +261,12 @@ base_url="$(metadata_value "${metadata_file}" CTX_RELEASE_BASE_URL)" || fail "me
 platform_key="${platform//-/_}"
 artifact="$(metadata_value "${metadata_file}" "CTX_RELEASE_ARTIFACT_${platform_key}")" || fail "metadata missing artifact for ${platform}"
 checksum="$(metadata_value "${metadata_file}" "CTX_RELEASE_SHA256_${platform_key}")" || fail "metadata missing checksum for ${platform}"
+channel="$(metadata_value_optional "${metadata_file}" CTX_RELEASE_CHANNEL)"
+source_commit="$(metadata_value_optional "${metadata_file}" CTX_RELEASE_SOURCE_COMMIT)"
+published_at="$(metadata_value_optional "${metadata_file}" CTX_RELEASE_PUBLISHED_AT)"
+if [[ -z "${channel}" ]]; then
+  channel="stable"
+fi
 
 [[ "${schema_version}" == "1" ]] || fail "unsupported metadata schema: ${schema_version}"
 [[ "${base_url}" == https://* ]] || fail "metadata base URL must be HTTPS"
@@ -230,6 +286,9 @@ install_path="${bin_dir%/}/${install_name}"
 
 printf 'ctx install plan: version=%s platform=%s artifact=%s bin=%s\n' \
   "${version}" "${platform}" "${artifact}" "${install_path}"
+if ((install_man)); then
+  printf 'ctx man page plan: dir=%s\n' "${man_dir}"
+fi
 
 if ((dry_run)); then
   exit 0
@@ -244,6 +303,22 @@ fi
 mkdir -p "${bin_dir}"
 install -m 0755 "${download_path}" "${install_path}"
 printf 'installed ctx to %s\n' "${install_path}"
+
+write_install_marker "${install_path}.install.json" "${metadata_source}" "${source_commit}" "${published_at}"
+printf 'wrote ctx managed install marker to %s\n' "${install_path}.install.json"
+
+if [[ "${CTX_INSTALL_NO_MAN:-0}" == "1" ]]; then
+  install_man=0
+fi
+
+if ((install_man)); then
+  mkdir -p "${man_dir}"
+  if "${install_path}" docs man --out "${man_dir}"; then
+    printf 'installed ctx man pages to %s\n' "${man_dir}"
+  else
+    printf 'warning: failed to install ctx man pages to %s\n' "${man_dir}" >&2
+  fi
+fi
 
 if [[ "${CTX_INSTALL_NO_SETUP:-0}" == "1" ]]; then
   run_setup=0

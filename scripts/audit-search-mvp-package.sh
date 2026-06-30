@@ -79,7 +79,7 @@ if tracked_files | grep -E '^(examples|assets)/' | grep -E -i 'dashboard|work-[r
   fail 'tracked examples or assets contain removed product-surface material'
 fi
 
-if grep_files 'dashboard|shim|shims|pull request|pull-request|pr evidence|pr-evidence|ctx publish|ctx evidence|ctx pr|ctx link-pr|ctx context|ctx update|ctx uninstall|hosted|\bADE\b|\b[Aa]mp\b|[Aa]mpcode|normalized-only|normalized only|normalized_import_only|normalized provider JSONL|CTX_PROVIDER_NORMALIZED_IMPORT_DEV|[W]ork Recorder|[w]ork recorder|\bwork-[r]ecord\b' \
+if grep_files 'dashboard|shim|shims|pull request|pull-request|pr evidence|pr-evidence|ctx publish|ctx evidence|ctx pr|ctx link-pr|ctx context|ctx update|ctx uninstall|\bADE\b|\b[Aa]mp\b|[Aa]mpcode|normalized-only|normalized only|normalized_import_only|normalized provider JSONL|CTX_PROVIDER_NORMALIZED_IMPORT_DEV|[W]ork Recorder|[w]ork recorder|\bwork-[r]ecord\b' \
   "${public_user_docs[@]}" >/dev/null 2>&1; then
   fail 'public docs contain removed product-surface wording'
 fi
@@ -179,8 +179,8 @@ if [[ "${CTX_AUDIT_SKIP_RELEASE_BUILD:-0}" != "1" ]]; then
       fail 'release ctx binary contains removed dashboard/shim/PR-publish/watch command strings'
     fi
     if printf '%s\n' "${binary_strings}" \
-      | grep -E -i 'dashboard|hosted|pull_request|published_to|evidence' >/dev/null; then
-      fail 'release ctx binary contains removed dashboard/hosted/PR/evidence strings'
+      | grep -E -i 'dashboard|pull_request|published_to' >/dev/null; then
+      fail 'release ctx binary contains removed dashboard/PR publication strings'
     fi
   fi
 fi

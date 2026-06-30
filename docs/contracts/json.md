@@ -276,6 +276,85 @@ MCP search does not refresh or import provider history. It also excludes the
 active Codex session tree by default when `CODEX_THREAD_ID` is set; pass
 `include_current_session: true` to opt back in.
 
+## Docs
+
+```bash
+ctx docs list --json
+ctx docs search <query> --json
+ctx docs show <topic> --format json
+```
+
+`ctx docs list --json` returns:
+
+- `schema_version`;
+- `topics[]`.
+
+Each topic includes `id`, `title`, `audience`, `summary`, `tags`, and
+`source_path`.
+
+`ctx docs search <query> --json` returns:
+
+- `schema_version`;
+- `query`;
+- `results[]`.
+
+Each result uses the topic fields above and adds `score`.
+
+`ctx docs show <topic> --format json` returns one topic object plus:
+
+- `schema_version`;
+- `body`, containing the embedded markdown source.
+
+Docs JSON is generated from embedded static docs and does not read provider
+history or SQLite.
+
+## Upgrade
+
+```bash
+ctx upgrade --json
+ctx upgrade --dry-run --json
+ctx upgrade check --json
+ctx upgrade status --json
+```
+
+`ctx upgrade` and `ctx upgrade check` return:
+
+- `schema_version`;
+- `command`, either `upgrade` or `upgrade_check`;
+- `ok`;
+- `status`, such as `available`, `up_to_date`, `dry_run`, `applied`, or
+  `scheduled`;
+- `message`;
+- `current_version`;
+- `latest_version`;
+- `update_available`;
+- `channel`;
+- `platform`;
+- `metadata_url`;
+- `artifact_url`;
+- `install_path`;
+- `managed`;
+- `applied`;
+- `dry_run`;
+- `warnings[]`.
+
+`ctx upgrade status --json` returns:
+
+- `schema_version`;
+- `command: "upgrade_status"`;
+- `state`;
+- `install`.
+
+`state` is the last local upgrade-state object when present, or
+`status: "never_checked"`. `install.managed` is true only when the running
+binary has a matching official installer sidecar. Unmanaged installs report
+`managed: false` and a `reason`.
+
+Background upgrade checks do not write JSON to stdout. They write
+`upgrade-state.json` and `logs/upgrade.log` under the ctx data root. Windows
+self-upgrade can report `scheduled` with `applied: false` while a helper waits
+for the running `ctx.exe` to exit and then replaces the binary and sidecar.
+
 ## Citation Fields
 
 Citations can include:

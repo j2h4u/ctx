@@ -16,9 +16,11 @@ use uuid::Uuid;
 
 mod analytics;
 mod config;
+mod docs;
 mod identity;
 mod mcp;
 mod net;
+mod upgrade;
 
 use analytics::{AnalyticsEvent, AnalyticsProperties};
 use config::{AppConfig, CONFIG_FILE};
@@ -74,8 +76,12 @@ enum CommandRoot {
     Locate(LocateArgs),
     #[command(about = "Search indexed agent history")]
     Search(SearchArgs),
+    #[command(about = "Read embedded ctx documentation")]
+    Docs(docs::DocsArgs),
     #[command(about = "Serve read-only ctx tools over MCP")]
     Mcp(mcp::McpArgs),
+    #[command(about = "Check or apply signed ctx CLI upgrades")]
+    Upgrade(upgrade::UpgradeArgs),
     #[command(about = "Check local ctx health")]
     Doctor(JsonArgs),
 }
@@ -281,13 +287,19 @@ impl CommandRoot {
             Self::Show(_) => "show",
             Self::Locate(_) => "locate",
             Self::Search(_) => "search",
+            Self::Docs(_) => "docs",
             Self::Mcp(_) => "mcp",
+            Self::Upgrade(_) => "upgrade",
             Self::Doctor(_) => "doctor",
         }
     }
 
     fn sends_analytics(&self) -> bool {
-        !matches!(self, Self::Mcp(_))
+        match self {
+            Self::Mcp(_) => false,
+            Self::Upgrade(args) if args.background() => false,
+            _ => true,
+        }
     }
 
     fn json_output(&self) -> bool {
@@ -299,9 +311,15 @@ impl CommandRoot {
             Self::Show(args) => args.json_output(),
             Self::Locate(args) => args.json_output(),
             Self::Search(args) => args.json,
+            Self::Docs(args) => args.json_output(),
             Self::Mcp(_) => false,
+            Self::Upgrade(args) => args.json_output(),
             Self::Doctor(args) => args.json,
         }
+    }
+
+    fn allows_background_upgrade(&self) -> bool {
+        !matches!(self, Self::Docs(_) | Self::Mcp(_) | Self::Upgrade(_))
     }
 }
 
@@ -1036,6 +1054,7 @@ fn main() -> Result<()> {
     let action = cli.command.name();
     let sends_analytics = cli.command.sends_analytics();
     let json_output = cli.command.json_output();
+    let allow_background_upgrade = cli.command.allows_background_upgrade();
     let mut analytics_properties = command_analytics_properties(&cli.command);
     let data_root = cli
         .data_root
@@ -1053,7 +1072,9 @@ fn main() -> Result<()> {
         CommandRoot::Show(args) => run_show(args, data_root.clone(), &mut analytics_properties),
         CommandRoot::Locate(args) => run_locate(args, data_root.clone(), &mut analytics_properties),
         CommandRoot::Search(args) => run_search(args, data_root.clone(), &mut analytics_properties),
+        CommandRoot::Docs(args) => docs::run(args),
         CommandRoot::Mcp(args) => mcp::run(args, data_root.clone()),
+        CommandRoot::Upgrade(args) => upgrade::run(args, data_root.clone(), config.clone()),
         CommandRoot::Doctor(args) => run_doctor(args, data_root.clone(), &mut analytics_properties),
     };
     if sends_analytics {
@@ -1068,6 +1089,9 @@ fn main() -> Result<()> {
                 properties: analytics_properties,
             },
         );
+    }
+    if result.is_ok() && allow_background_upgrade {
+        upgrade::maybe_spawn_auto_upgrade(&data_root, &config, json_output);
     }
     result
 }
@@ -1196,6 +1220,11 @@ fn command_analytics_properties(command: &CommandRoot) -> AnalyticsProperties {
             }
         }
         CommandRoot::Mcp(_) => {}
+        CommandRoot::Docs(_) => {}
+        CommandRoot::Upgrade(args) => {
+            analytics::insert_bool(&mut properties, "dry_run", args.dry_run);
+            analytics::insert_bool(&mut properties, "background", args.background());
+        }
     }
     properties
 }

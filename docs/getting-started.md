@@ -38,8 +38,10 @@ ctx --data-root /tmp/ctx-demo setup
 CTX_DATA_ROOT=/tmp/ctx-demo ctx status
 ```
 
-Setup does not write to source repositories, call model APIs, require API keys,
-or start a background process.
+Setup does not write to source repositories, call model APIs, or require API
+keys. Official installer-managed binaries can run a signed background
+auto-upgrade check after later successful non-JSON commands; that updater does
+not collect provider history.
 
 ## 3. See Available Sources
 
@@ -72,7 +74,7 @@ idempotently and skip or replace unchanged indexed rows. The `--resume` flag is
 reported as `idempotent_rescan`; it does not yet mean every provider has a
 native cursor-resume API.
 
-After upgrading an older data root to `0.10.x`, the first refresh or import may
+After upgrading an older data root to `0.10.x` or newer, the first refresh or import may
 re-read previously indexed provider transcripts once. That rebuilds search
 content with touched-file metadata and local/private transcript text.
 
@@ -119,3 +121,22 @@ Default text output is usually better for agent reading. Search JSON is the
 supported machine-readable retrieval API for scripts and exact field
 extraction. It contains cited snippets and source metadata, but it is retrieved
 source material rather than generated analysis.
+
+## 7. Built-In Docs And Upgrades
+
+```bash
+ctx docs search "file path"
+ctx docs show cli-reference
+ctx docs man --print ctx
+ctx upgrade status
+ctx upgrade check
+```
+
+`ctx docs` reads embedded public docs from the installed binary. Agents should
+prefer `ctx docs search` and `ctx docs show` over man pages; man pages are
+available for human shell use.
+
+`ctx upgrade` works for official installer-managed binaries. Source builds,
+`cargo install`, package-manager installs, and copied binaries are treated as
+unmanaged and will not self-upgrade. Use `ctx upgrade disable` or
+`CTX_UPGRADE_OFF=1` to disable managed background auto-upgrade.

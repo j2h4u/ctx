@@ -93,6 +93,18 @@ Use citations from `ctx search` or `ctx show` when the retrieved material
 affects an answer or implementation. Add `--json` only when a script or `jq`
 needs exact fields.
 
+## 6. Local Help And Upgrade Status
+
+```bash
+ctx docs search "upgrade"
+ctx docs show search
+ctx upgrade status
+```
+
+`ctx docs` is embedded in the binary for humans and agents. `ctx upgrade status`
+shows whether the current binary is managed by the official installer and
+eligible for signed self-upgrades.
+
 ## Failure Paths
 
 - No sources listed: this machine may not have supported local provider
@@ -103,3 +115,6 @@ needs exact fields.
   widen the query or remove filters.
 - Citation source missing: ctx can still return indexed text, but the raw
   provider file is unavailable at the stored path.
+- Upgrade says unmanaged install: reinstall with the official installer if you
+  want signed self-upgrades, or keep managing the binary with your package
+  manager/source checkout.

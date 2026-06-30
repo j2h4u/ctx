@@ -3,6 +3,7 @@ use std::{
     env, fs,
     io::Write,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -12,6 +13,7 @@ pub const CONFIG_FILE: &str = "config.toml";
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub analytics: AnalyticsConfig,
+    pub upgrade: UpgradeConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -20,12 +22,26 @@ pub struct AnalyticsConfig {
     pub endpoint: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct UpgradeConfig {
+    pub auto: String,
+    pub channel: String,
+    pub interval: Duration,
+    pub functions_base: String,
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             analytics: AnalyticsConfig {
                 enabled: true,
                 endpoint: "https://cli.ctx.rs/functions/v1/analytics".to_owned(),
+            },
+            upgrade: UpgradeConfig {
+                auto: "apply".to_owned(),
+                channel: "stable".to_owned(),
+                interval: Duration::from_secs(24 * 60 * 60),
+                functions_base: "https://cli.ctx.rs/functions/v1".to_owned(),
             },
         }
     }
@@ -52,6 +68,21 @@ impl AppConfig {
         if let Some(endpoint) = parse_string(values.get("analytics.endpoint")) {
             self.analytics.endpoint = endpoint;
         }
+        if let Some(auto) = parse_string(values.get("upgrade.auto")) {
+            self.upgrade.auto = auto;
+        }
+        if let Some(channel) = parse_string(values.get("upgrade.channel")) {
+            self.upgrade.channel = channel;
+        }
+        if let Some(hours) = parse_u64(values.get("upgrade.interval_hours")) {
+            self.upgrade.interval = Duration::from_secs(hours.saturating_mul(60 * 60));
+        }
+        if let Some(seconds) = parse_u64(values.get("upgrade.interval_seconds")) {
+            self.upgrade.interval = Duration::from_secs(seconds);
+        }
+        if let Some(functions_base) = parse_string(values.get("upgrade.functions_base")) {
+            self.upgrade.functions_base = functions_base;
+        }
     }
 
     fn apply_env(&mut self) {
@@ -68,6 +99,29 @@ impl AppConfig {
                 self.analytics.endpoint = endpoint;
             }
         }
+        if env_flag("CTX_UPGRADE_OFF") || env_flag("CTX_DISABLE_AUTO_UPGRADE") {
+            self.upgrade.auto = "off".to_owned();
+        }
+        if let Ok(auto) = env::var("CTX_UPGRADE_AUTO") {
+            if !auto.trim().is_empty() {
+                self.upgrade.auto = auto;
+            }
+        }
+        if let Ok(channel) = env::var("CTX_CHANNEL").or_else(|_| env::var("CTX_UPGRADE_CHANNEL")) {
+            if !channel.trim().is_empty() {
+                self.upgrade.channel = channel;
+            }
+        }
+        if let Ok(functions_base) = env::var("CTX_FUNCTIONS_BASE") {
+            if !functions_base.trim().is_empty() {
+                self.upgrade.functions_base = functions_base;
+            }
+        }
+        if let Ok(seconds) = env::var("CTX_UPGRADE_INTERVAL_SECONDS") {
+            if let Ok(seconds) = seconds.parse::<u64>() {
+                self.upgrade.interval = Duration::from_secs(seconds);
+            }
+        }
     }
 
     pub fn config_path(data_root: &Path) -> PathBuf {
@@ -81,7 +135,12 @@ pub fn write_default_config(data_root: &Path) -> Result<()> {
         return Ok(());
     }
     let mut file = fs::File::create(&path)?;
-    file.write_all(b"")?;
+    file.write_all(
+        b"[upgrade]\n\
+auto = \"apply\"\n\
+channel = \"stable\"\n\
+interval_hours = 24\n",
+    )?;
     Ok(())
 }
 
@@ -131,6 +190,10 @@ fn parse_bool(value: Option<&String>) -> Option<bool> {
     value.and_then(|value| parse_bool_value(value))
 }
 
+fn parse_u64(value: Option<&String>) -> Option<u64> {
+    value.and_then(|value| value.trim().trim_matches('"').parse::<u64>().ok())
+}
+
 fn parse_bool_value(value: &str) -> Option<bool> {
     match value.trim().trim_matches('"').to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Some(true),
@@ -159,6 +222,11 @@ mod tests {
             r#"
 [analytics]
 enabled = false
+
+[upgrade]
+auto = "off"
+channel = "beta"
+interval_seconds = 60
 "#,
         );
         let mut config = AppConfig::default();
@@ -167,7 +235,11 @@ enabled = false
             "https://cli.ctx.rs/functions/v1/analytics"
         );
         assert!(config.analytics.enabled);
+        assert_eq!(config.upgrade.auto, "apply");
         config.apply_values(&values);
         assert!(!config.analytics.enabled);
+        assert_eq!(config.upgrade.auto, "off");
+        assert_eq!(config.upgrade.channel, "beta");
+        assert_eq!(config.upgrade.interval, Duration::from_secs(60));
     }
 }
