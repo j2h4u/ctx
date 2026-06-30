@@ -64,13 +64,10 @@ analytics marker described under network behavior.
 | `ctx status` | data root metadata and existing SQLite store | none |
 | `ctx sources` | known provider paths under the user's home | none |
 | `ctx import` | provider transcript files and path metadata | data root, `config.toml` if missing, and SQLite index |
-| `ctx list` | SQLite index | none |
-| `ctx show` | SQLite index | none |
+| `ctx show` | SQLite index | selected `--out` path for `show session` when provided |
 | `ctx locate` | SQLite index and raw source path metadata | none |
-| `ctx export` | SQLite index | selected `--out` path when provided |
 | `ctx search` | native provider transcript files, path metadata, and SQLite index | SQLite index for newly discovered native provider history |
 | `ctx doctor` | SQLite index and data root metadata | none |
-| `ctx validate` | SQLite index | none |
 
 Setup, import, and search do not require source repository writes, model APIs,
 API keys, or remote accounts.

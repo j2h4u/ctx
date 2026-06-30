@@ -24,8 +24,6 @@ ctx status
 ctx status --json
 ctx doctor
 ctx doctor --json
-ctx validate
-ctx validate --json
 ```
 
 - `setup` creates the data root, opens or creates `work.sqlite`, writes
@@ -37,7 +35,6 @@ ctx validate --json
 - `status` reports the ctx root, database path, config path, indexed item
   count, indexed source count, initialization state, and local-only marker.
 - `doctor` opens local storage and reports validation findings.
-- `validate` opens local storage and reports database validation findings.
 
 Setup and health checks do not change shell startup files, install repository
 integrations, write into source repositories, call model APIs, require API keys,
@@ -104,32 +101,27 @@ The current `--resume` flag is an idempotent-rescan mode marker. JSON reports
 `resume: true` and `resume_mode: "idempotent_rescan"`, but provider-native
 cursor resume is not a universal contract yet.
 
-## List, Show, Locate, And Export
+## Show And Locate
 
 ```bash
-ctx list
-ctx list --limit 50
-ctx list --json
 ctx show session <ctx-session-id>
 ctx show session <ctx-session-id> --mode full --format text
 ctx show session <ctx-session-id> --mode log --format jsonl
+ctx show session <ctx-session-id> --format markdown --out transcript.md
+ctx show session <ctx-session-id> --mode full --format markdown --out transcript.md
 ctx show event <ctx-event-id> --window 3 --format text
 ctx show event <ctx-event-id> --before 5 --after 10 --format json
 ctx locate session <ctx-session-id>
 ctx locate event <ctx-event-id>
-ctx export session <ctx-session-id> --format markdown --out transcript.md
-ctx export session <ctx-session-id> --mode full --format markdown --out transcript.md
-ctx export session <ctx-session-id> --mode log --format jsonl
 ```
-
-`list` reads the local database and returns indexed items up to `--limit`
-(default `20`).
 
 `show session` renders one transcript by ctx-owned session ID. It defaults to
 `--mode lite`, a compact agent-readable transcript with user messages and final
 assistant messages. `--mode full` keeps all user/assistant/system message
 events, and `--mode log` renders all imported events including tool and command
-activity. `--format` accepts `text`, `markdown`, `json`, or `jsonl`.
+activity. `--format` accepts `text`, `markdown`, `json`, or `jsonl`. Without
+`--out`, `show session` writes to stdout. With `--out`, it writes the rendered
+transcript artifact to that path and prints nothing on success.
 
 `show event` renders one ctx-owned event hit. `--before` and `--after` include
 neighboring events in the same session; `--window N` is shorthand for
@@ -138,11 +130,6 @@ neighboring events in the same session; `--window N` is shorthand for
 `locate session` and `locate event` print provenance metadata: ctx IDs,
 provider, provider-owned session IDs, source path and cursor, source
 availability, import fidelity, and resume/cursor metadata when available.
-
-`export session` renders the same transcript modes and formats as `show
-session`, and also defaults to `--mode lite`. Without `--out`, it writes the
-artifact to stdout. With `--out`, it writes the artifact to that path and prints
-nothing on success.
 
 Provider-owned IDs are metadata, not positional IDs. Positional session and
 event arguments are ctx-owned IDs. To look up a provider-owned session, use an
@@ -267,15 +254,12 @@ ctx setup --json
 ctx status --json
 ctx sources --json
 ctx import --json
-ctx list --json
 ctx show session <ctx-session-id> --format json
 ctx show event <ctx-event-id> --format json
 ctx locate session <ctx-session-id> --format json
 ctx locate event <ctx-event-id> --format json
-ctx export session <ctx-session-id> --format json
 ctx search [query] --json
 ctx doctor --json
-ctx validate --json
 ```
 
 See [contracts/json.md](contracts/json.md) for the current field-level contract

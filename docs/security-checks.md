@@ -11,16 +11,14 @@ the local retrieval product.
 - `ctx import` writes only the configured ctx data root and SQLite index.
 - `ctx search` may refresh discovered native provider history into the
   configured ctx data root before querying.
-- `ctx list`, `ctx show`, and `ctx locate` write nothing in local-only security
-  mode.
-- `ctx export session` writes only the explicit `--out` path when one is
-  provided.
+- `ctx show` and `ctx locate` write nothing in local-only security mode, except
+  `ctx show session --out` writes only the explicit path when one is provided.
 - In local-only security mode, setup/import/search do not use network access or
   API keys.
 - Provider files are read as sources and not modified.
 - Provider transcript imports reject symlinked JSONL files by default.
 - JSON output is private by default and must not be described as share-safe.
-- Search/show/locate/export JSON and SQLite search projections must not expose
+- Search/show/locate JSON and SQLite search projections must not expose
   secret-shaped values that the redaction oracle covers.
 - Unsupported providers remain explicit in the provider support matrix.
 
@@ -65,7 +63,7 @@ setup/import/search behavior should also run `smoke` as described in
 [`docs/testing-taxonomy.md`](testing-taxonomy.md).
 
 The default product boundary remains local search only. Security docs and tests
-should continue to reject claims that setup, import, search, doctor, or validate
+should continue to reject claims that setup, import, search, or doctor
 need remote accounts, background processes, repository mutation, or API keys.
 
 ## Manual Review Checklist

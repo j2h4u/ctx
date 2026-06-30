@@ -98,7 +98,7 @@ Use this skill in two modes:
 7. Export a transcript only when another agent or artifact needs a file:
 
    ```bash
-   ctx export session <ctx-session-id> --format markdown --out <output-path>
+   ctx show session <ctx-session-id> --format markdown --out <output-path>
    ```
 
 ## History Research Reports

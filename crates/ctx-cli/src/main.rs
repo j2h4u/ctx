@@ -68,22 +68,16 @@ enum CommandRoot {
     Sources(JsonArgs),
     #[command(about = "Index provider history into local search")]
     Import(ImportArgs),
-    #[command(about = "List indexed agent history items")]
-    List(ListArgs),
     #[command(about = "Show an indexed session transcript or event")]
     Show(ShowArgs),
     #[command(about = "Locate provider/source metadata for an indexed session or event")]
     Locate(LocateArgs),
-    #[command(about = "Export an indexed session transcript")]
-    Export(ExportArgs),
     #[command(about = "Search indexed agent history")]
     Search(SearchArgs),
     #[command(about = "Serve read-only ctx tools over MCP")]
     Mcp(mcp::McpArgs),
     #[command(about = "Check local ctx health")]
     Doctor(JsonArgs),
-    #[command(about = "Validate local ctx storage")]
-    Validate(JsonArgs),
 }
 
 #[derive(Debug, Args)]
@@ -119,14 +113,6 @@ struct ImportArgs {
 }
 
 #[derive(Debug, Args)]
-struct ListArgs {
-    #[arg(long, default_value_t = 20)]
-    limit: usize,
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Debug, Args)]
 struct ShowArgs {
     #[command(subcommand)]
     target: ShowTarget,
@@ -153,6 +139,8 @@ struct ShowSessionArgs {
     format: OutputFormat,
     #[arg(long)]
     json: bool,
+    #[arg(long)]
+    out: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -204,33 +192,6 @@ struct LocateEventArgs {
     format: LocateFormat,
     #[arg(long)]
     json: bool,
-}
-
-#[derive(Debug, Args)]
-struct ExportArgs {
-    #[command(subcommand)]
-    target: ExportTarget,
-}
-
-#[derive(Debug, Subcommand)]
-enum ExportTarget {
-    #[command(about = "Export a session transcript")]
-    Session(ExportSessionArgs),
-}
-
-#[derive(Debug, Args)]
-struct ExportSessionArgs {
-    id: Option<Uuid>,
-    #[arg(long, value_enum)]
-    provider: Option<ProviderArg>,
-    #[arg(long = "provider-session")]
-    provider_session: Option<String>,
-    #[arg(long, value_enum, default_value_t = TranscriptMode::Lite)]
-    mode: TranscriptMode,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Markdown)]
-    format: OutputFormat,
-    #[arg(long)]
-    out: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -317,14 +278,11 @@ impl CommandRoot {
             Self::Status(_) => "status",
             Self::Sources(_) => "sources",
             Self::Import(_) => "import",
-            Self::List(_) => "list",
             Self::Show(_) => "show",
             Self::Locate(_) => "locate",
-            Self::Export(_) => "export",
             Self::Search(_) => "search",
             Self::Mcp(_) => "mcp",
             Self::Doctor(_) => "doctor",
-            Self::Validate(_) => "validate",
         }
     }
 
@@ -338,14 +296,11 @@ impl CommandRoot {
             Self::Status(args) => args.json,
             Self::Sources(args) => args.json,
             Self::Import(args) => args.json,
-            Self::List(args) => args.json,
             Self::Show(args) => args.json_output(),
             Self::Locate(args) => args.json_output(),
-            Self::Export(args) => args.json_output(),
             Self::Search(args) => args.json,
             Self::Mcp(_) => false,
             Self::Doctor(args) => args.json,
-            Self::Validate(args) => args.json,
         }
     }
 }
@@ -365,15 +320,6 @@ impl LocateArgs {
             LocateTarget::Session(args) => args.json || args.format == LocateFormat::Json,
             LocateTarget::Event(args) => args.json || args.format == LocateFormat::Json,
         }
-    }
-}
-
-impl ExportArgs {
-    fn json_output(&self) -> bool {
-        matches!(
-            &self.target,
-            ExportTarget::Session(args) if args.out.is_none() && args.format == OutputFormat::Json
-        )
     }
 }
 
@@ -1081,7 +1027,6 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-struct ListItemDto;
 struct ShowDto;
 struct SearchDto;
 
@@ -1105,16 +1050,11 @@ fn main() -> Result<()> {
         CommandRoot::Status(args) => run_status(args, data_root.clone(), &mut analytics_properties),
         CommandRoot::Sources(args) => run_sources(args, &mut analytics_properties),
         CommandRoot::Import(args) => run_import(args, data_root.clone(), &mut analytics_properties),
-        CommandRoot::List(args) => run_list(args, data_root.clone(), &mut analytics_properties),
         CommandRoot::Show(args) => run_show(args, data_root.clone(), &mut analytics_properties),
         CommandRoot::Locate(args) => run_locate(args, data_root.clone(), &mut analytics_properties),
-        CommandRoot::Export(args) => run_export(args, data_root.clone(), &mut analytics_properties),
         CommandRoot::Search(args) => run_search(args, data_root.clone(), &mut analytics_properties),
         CommandRoot::Mcp(args) => mcp::run(args, data_root.clone()),
         CommandRoot::Doctor(args) => run_doctor(args, data_root.clone(), &mut analytics_properties),
-        CommandRoot::Validate(args) => {
-            run_validate(args, data_root.clone(), &mut analytics_properties)
-        }
     };
     if sends_analytics {
         analytics::send_cli_event(
@@ -1143,10 +1083,7 @@ fn command_analytics_properties(command: &CommandRoot) -> AnalyticsProperties {
                 progress_mode_name(args.progress),
             );
         }
-        CommandRoot::Status(_)
-        | CommandRoot::Sources(_)
-        | CommandRoot::Doctor(_)
-        | CommandRoot::Validate(_) => {}
+        CommandRoot::Status(_) | CommandRoot::Sources(_) | CommandRoot::Doctor(_) => {}
         CommandRoot::Import(args) => {
             analytics::insert_bool(&mut properties, "resume", args.resume);
             analytics::insert_bool(&mut properties, "all_sources", args.all);
@@ -1176,14 +1113,12 @@ fn command_analytics_properties(command: &CommandRoot) -> AnalyticsProperties {
                 progress_mode_name(args.progress),
             );
         }
-        CommandRoot::List(args) => {
-            analytics::insert_count_bucket(&mut properties, "limit_bucket", args.limit as u64);
-        }
         CommandRoot::Show(args) => match &args.target {
             ShowTarget::Session(args) => {
                 analytics::insert_str(&mut properties, "target_kind", "session");
                 analytics::insert_str(&mut properties, "transcript_mode", args.mode.as_str());
                 analytics::insert_str(&mut properties, "output_format", args.format.as_str());
+                analytics::insert_bool(&mut properties, "writes_out_file", args.out.is_some());
                 analytics::insert_bool(
                     &mut properties,
                     "provider_lookup",
@@ -1213,19 +1148,6 @@ fn command_analytics_properties(command: &CommandRoot) -> AnalyticsProperties {
             LocateTarget::Event(args) => {
                 analytics::insert_str(&mut properties, "target_kind", "event");
                 analytics::insert_str(&mut properties, "output_format", args.format.as_str());
-            }
-        },
-        CommandRoot::Export(args) => match &args.target {
-            ExportTarget::Session(args) => {
-                analytics::insert_str(&mut properties, "target_kind", "session");
-                analytics::insert_str(&mut properties, "transcript_mode", args.mode.as_str());
-                analytics::insert_str(&mut properties, "output_format", args.format.as_str());
-                analytics::insert_bool(&mut properties, "writes_out_file", args.out.is_some());
-                analytics::insert_bool(
-                    &mut properties,
-                    "provider_lookup",
-                    args.provider.is_some() || args.provider_session.is_some(),
-                );
             }
         },
         CommandRoot::Search(args) => {
@@ -2271,45 +2193,6 @@ fn available_space_bytes(_path: &Path) -> Option<u64> {
     None
 }
 
-fn run_list(
-    args: ListArgs,
-    data_root: PathBuf,
-    analytics_properties: &mut AnalyticsProperties,
-) -> Result<()> {
-    let store = Store::open(database_path(data_root))?;
-    let sessions = store
-        .list_sessions()?
-        .into_iter()
-        .take(args.limit)
-        .collect::<Vec<_>>();
-    analytics::insert_count_bucket(
-        analytics_properties,
-        "items_returned_bucket",
-        sessions.len() as u64,
-    );
-    if args.json {
-        let items = sessions
-            .iter()
-            .map(ListItemDto::session)
-            .collect::<Vec<_>>();
-        print_json(json!({
-            "schema_version": 1,
-            "items": items,
-        }))?;
-    } else {
-        for session in sessions {
-            println!(
-                "{} session {}",
-                session.id,
-                session
-                    .external_session_id
-                    .unwrap_or_else(|| session.provider.to_string())
-            );
-        }
-    }
-    Ok(())
-}
-
 fn run_show(
     args: ShowArgs,
     data_root: PathBuf,
@@ -2331,7 +2214,7 @@ fn run_show(
                 events.len() as u64,
             );
             let format = effective_format(args.format, args.json);
-            write_rendered_session(&store, &session, &events, args.mode, format, None)?;
+            write_rendered_session(&store, &session, &events, args.mode, format, args.out)?;
         }
         ShowTarget::Event(args) => {
             let event = store.get_event(args.id)?;
@@ -2386,32 +2269,6 @@ fn run_locate(
             } else {
                 print_locate_event_text(&value)?;
             }
-        }
-    }
-    Ok(())
-}
-
-fn run_export(
-    args: ExportArgs,
-    data_root: PathBuf,
-    analytics_properties: &mut AnalyticsProperties,
-) -> Result<()> {
-    let store = Store::open(database_path(data_root))?;
-    match args.target {
-        ExportTarget::Session(args) => {
-            let session = resolve_session(
-                &store,
-                args.id,
-                args.provider.map(ProviderArg::capture_provider),
-                args.provider_session.as_deref(),
-            )?;
-            let events = store.events_for_session(session.id)?;
-            analytics::insert_count_bucket(
-                analytics_properties,
-                "events_returned_bucket",
-                events.len() as u64,
-            );
-            write_rendered_session(&store, &session, &events, args.mode, args.format, args.out)?;
         }
     }
     Ok(())
@@ -3056,23 +2913,6 @@ fn print_optional_json_str(value: &Value, key: &str) {
     }
 }
 
-impl ListItemDto {
-    fn session(session: &Session) -> Value {
-        compact_json(json!({
-            "id": session.id,
-            "item_id": session.id,
-            "ctx_session_id": session.id,
-            "item_type": "session",
-            "provider": session.provider,
-            "provider_session_id": session.external_session_id,
-            "external_session_id": session.external_session_id,
-            "agent_type": session.agent_type,
-            "started_at": session.started_at,
-            "ended_at": session.ended_at,
-        }))
-    }
-}
-
 impl ShowDto {
     fn session(store: &Store, session: &Session) -> Value {
         let source_path = source_path_for(store, session.capture_source_id);
@@ -3406,13 +3246,13 @@ fn run_search(
         if packet.results.is_empty() {
             println!("no results");
             if query.trim().is_empty() && !uses_composed_terms {
-                println!("next: ctx list --limit 20");
+                println!("next: ctx search \"what changed recently\" --limit 20");
             } else {
                 let indexed_items = indexed_history_item_count(&store)?;
                 if indexed_items == 0 {
                     println!("next: ctx import --all");
                 } else {
-                    println!("next: ctx list --limit 20");
+                    println!("next: try broader terms with ctx search --term");
                 }
             }
         }
@@ -3702,34 +3542,6 @@ fn run_doctor(
         }))?;
     } else if findings.is_empty() {
         println!("ok");
-    } else {
-        for finding in findings {
-            println!("{finding}");
-        }
-    }
-    Ok(())
-}
-
-fn run_validate(
-    args: JsonArgs,
-    data_root: PathBuf,
-    analytics_properties: &mut AnalyticsProperties,
-) -> Result<()> {
-    let store = Store::open(database_path(data_root))?;
-    let findings = store.validate()?;
-    analytics::insert_count_bucket(
-        analytics_properties,
-        "finding_count_bucket",
-        findings.len() as u64,
-    );
-    if args.json {
-        print_json(json!({
-            "schema_version": 1,
-            "valid": findings.is_empty(),
-            "findings": findings,
-        }))?;
-    } else if findings.is_empty() {
-        println!("valid");
     } else {
         for finding in findings {
             println!("{finding}");

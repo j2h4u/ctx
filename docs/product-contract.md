@@ -15,16 +15,15 @@ product boundary is retrieval, not interpretation.
 - `ctx sources` reports known local provider history paths, including whether a
   native source is currently importable.
 - `ctx import` indexes supported local transcript formats.
-- `ctx list` reports indexed session rows.
 - `ctx search` can refresh discovered native provider sources before returning
   ranked local hits from the local index, with event IDs when a hit maps to an
   indexed event.
 - `ctx show session` and `ctx show event` render transcripts, hits, and context
-  windows using ctx-owned IDs.
+  windows using ctx-owned IDs, and `ctx show session --out` writes transcript
+  artifacts.
 - `ctx locate session` and `ctx locate event` report provenance and resume
   metadata.
-- `ctx export session` writes or prints transcript artifacts.
-- `ctx doctor` and `ctx validate` report local storage health.
+- `ctx doctor` reports local storage health.
 - JSON output supports local agents and scripts.
 
 ## Out Of Scope

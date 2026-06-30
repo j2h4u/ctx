@@ -16,7 +16,7 @@ Security review for the current product covers:
 - read-only discovery of known provider history paths;
 - explicit imports for supported local transcript formats, including Codex,
   Pi, Claude, OpenCode, Gemini, Cursor, Copilot CLI, and Factory AI Droid;
-- search, list, show, status, doctor, and validate output;
+- setup, status, sources, import, show, locate, search, MCP, and doctor output;
 - JSON output treated as private local data unless reviewed and redacted.
 
 Setup, source discovery, import, and search do not require API keys,

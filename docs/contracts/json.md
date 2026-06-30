@@ -134,28 +134,6 @@ Progress events are operational status events, not durable result records.
 Consumers should key on `type` and `operation`, ignore unknown fields, and read
 the final command result from stdout when `--json` is present.
 
-## List
-
-```bash
-ctx list --json
-```
-
-Returns:
-
-- `schema_version`;
-- `items[]`.
-
-Items include:
-
-- `id`, a compatibility alias for `item_id`;
-- `item_id`, the ctx-owned identifier;
-- `item_type`, such as `session` or a compatibility indexed item type;
-- fields available for that indexed item.
-
-Session rows can include `provider`, `provider_session_id`, `agent_type`,
-`role`, `is_primary`, `status`, `started_at`, `ended_at`, `source_id`,
-`source_path`, and `source_exists`.
-
 ## Show
 
 ```bash
@@ -202,10 +180,10 @@ Writes nothing and returns provenance metadata:
 `source_format` when known. `resume` includes provider cursor or import resume
 metadata when available.
 
-## Export
+## Transcript Artifacts
 
 ```bash
-ctx export session <ctx-session-id> --mode full --format json --out transcript.json
+ctx show session <ctx-session-id> --mode full --format json --out transcript.json
 ```
 
 With `--out`, writes the requested transcript artifact to that path and prints
@@ -305,17 +283,17 @@ Citations can include:
 `source_exists: false` means indexed text is available but the raw source
 was not present at the stored path when checked.
 
-## Doctor And Validate
+## Doctor
 
 ```bash
 ctx doctor --json
-ctx validate --json
 ```
 
-Both commands read local storage and return findings:
+Reads local storage and returns findings:
 
-- `doctor`: `schema_version`, `ok`, `findings`;
-- `validate`: `schema_version`, `valid`, `findings`.
+- `schema_version`;
+- `ok`;
+- `findings`.
 
 ## Provider Smoke
 

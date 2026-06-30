@@ -369,8 +369,7 @@ fn help_exposes_session_retrieval_commands() {
         .unwrap_or(&help);
 
     for expected in [
-        "setup", "status", "sources", "import", "list", "show", "search", "locate", "export",
-        "mcp", "doctor", "validate",
+        "setup", "status", "sources", "import", "show", "search", "locate", "mcp", "doctor",
     ] {
         assert!(
             commands.contains(expected),
@@ -385,6 +384,9 @@ fn help_exposes_session_retrieval_commands() {
         "link-pr",
         "record",
         "research",
+        "list",
+        "export",
+        "validate",
         "report",
         "schema",
         "workspace",
@@ -908,13 +910,8 @@ fn public_subcommand_help_is_golden_enough_for_session_retrieval() {
                 "--json",
             ],
         ),
-        ("list", vec!["Usage: ctx list", "--limit <LIMIT>", "--json"]),
         ("show", vec!["Usage: ctx show", "session", "event"]),
         ("locate", vec!["Usage: ctx locate", "session", "event"]),
-        (
-            "export",
-            vec!["Usage: ctx export", "session"],
-        ),
         ("mcp", vec!["Usage: ctx mcp", "serve"]),
         (
             "search",
@@ -950,7 +947,6 @@ fn public_subcommand_help_is_golden_enough_for_session_retrieval() {
             ],
         ),
         ("doctor", vec!["Usage: ctx doctor", "--json"]),
-        ("validate", vec!["Usage: ctx validate", "--json"]),
     ] {
         let output = ctx(&temp)
             .args([command, "--help"])
@@ -982,7 +978,6 @@ fn provider_session_lookup_requires_explicit_provider_flags_in_help() {
         vec!["show", "session", "--help"],
         vec!["locate", "session", "--help"],
         vec!["locate", "event", "--help"],
-        vec!["export", "session", "--help"],
     ] {
         let output = ctx(&temp)
             .args(args.clone())
@@ -1014,11 +1009,10 @@ fn provider_session_lookup_requires_explicit_provider_flags_in_help() {
                 "{args:?} help leaked unsupported locate formats in\n{help}"
             );
         }
-        if args.as_slice() == ["show", "session", "--help"]
-            || args.as_slice() == ["export", "session", "--help"]
-        {
+        if args.as_slice() == ["show", "session", "--help"] {
             for needle in [
                 "--mode <MODE>",
+                "--out <OUT>",
                 "[default: lite]",
                 "[possible values: full, lite, log]",
             ] {
@@ -1108,7 +1102,7 @@ fn analytics_config_opt_out_suppresses_delivery() {
 }
 
 #[test]
-fn context_command_is_removed() {
+fn removed_public_commands_are_rejected() {
     let temp = tempdir();
     let root_output = ctx(&temp)
         .arg("--help")
@@ -1123,19 +1117,24 @@ fn context_command_is_removed() {
         .nth(1)
         .and_then(|tail| tail.split("Options:").next())
         .unwrap_or(&root_help);
-    assert!(
-        !commands.contains("context"),
-        "removed context command appeared in root help\n{root_help}"
-    );
-
-    ctx(&temp)
-        .args(["context", "onboarding", "--json"])
-        .assert()
-        .failure()
-        .stderr(
-            predicate::str::contains("unrecognized subcommand")
-                .and(predicate::str::contains("context")),
+    for removed in ["context", "list", "export", "validate"] {
+        assert!(
+            !commands.contains(removed),
+            "removed {removed} command appeared in root help\n{root_help}"
         );
+    }
+
+    for args in [
+        vec!["context", "onboarding", "--json"],
+        vec!["list", "--json"],
+        vec!["export", "session", "00000000-0000-0000-0000-000000000000"],
+        vec!["validate", "--json"],
+    ] {
+        ctx(&temp).args(args.clone()).assert().failure().stderr(
+            predicate::str::contains("unrecognized subcommand")
+                .and(predicate::str::contains(args[0])),
+        );
+    }
 }
 
 #[test]
@@ -1175,17 +1174,6 @@ fn fresh_home_search_mvp_flow() {
     assert!(import["totals"]["imported_sessions"].as_u64().unwrap() > 0);
     assert!(import["totals"]["source_files"].as_u64().unwrap() > 0);
     assert!(import["totals"]["source_bytes"].as_u64().unwrap() > 0);
-
-    let mut list_command = ctx(&temp);
-    list_command.args(["list", "--json"]);
-    let listed = json_output(&mut list_command);
-    assert_eq!(listed["schema_version"], 1);
-    assert_omits_keys(&listed, &["record_id", "history_record_id", "kind"]);
-    assert_eq!(listed["items"][0]["item_type"], "session");
-    assert!(listed["items"][0]["ctx_session_id"].is_string());
-    assert!(listed["items"][0]["provider_session_id"].is_string());
-    assert!(listed["items"][0]["item_id"].is_string());
-    assert_eq!(listed["items"][0]["id"], listed["items"][0]["item_id"]);
 
     let search =
         json_output(ctx(&temp).args(["search", "onboarding", "--provider", "codex", "--json"]));
@@ -1368,7 +1356,7 @@ fn fresh_home_search_mvp_flow() {
     let export_path = temp.path().join("transcript.md");
     ctx(&temp)
         .args([
-            "export",
+            "show",
             "session",
             &ctx_session_id,
             "--format",
@@ -1380,18 +1368,18 @@ fn fresh_home_search_mvp_flow() {
         .success();
     assert!(
         export_path.exists(),
-        "export session should write the requested artifact path"
+        "show session --out should write the requested artifact path"
     );
     let exported = fs::read_to_string(&export_path).unwrap();
     assert!(
         exported.contains("- mode: `lite`"),
-        "export session should default to lite transcript mode"
+        "show session --out should default to lite transcript mode"
     );
 
     let full_export_path = temp.path().join("transcript-full.md");
     ctx(&temp)
         .args([
-            "export",
+            "show",
             "session",
             &ctx_session_id,
             "--mode",
@@ -1406,7 +1394,7 @@ fn fresh_home_search_mvp_flow() {
     let exported_full = fs::read_to_string(&full_export_path).unwrap();
     assert!(
         exported_full.contains("- mode: `full`"),
-        "export session --mode full should remain explicit"
+        "show session --mode full --out should remain explicit"
     );
 
     let status = json_output(ctx(&temp).args(["status", "--json"]));
@@ -1416,10 +1404,6 @@ fn fresh_home_search_mvp_flow() {
     let doctor = json_output(ctx(&temp).args(["doctor", "--json"]));
     assert_eq!(doctor["schema_version"], 1);
     assert_eq!(doctor["ok"], true);
-
-    let validate = json_output(ctx(&temp).args(["validate", "--json"]));
-    assert_eq!(validate["schema_version"], 1);
-    assert_eq!(validate["valid"], true);
 }
 
 #[test]
@@ -2335,8 +2319,8 @@ fn native_provider_cli_flow_imports_new_supported_provider_paths() {
         assert!(status["indexed_items"].as_u64().unwrap() >= 2);
         assert!(status["indexed_sources"].as_u64().unwrap() >= 1);
 
-        let validate = json_output(ctx(&temp).args(["validate", "--json"]));
-        assert_eq!(validate["valid"], true);
+        let doctor = json_output(ctx(&temp).args(["doctor", "--json"]));
+        assert_eq!(doctor["ok"], true);
     }
 }
 
@@ -2735,7 +2719,7 @@ fn human_search_reports_no_results() {
         .clone();
     let indexed = String::from_utf8(indexed).unwrap();
     assert!(indexed.contains("no results"));
-    assert!(indexed.contains("next: ctx list --limit 20"));
+    assert!(indexed.contains("next: try broader terms with ctx search --term"));
 }
 
 #[test]
@@ -2820,11 +2804,14 @@ fn privacy_redaction_oracle_covers_cli_json_and_sqlite() {
     assert_eq!(search["share_safe"], false);
     assert!(!search["results"].as_array().unwrap().is_empty());
 
-    let listed = json_output(ctx(&temp).args(["list", "--json"]));
-    let ctx_session_id = listed["items"][0]["ctx_session_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let conn = Connection::open(temp.path().join("work.sqlite")).unwrap();
+    let ctx_session_id: String = conn
+        .query_row(
+            "SELECT id FROM sessions WHERE provider = 'codex' ORDER BY started_at_ms LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
 
     let show = json_output(ctx(&temp).args([
         "show",
@@ -2849,7 +2836,6 @@ fn privacy_redaction_oracle_covers_cli_json_and_sqlite() {
     assert!(cli_json.contains("[REDACTED"));
     assert_omits_sensitive_markers("cli json", &cli_json);
 
-    let conn = Connection::open(temp.path().join("work.sqlite")).unwrap();
     let event_payloads = sqlite_column_text(&conn, "SELECT COALESCE(payload_json, '') FROM events");
     let event_index = sqlite_column_text(
         &conn,

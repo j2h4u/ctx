@@ -36,7 +36,6 @@ Run the same command without `--json` to inspect warnings, then run:
 
 ```bash
 ctx doctor --json
-ctx validate
 ```
 
 Check the command contract in [contracts/json.md](contracts/json.md), including
