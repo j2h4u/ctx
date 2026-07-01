@@ -3,32 +3,32 @@
 import PackageDescription
 
 let package = Package(
-    name: "CtxMemory",
+    name: "CtxAgentHistory",
     platforms: [
         .macOS(.v12)
     ],
     products: [
         .library(
-            name: "CtxMemory",
-            targets: ["CtxMemory"]
+            name: "CtxAgentHistory",
+            targets: ["CtxAgentHistory"]
         ),
         .executable(
-            name: "LocalMemorySmoke",
-            targets: ["LocalMemorySmoke"]
+            name: "LocalAgentHistorySmoke",
+            targets: ["LocalAgentHistorySmoke"]
         )
     ],
     targets: [
         .target(
-            name: "CtxMemory"
+            name: "CtxAgentHistory"
         ),
         .executableTarget(
-            name: "LocalMemorySmoke",
-            dependencies: ["CtxMemory"],
-            path: "Examples/LocalMemorySmoke"
+            name: "LocalAgentHistorySmoke",
+            dependencies: ["CtxAgentHistory"],
+            path: "Examples/LocalAgentHistorySmoke"
         ),
         .testTarget(
-            name: "CtxMemoryTests",
-            dependencies: ["CtxMemory"]
+            name: "CtxAgentHistoryTests",
+            dependencies: ["CtxAgentHistory"]
         )
     ]
 )

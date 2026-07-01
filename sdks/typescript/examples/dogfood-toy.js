@@ -1,4 +1,4 @@
-import { createLocalMemoryClient } from "../src/index.js";
+import { createLocalAgentHistoryClient } from "../src/index.js";
 
 const EVENT_ID = "11111111-1111-4111-8111-111111111111";
 const SESSION_ID = "22222222-2222-4222-8222-222222222222";
@@ -9,7 +9,7 @@ export function createDogfoodClient(options = {}) {
   const env = options.env ?? process.env;
   const ctxPath = env.CTX_SDK_EXAMPLE_CTX_PATH;
   if (ctxPath) {
-    return createLocalMemoryClient({
+    return createLocalAgentHistoryClient({
       ctxPath,
       dataRoot: env.CTX_SDK_EXAMPLE_DATA_ROOT,
       cwd: env.CTX_SDK_EXAMPLE_CWD,
@@ -17,7 +17,7 @@ export function createDogfoodClient(options = {}) {
     });
   }
 
-  return createLocalMemoryClient({
+  return createLocalAgentHistoryClient({
     dataRoot: "/tmp/ctx-sdk-dogfood",
     runner: dogfoodMockRunner,
   });

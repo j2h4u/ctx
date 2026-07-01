@@ -1,4 +1,4 @@
-//! Experimental in-repo Rust SDK for ctx memory.
+//! Experimental in-repo Rust SDK for ctx agent history.
 //!
 //! This SDK is intentionally not published. The local backend shells out to the
 //! `ctx` CLI and adapts its private JSON into the public `agent-history-v1` envelope.
@@ -12,10 +12,10 @@ use std::{
 
 use ctx_protocol::{camel_alias_object, camelize_object_keys, JsonObject};
 pub use ctx_protocol::{
-    BackendInfo, BackendKind, EventResult, Freshness, ImportResult, LocationResult, MemoryEnvelope,
-    MemoryErrorBody, MemoryErrorCode, MemoryEvent, MemoryOperation, MemoryStatus, ProviderSource,
-    SearchHit, SearchResult, SessionResult, SourceLocation, Totals, CONTRACT_VERSION,
-    SCHEMA_VERSION,
+    AgentHistoryEnvelope, AgentHistoryErrorBody, AgentHistoryErrorCode, AgentHistoryEvent,
+    AgentHistoryOperation, AgentHistoryStatus, BackendInfo, BackendKind, EventResult, Freshness,
+    ImportResult, LocationResult, ProviderSource, SearchHit, SearchResult, SessionResult,
+    SourceLocation, Totals, CONTRACT_VERSION, SCHEMA_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -23,14 +23,14 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 #[error("{body:?}")]
-pub struct MemoryError {
-    pub body: MemoryErrorBody,
+pub struct AgentHistoryError {
+    pub body: AgentHistoryErrorBody,
 }
 
-impl MemoryError {
-    fn new(code: MemoryErrorCode, message: impl Into<String>, retryable: bool) -> Self {
+impl AgentHistoryError {
+    fn new(code: AgentHistoryErrorCode, message: impl Into<String>, retryable: bool) -> Self {
         Self {
-            body: MemoryErrorBody::new(code, message, retryable),
+            body: AgentHistoryErrorBody::new(code, message, retryable),
         }
     }
 
@@ -41,7 +41,7 @@ impl MemoryError {
 }
 
 #[derive(Debug, Clone)]
-pub enum MemoryBackend {
+pub enum AgentHistoryBackend {
     Local(LocalBackendConfig),
     Hosted(HostedBackendConfig),
 }
@@ -153,60 +153,68 @@ impl Default for ShowSessionOptions {
 }
 
 #[derive(Debug, Clone)]
-pub struct MemoryClient {
-    backend: MemoryBackend,
+pub struct AgentHistoryClient {
+    backend: AgentHistoryBackend,
 }
 
-impl MemoryClient {
+impl AgentHistoryClient {
     pub fn local(config: LocalBackendConfig) -> Self {
         Self {
-            backend: MemoryBackend::Local(config),
+            backend: AgentHistoryBackend::Local(config),
         }
     }
 
     pub fn hosted(config: HostedBackendConfig) -> Self {
         Self {
-            backend: MemoryBackend::Hosted(config),
+            backend: AgentHistoryBackend::Hosted(config),
         }
     }
 
     pub fn backend_info(&self) -> BackendInfo {
         match &self.backend {
-            MemoryBackend::Local(config) => BackendInfo::local(
+            AgentHistoryBackend::Local(config) => BackendInfo::local(
                 config
                     .data_root
                     .as_ref()
                     .map(|path| path.to_string_lossy().into_owned()),
             ),
-            MemoryBackend::Hosted(config) => BackendInfo::hosted(Some(config.base_url.clone())),
+            AgentHistoryBackend::Hosted(config) => {
+                BackendInfo::hosted(Some(config.base_url.clone()))
+            }
         }
     }
 
-    pub fn status(&self) -> Result<MemoryEnvelope, MemoryError> {
-        self.local_json(MemoryOperation::Status, &["status", "--json"])
+    pub fn status(&self) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
+        self.local_json(AgentHistoryOperation::Status, &["status", "--json"])
     }
 
-    pub fn init(&self, options: InitOptions) -> Result<MemoryEnvelope, MemoryError> {
+    pub fn init(&self, options: InitOptions) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
         let mut args = vec!["setup", "--json", "--progress", "none"];
         if options.catalog_only {
             args.push("--catalog-only");
         }
-        self.local_json(MemoryOperation::Init, &args)
+        self.local_json(AgentHistoryOperation::Init, &args)
     }
 
-    pub fn sources(&self) -> Result<MemoryEnvelope, MemoryError> {
-        self.local_json(MemoryOperation::Sources, &["sources", "--json"])
+    pub fn sources(&self) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
+        self.local_json(AgentHistoryOperation::Sources, &["sources", "--json"])
     }
 
-    pub fn import_memory(&self, options: ImportOptions) -> Result<MemoryEnvelope, MemoryError> {
-        self.import_or_sync(MemoryOperation::Import, options)
+    pub fn import_history(
+        &self,
+        options: ImportOptions,
+    ) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
+        self.import_or_sync(AgentHistoryOperation::Import, options)
     }
 
-    pub fn sync(&self, options: ImportOptions) -> Result<MemoryEnvelope, MemoryError> {
-        self.import_or_sync(MemoryOperation::Sync, options)
+    pub fn sync(&self, options: ImportOptions) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
+        self.import_or_sync(AgentHistoryOperation::Sync, options)
     }
 
-    pub fn search(&self, options: SearchOptions) -> Result<MemoryEnvelope, MemoryError> {
+    pub fn search(
+        &self,
+        options: SearchOptions,
+    ) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
         let mut owned = Vec::<String>::new();
         owned.push("search".to_owned());
         if let Some(query) = options.query {
@@ -236,14 +244,14 @@ impl MemoryClient {
             owned.push("--include-current-session".to_owned());
         }
         owned.push("--json".to_owned());
-        self.local_json_owned(MemoryOperation::Search, owned)
+        self.local_json_owned(AgentHistoryOperation::Search, owned)
     }
 
     pub fn show_event(
         &self,
         id: impl AsRef<str>,
         options: ShowEventOptions,
-    ) -> Result<MemoryEnvelope, MemoryError> {
+    ) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
         let mut owned = vec![
             "show".to_owned(),
             "event".to_owned(),
@@ -260,16 +268,16 @@ impl MemoryClient {
         if let Some(window) = options.window {
             owned.extend(["--window".to_owned(), window.to_string()]);
         }
-        self.local_json_owned(MemoryOperation::ShowEvent, owned)
+        self.local_json_owned(AgentHistoryOperation::ShowEvent, owned)
     }
 
     pub fn show_session(
         &self,
         id: impl AsRef<str>,
         options: ShowSessionOptions,
-    ) -> Result<MemoryEnvelope, MemoryError> {
+    ) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
         self.local_json_owned(
-            MemoryOperation::ShowSession,
+            AgentHistoryOperation::ShowSession,
             vec![
                 "show".to_owned(),
                 "session".to_owned(),
@@ -282,9 +290,12 @@ impl MemoryClient {
         )
     }
 
-    pub fn locate_event(&self, id: impl AsRef<str>) -> Result<MemoryEnvelope, MemoryError> {
+    pub fn locate_event(
+        &self,
+        id: impl AsRef<str>,
+    ) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
         self.local_json_owned(
-            MemoryOperation::LocateEvent,
+            AgentHistoryOperation::LocateEvent,
             vec![
                 "locate".to_owned(),
                 "event".to_owned(),
@@ -295,9 +306,12 @@ impl MemoryClient {
         )
     }
 
-    pub fn locate_session(&self, id: impl AsRef<str>) -> Result<MemoryEnvelope, MemoryError> {
+    pub fn locate_session(
+        &self,
+        id: impl AsRef<str>,
+    ) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
         self.local_json_owned(
-            MemoryOperation::LocateSession,
+            AgentHistoryOperation::LocateSession,
             vec![
                 "locate".to_owned(),
                 "session".to_owned(),
@@ -310,9 +324,9 @@ impl MemoryClient {
 
     fn import_or_sync(
         &self,
-        operation: MemoryOperation,
+        operation: AgentHistoryOperation,
         options: ImportOptions,
-    ) -> Result<MemoryEnvelope, MemoryError> {
+    ) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
         let mut owned = vec![
             "import".to_owned(),
             "--json".to_owned(),
@@ -338,9 +352,9 @@ impl MemoryClient {
 
     fn local_json(
         &self,
-        operation: MemoryOperation,
+        operation: AgentHistoryOperation,
         args: &[&str],
-    ) -> Result<MemoryEnvelope, MemoryError> {
+    ) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
         self.local_json_owned(
             operation,
             args.iter().map(|arg| (*arg).to_owned()).collect(),
@@ -349,19 +363,19 @@ impl MemoryClient {
 
     fn local_json_owned(
         &self,
-        operation: MemoryOperation,
+        operation: AgentHistoryOperation,
         args: Vec<String>,
-    ) -> Result<MemoryEnvelope, MemoryError> {
+    ) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
         let config = match &self.backend {
-            MemoryBackend::Local(config) => config,
-            MemoryBackend::Hosted(config) => {
+            AgentHistoryBackend::Local(config) => config,
+            AgentHistoryBackend::Hosted(config) => {
                 let mut details = JsonObject::new();
                 details.insert("backend".to_owned(), json!("hosted"));
-                return Err(MemoryError {
-                    body: MemoryErrorBody {
+                return Err(AgentHistoryError {
+                    body: AgentHistoryErrorBody {
                         details: Some(details),
-                        ..MemoryErrorBody::new(
-                            MemoryErrorCode::NotSupported,
+                        ..AgentHistoryErrorBody::new(
+                            AgentHistoryErrorCode::NotSupported,
                             "hosted ctx agent history backend is not available in this in-repo SDK",
                             false,
                         )
@@ -383,7 +397,7 @@ fn push_opt(args: &mut Vec<String>, name: &str, value: Option<String>) {
     }
 }
 
-fn run_ctx_json(config: &LocalBackendConfig, args: &[String]) -> Result<Value, MemoryError> {
+fn run_ctx_json(config: &LocalBackendConfig, args: &[String]) -> Result<Value, AgentHistoryError> {
     let mut command = Command::new(&config.ctx_binary);
     command
         .args(args)
@@ -393,8 +407,8 @@ fn run_ctx_json(config: &LocalBackendConfig, args: &[String]) -> Result<Value, M
         command.env("CTX_DATA_ROOT", data_root);
     }
     let mut child = command.spawn().map_err(|err| {
-        MemoryError::new(
-            MemoryErrorCode::BackendUnavailable,
+        AgentHistoryError::new(
+            AgentHistoryErrorCode::BackendUnavailable,
             "failed to start ctx CLI",
             true,
         )
@@ -403,16 +417,16 @@ fn run_ctx_json(config: &LocalBackendConfig, args: &[String]) -> Result<Value, M
     let started = Instant::now();
     loop {
         if let Some(status) = child.try_wait().map_err(|err| {
-            MemoryError::new(
-                MemoryErrorCode::AdapterError,
+            AgentHistoryError::new(
+                AgentHistoryErrorCode::AdapterError,
                 "failed to wait for ctx CLI",
                 true,
             )
             .with_cause(err.to_string())
         })? {
             let output = child.wait_with_output().map_err(|err| {
-                MemoryError::new(
-                    MemoryErrorCode::AdapterError,
+                AgentHistoryError::new(
+                    AgentHistoryErrorCode::AdapterError,
                     "failed to collect ctx CLI output",
                     true,
                 )
@@ -420,15 +434,15 @@ fn run_ctx_json(config: &LocalBackendConfig, args: &[String]) -> Result<Value, M
             })?;
             if !status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(MemoryError::new(
+                return Err(AgentHistoryError::new(
                     classify_stderr(&stderr),
                     stderr.trim().to_owned(),
                     false,
                 ));
             }
             return serde_json::from_slice(&output.stdout).map_err(|err| {
-                MemoryError::new(
-                    MemoryErrorCode::DecodeError,
+                AgentHistoryError::new(
+                    AgentHistoryErrorCode::DecodeError,
                     "failed to decode ctx JSON",
                     false,
                 )
@@ -437,8 +451,8 @@ fn run_ctx_json(config: &LocalBackendConfig, args: &[String]) -> Result<Value, M
         }
         if started.elapsed() > config.timeout {
             let _ = child.kill();
-            return Err(MemoryError::new(
-                MemoryErrorCode::Timeout,
+            return Err(AgentHistoryError::new(
+                AgentHistoryErrorCode::Timeout,
                 "ctx CLI command timed out",
                 true,
             ));
@@ -447,50 +461,53 @@ fn run_ctx_json(config: &LocalBackendConfig, args: &[String]) -> Result<Value, M
     }
 }
 
-fn classify_stderr(stderr: &str) -> MemoryErrorCode {
+fn classify_stderr(stderr: &str) -> AgentHistoryErrorCode {
     let lower = stderr.to_ascii_lowercase();
     if lower.contains("not found") || lower.contains("no such") {
-        MemoryErrorCode::NotFound
+        AgentHistoryErrorCode::NotFound
     } else if lower.contains("not initialized") || lower.contains("setup") {
-        MemoryErrorCode::NotInitialized
+        AgentHistoryErrorCode::NotInitialized
     } else {
-        MemoryErrorCode::AdapterError
+        AgentHistoryErrorCode::AdapterError
     }
 }
 
 fn normalize(
-    operation: MemoryOperation,
+    operation: AgentHistoryOperation,
     backend: BackendInfo,
     raw: Value,
-) -> Result<MemoryEnvelope, MemoryError> {
-    let mut envelope = MemoryEnvelope::new(operation.clone(), Some(backend));
+) -> Result<AgentHistoryEnvelope, AgentHistoryError> {
+    let mut envelope = AgentHistoryEnvelope::new(operation.clone(), Some(backend));
     match operation {
-        MemoryOperation::Status => envelope.status = Some(normalize_status(&raw)?),
-        MemoryOperation::Init => envelope.status = Some(normalize_status(&raw)?),
-        MemoryOperation::Sources => {
+        AgentHistoryOperation::Status => envelope.status = Some(normalize_status(&raw)?),
+        AgentHistoryOperation::Init => envelope.status = Some(normalize_status(&raw)?),
+        AgentHistoryOperation::Sources => {
             envelope.sources = Some(decode_payload(
                 camelize_object_keys(&raw.get("sources").cloned().unwrap_or_else(|| json!([]))),
                 "sources",
             )?)
         }
-        MemoryOperation::Import | MemoryOperation::Sync => {
+        AgentHistoryOperation::Import | AgentHistoryOperation::Sync => {
             envelope.import_result = Some(normalize_import(&raw)?)
         }
-        MemoryOperation::Search => envelope.search = Some(normalize_search(&raw)?),
-        MemoryOperation::ShowEvent => envelope.event = Some(normalize_event(&raw)?),
-        MemoryOperation::ShowSession => envelope.session = Some(normalize_session(&raw)?),
-        MemoryOperation::LocateEvent | MemoryOperation::LocateSession => {
+        AgentHistoryOperation::Search => envelope.search = Some(normalize_search(&raw)?),
+        AgentHistoryOperation::ShowEvent => envelope.event = Some(normalize_event(&raw)?),
+        AgentHistoryOperation::ShowSession => envelope.session = Some(normalize_session(&raw)?),
+        AgentHistoryOperation::LocateEvent | AgentHistoryOperation::LocateSession => {
             envelope.location = Some(normalize_location(&raw)?)
         }
-        MemoryOperation::Error => {}
+        AgentHistoryOperation::Error => {}
     }
     Ok(envelope)
 }
 
-fn decode_payload<T: DeserializeOwned>(value: Value, payload: &str) -> Result<T, MemoryError> {
+fn decode_payload<T: DeserializeOwned>(
+    value: Value,
+    payload: &str,
+) -> Result<T, AgentHistoryError> {
     serde_json::from_value(value).map_err(|err| {
-        MemoryError::new(
-            MemoryErrorCode::DecodeError,
+        AgentHistoryError::new(
+            AgentHistoryErrorCode::DecodeError,
             format!("failed to decode agent-history-v1 {payload} payload"),
             false,
         )
@@ -498,7 +515,7 @@ fn decode_payload<T: DeserializeOwned>(value: Value, payload: &str) -> Result<T,
     })
 }
 
-fn normalize_status(raw: &Value) -> Result<MemoryStatus, MemoryError> {
+fn normalize_status(raw: &Value) -> Result<AgentHistoryStatus, AgentHistoryError> {
     let mut value = camel_alias_object(
         raw,
         &[
@@ -530,17 +547,17 @@ fn normalize_status(raw: &Value) -> Result<MemoryStatus, MemoryError> {
     decode_payload(camelize_object_keys(&value), "status")
 }
 
-fn normalize_import(raw: &Value) -> Result<ImportResult, MemoryError> {
+fn normalize_import(raw: &Value) -> Result<ImportResult, AgentHistoryError> {
     let value = camel_alias_object(raw, &[("resume_mode", "resumeMode")]);
     decode_payload(camelize_object_keys(&value), "import")
 }
 
-fn normalize_search(raw: &Value) -> Result<SearchResult, MemoryError> {
+fn normalize_search(raw: &Value) -> Result<SearchResult, AgentHistoryError> {
     let value = camel_alias_object(raw, &[("generated_at", "generatedAt")]);
     decode_payload(camelize_object_keys(&value), "search")
 }
 
-fn normalize_event(raw: &Value) -> Result<EventResult, MemoryError> {
+fn normalize_event(raw: &Value) -> Result<EventResult, AgentHistoryError> {
     let value = json!({
         "event": raw.get("event").cloned(),
         "events": raw.get("events").cloned().unwrap_or_else(|| json!([])),
@@ -549,7 +566,7 @@ fn normalize_event(raw: &Value) -> Result<EventResult, MemoryError> {
     decode_payload(camelize_object_keys(&value), "event")
 }
 
-fn normalize_session(raw: &Value) -> Result<SessionResult, MemoryError> {
+fn normalize_session(raw: &Value) -> Result<SessionResult, AgentHistoryError> {
     let value = json!({
         "session": raw.get("session").cloned(),
         "events": raw.get("events").cloned().unwrap_or_else(|| json!([])),
@@ -560,7 +577,7 @@ fn normalize_session(raw: &Value) -> Result<SessionResult, MemoryError> {
     decode_payload(camelize_object_keys(&value), "session")
 }
 
-fn normalize_location(raw: &Value) -> Result<LocationResult, MemoryError> {
+fn normalize_location(raw: &Value) -> Result<LocationResult, AgentHistoryError> {
     let value = camel_alias_object(
         raw,
         &[
@@ -588,12 +605,12 @@ mod tests {
 
     #[test]
     fn reads_shared_search_fixture() {
-        let value: MemoryEnvelope = serde_json::from_str(include_str!(
+        let value: AgentHistoryEnvelope = serde_json::from_str(include_str!(
             "../../../contracts/agent-history-v1/fixtures/search.results.json"
         ))
         .unwrap();
         assert_eq!(value.contract_version, CONTRACT_VERSION);
-        assert_eq!(value.operation, MemoryOperation::Search);
+        assert_eq!(value.operation, AgentHistoryOperation::Search);
         let search = value.search.unwrap();
         assert_eq!(search.query.as_deref(), Some("local agent history"));
         assert_eq!(search.results.len(), 1);
@@ -606,7 +623,7 @@ mod tests {
     #[test]
     fn init_normalizes_real_setup_json_into_status_contract() {
         let envelope = normalize(
-            MemoryOperation::Init,
+            AgentHistoryOperation::Init,
             BackendInfo::local(Some("/tmp/ctx".to_owned())),
             json!({
                 "schema_version": 1,
@@ -622,7 +639,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(envelope.operation, MemoryOperation::Init);
+        assert_eq!(envelope.operation, AgentHistoryOperation::Init);
         let status = envelope.status.unwrap();
         assert!(status.initialized);
         assert!(status.local_only);
@@ -634,19 +651,19 @@ mod tests {
 
     #[test]
     fn hosted_backend_returns_structured_error() {
-        let client = MemoryClient::hosted(HostedBackendConfig {
+        let client = AgentHistoryClient::hosted(HostedBackendConfig {
             base_url: "https://ctx.example.invalid".to_owned(),
             timeout: Duration::from_secs(1),
         });
         let err = client.status().unwrap_err();
-        assert_eq!(err.body.code, MemoryErrorCode::NotSupported);
+        assert_eq!(err.body.code, AgentHistoryErrorCode::NotSupported);
         assert!(!err.body.retryable);
     }
 
     #[test]
     fn builds_search_cli_arguments_without_running_for_public_options() {
         let options = SearchOptions {
-            query: Some("memory".to_owned()),
+            query: Some("agent history".to_owned()),
             terms: vec!["ctx".to_owned()],
             limit: 3,
             provider: Some("codex".to_owned()),
@@ -683,7 +700,7 @@ exit 2
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
 
         let data_root = temp.path().join("data-root");
-        let client = MemoryClient::local(LocalBackendConfig {
+        let client = AgentHistoryClient::local(LocalBackendConfig {
             ctx_binary: script,
             data_root: Some(data_root.clone()),
             timeout: Duration::from_secs(5),

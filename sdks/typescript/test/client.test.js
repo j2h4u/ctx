@@ -10,8 +10,8 @@ import {
   CtxUnsupportedError,
   CtxValidationError,
   AGENT_HISTORY_V1_VERSION,
-  createHostedMemoryClient,
-  createLocalMemoryClient,
+  createHostedAgentHistoryClient,
+  createLocalAgentHistoryClient,
 } from "../src/index.js";
 import { runDogfoodToy } from "../examples/dogfood-toy.js";
 
@@ -19,7 +19,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 
 function mockClient(handler) {
   const calls = [];
-  const client = createLocalMemoryClient({
+  const client = createLocalAgentHistoryClient({
     dataRoot: "/tmp/ctx-sdk-test",
     runner: async (request) => {
       calls.push(request);
@@ -248,12 +248,12 @@ test("reports versioning metadata", async () => {
 });
 
 test("raises structured errors", async () => {
-  const cli = createLocalMemoryClient({
+  const cli = createLocalAgentHistoryClient({
     runner: () => ({ exitCode: 2, stderr: "bad flag\n" }),
   });
   await assert.rejects(() => cli.status(), CtxCliError);
 
-  const parse = createLocalMemoryClient({ runner: () => "not json" });
+  const parse = createLocalAgentHistoryClient({ runner: () => "not json" });
   await assert.rejects(() => parse.status(), CtxParseError);
 
   await assert.rejects(() => parse.showEvent(""), CtxValidationError);
@@ -272,7 +272,7 @@ test("raises timeout errors from the local adapter", async () => {
 });
 
 test("hosted client is an explicit placeholder", async () => {
-  const client = createHostedMemoryClient({ baseUrl: "https://ctx.example.invalid" });
+  const client = createHostedAgentHistoryClient({ baseUrl: "https://ctx.example.invalid" });
 
   assert.equal((await client.version()).adapter, "hosted-placeholder");
   await assert.rejects(() => client.status(), CtxUnsupportedError);

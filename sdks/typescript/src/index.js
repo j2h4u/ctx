@@ -124,14 +124,14 @@ export class LocalCliAdapter {
   }
 }
 
-export class LocalMemoryClient {
+export class LocalAgentHistoryClient {
   constructor(options = {}) {
     this.adapter = options.adapter ?? new LocalCliAdapter(options);
     this.kind = "local";
   }
 
   async status() {
-    return this.#memoryJson("status", ["status", "--json"]);
+    return this.#agentHistoryJson("status", ["status", "--json"]);
   }
 
   async init(options = {}) {
@@ -139,23 +139,23 @@ export class LocalMemoryClient {
     if (options.catalogOnly) {
       args.push("--catalog-only");
     }
-    return this.#memoryJson("init", args);
+    return this.#agentHistoryJson("init", args);
   }
 
   async sources() {
-    return this.#memoryJson("sources", ["sources", "--json"]);
+    return this.#agentHistoryJson("sources", ["sources", "--json"]);
   }
 
   async import(options = {}) {
     const args = ["import", "--json", "--progress", options.progress ?? "none"];
     appendImportArgs(args, options);
-    return this.#memoryJson("import", args);
+    return this.#agentHistoryJson("import", args);
   }
 
   async sync(options = {}) {
     const args = ["import", "--json", "--progress", options.progress ?? "none"];
     appendImportArgs(args, options);
-    return this.#memoryJson("sync", args);
+    return this.#agentHistoryJson("sync", args);
   }
 
   async search(queryOrOptions = undefined, maybeOptions = {}) {
@@ -169,7 +169,7 @@ export class LocalMemoryClient {
     }
     appendSearchArgs(args, options);
     args.push("--json");
-    return this.#memoryJson("search", args);
+    return this.#agentHistoryJson("search", args);
   }
 
   async showEvent(id, options = {}) {
@@ -178,7 +178,7 @@ export class LocalMemoryClient {
     appendOptionalNumber(args, "--before", options.before);
     appendOptionalNumber(args, "--after", options.after);
     appendOptionalNumber(args, "--window", options.window);
-    return this.#memoryJson("showEvent", args);
+    return this.#agentHistoryJson("showEvent", args);
   }
 
   async showSession(idOrOptions, maybeOptions = {}) {
@@ -189,12 +189,12 @@ export class LocalMemoryClient {
     const args = ["show", "session"];
     appendSessionLookupArgs(args, options);
     args.push("--mode", options.mode ?? "lite", "--format", "json");
-    return this.#memoryJson("showSession", args);
+    return this.#agentHistoryJson("showSession", args);
   }
 
   async locateEvent(id) {
     requireId("event id", id);
-    return this.#memoryJson("locateEvent", ["locate", "event", id, "--format", "json"]);
+    return this.#agentHistoryJson("locateEvent", ["locate", "event", id, "--format", "json"]);
   }
 
   async locateSession(idOrOptions) {
@@ -203,7 +203,7 @@ export class LocalMemoryClient {
     const args = ["locate", "session"];
     appendSessionLookupArgs(args, options);
     args.push("--format", "json");
-    return this.#memoryJson("locateSession", args);
+    return this.#agentHistoryJson("locateSession", args);
   }
 
   async version() {
@@ -221,8 +221,8 @@ export class LocalMemoryClient {
     };
   }
 
-  async #memoryJson(operation, args) {
-    return toMemoryEnvelope(operation, await this.#json(args), {
+  async #agentHistoryJson(operation, args) {
+    return toAgentHistoryEnvelope(operation, await this.#json(args), {
       kind: "local",
       dataRoot: this.adapter.dataRoot ?? null,
     });
@@ -249,7 +249,7 @@ export class LocalMemoryClient {
   }
 }
 
-export class HostedMemoryClient {
+export class HostedAgentHistoryClient {
   constructor(options = {}) {
     this.kind = "hosted";
     this.baseUrl = options.baseUrl;
@@ -307,19 +307,19 @@ export class HostedMemoryClient {
   }
 }
 
-export function createLocalMemoryClient(options = {}) {
-  return new LocalMemoryClient(options);
+export function createLocalAgentHistoryClient(options = {}) {
+  return new LocalAgentHistoryClient(options);
 }
 
-export function createHostedMemoryClient(options = {}) {
-  return new HostedMemoryClient(options);
+export function createHostedAgentHistoryClient(options = {}) {
+  return new HostedAgentHistoryClient(options);
 }
 
-export function createMemoryClient(options = {}) {
+export function createAgentHistoryClient(options = {}) {
   if (options.hosted || options.baseUrl) {
-    return createHostedMemoryClient(options);
+    return createHostedAgentHistoryClient(options);
   }
-  return createLocalMemoryClient(options);
+  return createLocalAgentHistoryClient(options);
 }
 
 function hostedUnsupported() {
@@ -331,7 +331,7 @@ function hostedUnsupported() {
   );
 }
 
-export function toMemoryEnvelope(operation, source, backend = undefined) {
+export function toAgentHistoryEnvelope(operation, source, backend = undefined) {
   const envelope = {
     contractVersion: AGENT_HISTORY_V1_VERSION,
     schemaVersion: 1,

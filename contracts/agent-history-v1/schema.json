@@ -33,7 +33,7 @@
     "event": { "$ref": "#/$defs/eventResult" },
     "session": { "$ref": "#/$defs/sessionResult" },
     "location": { "$ref": "#/$defs/locationResult" },
-    "error": { "$ref": "#/$defs/memoryError" }
+    "error": { "$ref": "#/$defs/agentHistoryError" }
   },
   "$defs": {
     "backend": {
@@ -261,7 +261,7 @@
       },
       "additionalProperties": true
     },
-    "memoryError": {
+    "agentHistoryError": {
       "type": "object",
       "required": ["code", "message", "retryable"],
       "properties": {

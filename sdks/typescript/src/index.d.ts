@@ -50,11 +50,11 @@ export interface LocalCliAdapterOptions {
   runner?: Runner;
 }
 
-export interface LocalMemoryClientOptions extends LocalCliAdapterOptions {
+export interface LocalAgentHistoryClientOptions extends LocalCliAdapterOptions {
   adapter?: LocalCliAdapter;
 }
 
-export interface HostedMemoryClientOptions {
+export interface HostedAgentHistoryClientOptions {
   hosted?: boolean;
   baseUrl?: string;
   apiKey?: string;
@@ -107,7 +107,7 @@ export interface ShowSessionOptions extends SessionLookup {
   mode?: TranscriptMode;
 }
 
-export type MemoryOperation =
+export type AgentHistoryOperation =
   | "status"
   | "init"
   | "sources"
@@ -120,10 +120,10 @@ export type MemoryOperation =
   | "locateSession"
   | "error";
 
-export type ClientMemoryOperation = Exclude<MemoryOperation, "error">;
+export type ClientAgentHistoryOperation = Exclude<AgentHistoryOperation, "error">;
 export type BackendKind = "local" | "hosted";
 
-export interface MemoryBackend {
+export interface AgentHistoryBackend {
   kind: BackendKind;
   dataRoot?: string | null;
   baseUrl?: string | null;
@@ -149,7 +149,7 @@ export interface Freshness {
   error?: string | null;
 }
 
-export interface MemoryStatus {
+export interface AgentHistoryStatus {
   initialized: boolean;
   localOnly: boolean;
   dataRoot?: string | null;
@@ -229,7 +229,7 @@ export interface Citation {
   cursor?: string | null;
 }
 
-export interface MemoryEvent {
+export interface AgentHistoryEvent {
   ctxEventId?: string | null;
   ctxSessionId?: string | null;
   sequence?: number | null;
@@ -253,14 +253,14 @@ export interface SourceLocation {
 }
 
 export interface EventResult {
-  event?: MemoryEvent | null;
-  events: MemoryEvent[];
+  event?: AgentHistoryEvent | null;
+  events: AgentHistoryEvent[];
   source?: SourceLocation | null;
 }
 
 export interface SessionResult {
   session?: JsonObject | null;
-  events?: MemoryEvent[];
+  events?: AgentHistoryEvent[];
   source?: SourceLocation | null;
   mode?: string | null;
   format?: string | null;
@@ -275,7 +275,7 @@ export interface LocationResult {
   resume?: JsonObject;
 }
 
-export type MemoryErrorCode =
+export type AgentHistoryErrorCode =
   | "invalid_request"
   | "not_found"
   | "not_initialized"
@@ -287,60 +287,60 @@ export type MemoryErrorCode =
   | "decode_error"
   | "unknown";
 
-export interface MemoryErrorRecord {
-  code: MemoryErrorCode;
+export interface AgentHistoryErrorRecord {
+  code: AgentHistoryErrorCode;
   message: string;
   retryable: boolean;
   details?: JsonObject;
   cause?: string | null;
 }
 
-export interface MemoryEnvelopeBase<TOperation extends MemoryOperation> {
+export interface AgentHistoryEnvelopeBase<TOperation extends AgentHistoryOperation> {
   contractVersion: typeof AGENT_HISTORY_V1_VERSION;
   schemaVersion: 1;
   operation: TOperation;
-  backend?: MemoryBackend;
+  backend?: AgentHistoryBackend;
 }
 
-export interface StatusEnvelope extends MemoryEnvelopeBase<"status"> {
-  status: MemoryStatus;
+export interface StatusEnvelope extends AgentHistoryEnvelopeBase<"status"> {
+  status: AgentHistoryStatus;
 }
 
-export interface InitEnvelope extends MemoryEnvelopeBase<"init"> {
-  status: MemoryStatus;
+export interface InitEnvelope extends AgentHistoryEnvelopeBase<"init"> {
+  status: AgentHistoryStatus;
 }
 
-export interface SourcesEnvelope extends MemoryEnvelopeBase<"sources"> {
+export interface SourcesEnvelope extends AgentHistoryEnvelopeBase<"sources"> {
   sources: ProviderSource[];
 }
 
 export interface ImportEnvelope<TOperation extends "import" | "sync" = "import" | "sync">
-  extends MemoryEnvelopeBase<TOperation> {
+  extends AgentHistoryEnvelopeBase<TOperation> {
   import: ImportResult;
 }
 
-export interface SearchEnvelope extends MemoryEnvelopeBase<"search"> {
+export interface SearchEnvelope extends AgentHistoryEnvelopeBase<"search"> {
   search: SearchResult;
 }
 
-export interface ShowEventEnvelope extends MemoryEnvelopeBase<"showEvent"> {
+export interface ShowEventEnvelope extends AgentHistoryEnvelopeBase<"showEvent"> {
   event: EventResult;
 }
 
-export interface ShowSessionEnvelope extends MemoryEnvelopeBase<"showSession"> {
+export interface ShowSessionEnvelope extends AgentHistoryEnvelopeBase<"showSession"> {
   session: SessionResult;
 }
 
 export interface LocationEnvelope<TOperation extends "locateEvent" | "locateSession">
-  extends MemoryEnvelopeBase<TOperation> {
+  extends AgentHistoryEnvelopeBase<TOperation> {
   location: LocationResult;
 }
 
-export interface MemoryErrorEnvelope extends MemoryEnvelopeBase<"error"> {
-  error: MemoryErrorRecord;
+export interface AgentHistoryErrorEnvelope extends AgentHistoryEnvelopeBase<"error"> {
+  error: AgentHistoryErrorRecord;
 }
 
-export interface MemoryEnvelopeByOperation {
+export interface AgentHistoryEnvelopeByOperation {
   status: StatusEnvelope;
   init: InitEnvelope;
   sources: SourcesEnvelope;
@@ -351,10 +351,10 @@ export interface MemoryEnvelopeByOperation {
   showSession: ShowSessionEnvelope;
   locateEvent: LocationEnvelope<"locateEvent">;
   locateSession: LocationEnvelope<"locateSession">;
-  error: MemoryErrorEnvelope;
+  error: AgentHistoryErrorEnvelope;
 }
 
-export type MemoryEnvelope = MemoryEnvelopeByOperation[MemoryOperation];
+export type AgentHistoryEnvelope = AgentHistoryEnvelopeByOperation[AgentHistoryOperation];
 
 export interface VersionInfo {
   schema_version: 1;
@@ -399,10 +399,10 @@ export declare class LocalCliAdapter {
   ): Promise<Required<Pick<RunResult, "stdout" | "stderr">> & RunResult>;
 }
 
-export declare class LocalMemoryClient {
+export declare class LocalAgentHistoryClient {
   adapter: LocalCliAdapter;
   kind: "local";
-  constructor(options?: LocalMemoryClientOptions);
+  constructor(options?: LocalAgentHistoryClientOptions);
   status(): Promise<StatusEnvelope>;
   init(options?: InitOptions): Promise<InitEnvelope>;
   sources(): Promise<SourcesEnvelope>;
@@ -419,11 +419,11 @@ export declare class LocalMemoryClient {
   version(): Promise<VersionInfo>;
 }
 
-export declare class HostedMemoryClient {
+export declare class HostedAgentHistoryClient {
   kind: "hosted";
   baseUrl?: string;
   apiKey?: string;
-  constructor(options?: HostedMemoryClientOptions);
+  constructor(options?: HostedAgentHistoryClientOptions);
   status(): Promise<never>;
   init(): Promise<never>;
   sources(): Promise<never>;
@@ -437,13 +437,13 @@ export declare class HostedMemoryClient {
   version(): Promise<VersionInfo>;
 }
 
-export declare function createLocalMemoryClient(options?: LocalMemoryClientOptions): LocalMemoryClient;
-export declare function createHostedMemoryClient(options?: HostedMemoryClientOptions): HostedMemoryClient;
-export declare function createMemoryClient(
-  options?: LocalMemoryClientOptions | HostedMemoryClientOptions,
-): LocalMemoryClient | HostedMemoryClient;
-export declare function toMemoryEnvelope<TOperation extends ClientMemoryOperation>(
+export declare function createLocalAgentHistoryClient(options?: LocalAgentHistoryClientOptions): LocalAgentHistoryClient;
+export declare function createHostedAgentHistoryClient(options?: HostedAgentHistoryClientOptions): HostedAgentHistoryClient;
+export declare function createAgentHistoryClient(
+  options?: LocalAgentHistoryClientOptions | HostedAgentHistoryClientOptions,
+): LocalAgentHistoryClient | HostedAgentHistoryClient;
+export declare function toAgentHistoryEnvelope<TOperation extends ClientAgentHistoryOperation>(
   operation: TOperation,
   source: unknown,
-  backend?: MemoryBackend,
-): MemoryEnvelopeByOperation[TOperation];
+  backend?: AgentHistoryBackend,
+): AgentHistoryEnvelopeByOperation[TOperation];

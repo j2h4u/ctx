@@ -1,4 +1,4 @@
-# ctx Memory Swift SDK
+# ctx Agent History Swift SDK
 
 Experimental Swift SDK for the local ctx `agent-history-v1` API.
 
@@ -16,15 +16,15 @@ Add the package by path from another local Swift package:
 Then depend on the library product:
 
 ```swift
-.product(name: "CtxMemory", package: "CtxMemory")
+.product(name: "CtxAgentHistory", package: "CtxAgentHistory")
 ```
 
 ## Example
 
 ```swift
-import CtxMemory
+import CtxAgentHistory
 
-let client = MemoryClient.local(dataRoot: "/tmp/ctx")
+let client = AgentHistoryClient.local(dataRoot: "/tmp/ctx")
 
 let status = try client.status()
 let results = try client.search(
@@ -41,9 +41,9 @@ print(results.search.results.map(\.snippet))
 The public client mirrors the `agent-history-v1` operations:
 
 - `status()`
-- `initMemory()` / `initialize()`
+- `initialize()`
 - `sources()`
-- `importMemory()`
+- `importHistory()`
 - `sync()`
 - `search()`
 - `showEvent()`
@@ -53,16 +53,15 @@ The public client mirrors the `agent-history-v1` operations:
 - `version()` / `versioning()`
 
 Swift reserves `init` for initializers, so the agent-history-v1 `init` operation is
-exposed as `initMemory()` and `initialize()`. Returned envelopes still use
-`operation: "init"`.
+exposed as `initialize()`. Returned envelopes still use `operation: "init"`.
 
 ## Local CLI Adapter
 
-`MemoryClient.local(...)` shells out to a local `ctx` binary and never performs
+`AgentHistoryClient.local(...)` shells out to a local `ctx` binary and never performs
 network calls:
 
 ```swift
-let client = MemoryClient.local(
+let client = AgentHistoryClient.local(
     ctxPath: "/usr/local/bin/ctx",
     dataRoot: "/tmp/ctx-data",
     cwd: "/workspace/repo",
@@ -78,17 +77,17 @@ binary is required.
 Hosted configuration is reserved for a future ctx service:
 
 ```swift
-let client = MemoryClient.hosted(
+let client = AgentHistoryClient.hosted(
     HostedConfig(baseURL: URL(string: "https://ctx.example.invalid")!)
 )
 ```
 
-Data operations throw `CtxMemorySDKError` with code `.notSupported`. No network
+Data operations throw `CtxAgentHistorySDKError` with code `.notSupported`. No network
 request is made.
 
 ## Errors
 
-Failures throw `CtxMemorySDKError`, which includes a stable `code`, human
+Failures throw `CtxAgentHistorySDKError`, which includes a stable `code`, human
 message, retryability, optional details, and optional command diagnostics for
 local CLI failures.
 
@@ -101,17 +100,17 @@ contract fixture directory is available.
 ## Local Smoke Example
 
 The package includes a fake-by-default toy executable that exercises
-`status`, `initMemory`, `importMemory`, `sync`, `search`, `showEvent`,
+`status`, `initialize`, `importHistory`, `sync`, `search`, `showEvent`,
 `showSession`, `locateEvent`, and `locateSession` without reading private local
 history:
 
 ```bash
-swift run LocalMemorySmoke
+swift run LocalAgentHistorySmoke
 ```
 
 To point it at a local ctx binary explicitly, opt in with `--real` and pass an
 isolated data root:
 
 ```bash
-swift run LocalMemorySmoke --real --ctx-path /path/to/ctx --data-root /tmp/ctx-smoke
+swift run LocalAgentHistorySmoke --real --ctx-path /path/to/ctx --data-root /tmp/ctx-smoke
 ```

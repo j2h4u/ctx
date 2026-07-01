@@ -1,18 +1,18 @@
 import {
   type ImportEnvelope,
   type LocationEnvelope,
-  type MemoryEnvelope,
+  type AgentHistoryEnvelope,
   type SearchEnvelope,
   type ShowEventEnvelope,
   type SourcesEnvelope,
   type StatusEnvelope,
-  createLocalMemoryClient,
-  toMemoryEnvelope,
+  createLocalAgentHistoryClient,
+  toAgentHistoryEnvelope,
 } from "../src/index.js";
 
 function expectType<T>(_value: T): void {}
 
-const client = createLocalMemoryClient({
+const client = createLocalAgentHistoryClient({
   runner: () => "{}",
 });
 
@@ -55,13 +55,13 @@ const located = await client.locateSession({
 expectType<LocationEnvelope<"locateSession">>(located);
 expectType<string>(located.location.ctxSessionId);
 
-const envelope = toMemoryEnvelope("search", { query: "x", results: [] });
+const envelope = toAgentHistoryEnvelope("search", { query: "x", results: [] });
 expectType<SearchEnvelope>(envelope);
 expectType<"search">(envelope.operation);
 // @ts-expect-error error envelopes are fixture shapes, not local normalization operations.
-toMemoryEnvelope("error", {});
+toAgentHistoryEnvelope("error", {});
 
-function readEnvelope(envelope: MemoryEnvelope): string {
+function readEnvelope(envelope: AgentHistoryEnvelope): string {
   switch (envelope.operation) {
     case "status":
     case "init":

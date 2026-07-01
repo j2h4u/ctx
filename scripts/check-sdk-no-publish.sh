@@ -26,7 +26,7 @@ require_file_contains crates/ctx-sdk/Cargo.toml '^publish[[:space:]]*=[[:space:]
   'Rust SDK crate must keep publish = false'
 require_file_contains crates/ctx-protocol/Cargo.toml '^publish[[:space:]]*=[[:space:]]*false$' \
   'Rust protocol crate must keep publish = false'
-require_file_contains sdks/dotnet/src/Ctx.Memory/Ctx.Memory.csproj '<IsPackable>false</IsPackable>' \
+require_file_contains sdks/dotnet/src/Ctx.AgentHistory/Ctx.AgentHistory.csproj '<IsPackable>false</IsPackable>' \
   '.NET SDK project must keep IsPackable=false until NuGet publishing is intentional'
 
 if rg -n --glob '!scripts/check-sdk-no-publish.sh' \

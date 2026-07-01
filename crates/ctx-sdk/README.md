@@ -8,16 +8,16 @@ contract is being shaped in-repo.
 ## Use
 
 ```rust
-use ctx_sdk::{LocalBackendConfig, MemoryClient, SearchOptions, SearchRefresh};
+use ctx_sdk::{LocalBackendConfig, AgentHistoryClient, SearchOptions, SearchRefresh};
 
-let client = MemoryClient::local(LocalBackendConfig::default());
+let client = AgentHistoryClient::local(LocalBackendConfig::default());
 let status = client.status()?;
 let results = client.search(SearchOptions {
     query: Some("release notes".to_owned()),
     refresh: SearchRefresh::Off,
     ..SearchOptions::default()
 })?;
-# Ok::<(), ctx_sdk::MemoryError>(())
+# Ok::<(), ctx_sdk::AgentHistoryError>(())
 ```
 
 ## Backends
@@ -29,8 +29,8 @@ let results = client.search(SearchOptions {
 
 ## Public Operations
 
-`status`, `init`, `sources`, `import_memory`, `sync`, `search`, `show_event`,
+`status`, `init`, `sources`, `import_history`, `sync`, `search`, `show_event`,
 `show_session`, `locate_event`, and `locate_session`.
 
-The SDK returns `MemoryEnvelope` values from `ctx-protocol` with stable
+The SDK returns `AgentHistoryEnvelope` values from `ctx-protocol` with stable
 `agent-history-v1` fields. CLI JSON remains an adapter detail.

@@ -1,6 +1,6 @@
-"""Small offline dogfood example for the local ctx memory client.
+"""Small offline dogfood example for the local ctx agent history client.
 
-Run directly after installing the SDK editable, or set CTX_MEMORY_CTX to point
+Run directly after installing the SDK editable, or set CTX_AGENT_HISTORY_CTX to point
 at a real ctx binary. With no environment, the example uses a temporary fake ctx
 script and never reads private history or makes network calls.
 """
@@ -17,10 +17,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional, Union
 
-from ctx_memory import (
+from ctx_agent_history import (
     LocateEventResponse,
     LocateSessionResponse,
-    MemoryClient,
+    AgentHistoryClient,
     ImportResponse,
     InitResponse,
     SearchResponse,
@@ -60,7 +60,7 @@ class DogfoodSnapshot:
         }
 
 
-def run_demo(client: MemoryClient) -> DogfoodSnapshot:
+def run_demo(client: AgentHistoryClient) -> DogfoodSnapshot:
     return DogfoodSnapshot(
         status=client.status(),
         init=client.init(catalog_only=True),
@@ -79,17 +79,17 @@ def local_client(
     *,
     ctx_binary: Optional[Pathish] = None,
     data_root: Optional[Pathish] = None,
-) -> Iterator[MemoryClient]:
-    configured_ctx = str(ctx_binary or os.environ.get("CTX_MEMORY_CTX") or "")
+) -> Iterator[AgentHistoryClient]:
+    configured_ctx = str(ctx_binary or os.environ.get("CTX_AGENT_HISTORY_CTX") or "")
     configured_data_root = (
-        data_root or os.environ.get("CTX_MEMORY_DATA_ROOT") or "/tmp/ctx-memory-dogfood"
+        data_root or os.environ.get("CTX_AGENT_HISTORY_DATA_ROOT") or "/tmp/ctx-agent-history-dogfood"
     )
     if configured_ctx:
-        yield MemoryClient.local(ctx_binary=configured_ctx, data_root=configured_data_root)
+        yield AgentHistoryClient.local(ctx_binary=configured_ctx, data_root=configured_data_root)
         return
 
     with _FakeCtx() as fake_ctx:
-        yield MemoryClient.local(ctx_binary=str(fake_ctx), data_root=configured_data_root)
+        yield AgentHistoryClient.local(ctx_binary=str(fake_ctx), data_root=configured_data_root)
 
 
 def run(
@@ -132,14 +132,14 @@ def _fake_ctx_script() -> str:
         EVENT_ID = {EVENT_ID!r}
         SESSION_ID = {SESSION_ID!r}
         args = sys.argv[1:]
-        if args[:2] == ["--data-root", "/tmp/ctx-memory-dogfood"]:
+        if args[:2] == ["--data-root", "/tmp/ctx-agent-history-dogfood"]:
             args = args[2:]
 
         payload = {{"schema_version": 1}}
         if args == ["status", "--json"]:
-            payload.update({{"initialized": True, "data_root": "/tmp/ctx-memory-dogfood"}})
+            payload.update({{"initialized": True, "data_root": "/tmp/ctx-agent-history-dogfood"}})
         elif args[:2] == ["setup", "--json"]:
-            payload.update({{"mode": "catalog_only", "data_root": "/tmp/ctx-memory-dogfood", "indexed_items": 1}})
+            payload.update({{"mode": "catalog_only", "data_root": "/tmp/ctx-agent-history-dogfood", "indexed_items": 1}})
         elif args[:2] == ["import", "--json"]:
             payload.update(
                 {{
@@ -148,7 +148,7 @@ def _fake_ctx_script() -> str:
                     "sources": [
                         {{
                             "provider": "codex",
-                            "path": "/tmp/ctx-memory-dogfood/session.jsonl",
+                            "path": "/tmp/ctx-agent-history-dogfood/session.jsonl",
                             "status": "imported",
                             "imported_sessions": 1,
                             "imported_events": 1,
@@ -185,7 +185,7 @@ def _fake_ctx_script() -> str:
                         "text": "local agent history search result",
                     }},
                     "events": [],
-                    "source": {{"path": "/tmp/ctx-memory-dogfood/session.jsonl", "exists": True}},
+                    "source": {{"path": "/tmp/ctx-agent-history-dogfood/session.jsonl", "exists": True}},
                 }}
             )
         elif args[:2] == ["show", "session"]:
@@ -195,7 +195,7 @@ def _fake_ctx_script() -> str:
                     "provider_session_id": "codex-fixture-session",
                     "session": {{"provider": "codex", "title": "Fixture session"}},
                     "events": [],
-                    "source": {{"path": "/tmp/ctx-memory-dogfood/session.jsonl", "exists": True}},
+                    "source": {{"path": "/tmp/ctx-agent-history-dogfood/session.jsonl", "exists": True}},
                     "mode": "lite",
                     "format": "json",
                 }}
@@ -206,7 +206,7 @@ def _fake_ctx_script() -> str:
                     "ctx_session_id": SESSION_ID,
                     "ctx_event_id": args[2],
                     "provider": "codex",
-                    "source": {{"path": "/tmp/ctx-memory-dogfood/session.jsonl", "exists": True}},
+                    "source": {{"path": "/tmp/ctx-agent-history-dogfood/session.jsonl", "exists": True}},
                 }}
             )
         elif args[:2] == ["locate", "session"]:
@@ -214,7 +214,7 @@ def _fake_ctx_script() -> str:
                 {{
                     "ctx_session_id": args[2],
                     "provider": "codex",
-                    "source": {{"path": "/tmp/ctx-memory-dogfood/session.jsonl", "exists": True}},
+                    "source": {{"path": "/tmp/ctx-agent-history-dogfood/session.jsonl", "exists": True}},
                 }}
             )
         else:

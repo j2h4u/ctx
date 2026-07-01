@@ -1,4 +1,4 @@
-package ctxmemory
+package ctxagenthistory
 
 import (
 	"errors"
@@ -54,7 +54,7 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
-func (e *MemoryError) Error() string {
+func (e *AgentHistoryError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}

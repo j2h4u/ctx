@@ -15,28 +15,28 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples"))
 
-from ctx_memory import (
+from ctx_agent_history import (
     API_VERSION,
     HostedConfig,
     HostedTransportNotImplementedError,
-    MemoryClient,
+    AgentHistoryClient,
 )
-from ctx_memory.errors import CtxMemoryCliError, CtxMemoryProtocolError
-from ctx_memory.errors import CtxMemoryTimeoutError
-from ctx_memory.types import MemoryErrorCode
+from ctx_agent_history.errors import CtxAgentHistoryCliError, CtxAgentHistoryProtocolError
+from ctx_agent_history.errors import CtxAgentHistoryTimeoutError
+from ctx_agent_history.types import AgentHistoryErrorCode
 import dogfood_local
 
 
 class LocalCliAdapterTests(unittest.TestCase):
     def test_public_aliases_have_typed_signatures(self) -> None:
-        show_event = inspect.signature(MemoryClient.showEvent)
-        show_session = inspect.signature(MemoryClient.showSession)
+        show_event = inspect.signature(AgentHistoryClient.showEvent)
+        show_session = inspect.signature(AgentHistoryClient.showSession)
 
         for signature in (show_event, show_session):
             self.assertNotIn(inspect.Parameter.VAR_KEYWORD, {p.kind for p in signature.parameters.values()})
 
-        show_event_hints = typing.get_type_hints(MemoryClient.showEvent)
-        show_session_hints = typing.get_type_hints(MemoryClient.showSession)
+        show_event_hints = typing.get_type_hints(AgentHistoryClient.showEvent)
+        show_session_hints = typing.get_type_hints(AgentHistoryClient.showSession)
         self.assertEqual(show_event_hints["event_id"], str)
         self.assertEqual(show_event_hints["return"].__name__, "ShowEventResponse")
         self.assertEqual(show_session_hints["session_id"], str)
@@ -44,7 +44,7 @@ class LocalCliAdapterTests(unittest.TestCase):
 
     def test_status_uses_local_cli_json(self) -> None:
         with fake_ctx() as cli:
-            client = MemoryClient.local(ctx_binary=str(cli), data_root="/tmp/ctx-data")
+            client = AgentHistoryClient.local(ctx_binary=str(cli), data_root="/tmp/ctx-data")
 
             result = client.status()
 
@@ -54,10 +54,12 @@ class LocalCliAdapterTests(unittest.TestCase):
         self.assertEqual(result["backend"], {"kind": "local", "dataRoot": "/tmp/ctx-data"})
         self.assertTrue(result["status"]["initialized"])
         self.assertTrue(result["status"]["localOnly"])
+        self.assertEqual(result["status"]["freshness"], {"mode": "off", "status": "skipped"})
+        self.assertEqual(result["status"]["futureField"], "preserved")
 
     def test_init_sources_import_sync_search_and_inspect_methods(self) -> None:
         with fake_ctx() as cli:
-            client = MemoryClient.local(ctx_binary=str(cli))
+            client = AgentHistoryClient.local(ctx_binary=str(cli))
 
             self.assertEqual(client.init(catalog_only=True)["operation"], "init")
             self.assertEqual(client.sources()["operation"], "sources")
@@ -96,7 +98,7 @@ class LocalCliAdapterTests(unittest.TestCase):
 
     def test_versioning_reports_sdk_api_transport_and_ctx_version(self) -> None:
         with fake_ctx() as cli:
-            client = MemoryClient.local(ctx_binary=str(cli))
+            client = AgentHistoryClient.local(ctx_binary=str(cli))
 
             version = client.version()
 
@@ -107,9 +109,9 @@ class LocalCliAdapterTests(unittest.TestCase):
 
     def test_cli_failure_raises_structured_error(self) -> None:
         with fake_ctx(fail=True) as cli:
-            client = MemoryClient.local(ctx_binary=str(cli))
+            client = AgentHistoryClient.local(ctx_binary=str(cli))
 
-            with self.assertRaises(CtxMemoryCliError) as raised:
+            with self.assertRaises(CtxAgentHistoryCliError) as raised:
                 client.status()
 
         self.assertEqual(raised.exception.code, "adapter_error")
@@ -119,28 +121,28 @@ class LocalCliAdapterTests(unittest.TestCase):
 
     def test_invalid_json_raises_protocol_error(self) -> None:
         with fake_ctx(invalid_json=True) as cli:
-            client = MemoryClient.local(ctx_binary=str(cli))
+            client = AgentHistoryClient.local(ctx_binary=str(cli))
 
-            with self.assertRaises(CtxMemoryProtocolError) as raised:
+            with self.assertRaises(CtxAgentHistoryProtocolError) as raised:
                 client.status()
 
         self.assertEqual(raised.exception.code, "decode_error")
 
     def test_timeout_raises_contract_timeout_error(self) -> None:
         with fake_ctx(sleep=True) as cli:
-            client = MemoryClient.local(
+            client = AgentHistoryClient.local(
                 ctx_binary=str(cli),
                 timeout=0.001,
             )
 
-            with self.assertRaises(CtxMemoryTimeoutError) as raised:
+            with self.assertRaises(CtxAgentHistoryTimeoutError) as raised:
                 client.status()
 
         self.assertEqual(raised.exception.code, "timeout")
         self.assertTrue(raised.exception.retryable)
 
     def test_hosted_config_is_placeholder(self) -> None:
-        client = MemoryClient.hosted(HostedConfig(base_url="https://example.invalid"))
+        client = AgentHistoryClient.hosted(HostedConfig(base_url="https://example.invalid"))
 
         with self.assertRaises(HostedTransportNotImplementedError) as raised:
             client.status()
@@ -165,7 +167,7 @@ class LocalCliAdapterTests(unittest.TestCase):
             "unknown",
         }
 
-        self.assertEqual(codes, set(MemoryErrorCode.__args__))
+        self.assertEqual(codes, set(AgentHistoryErrorCode.__args__))
 
 
 class ContractFixtureSmokeTests(unittest.TestCase):
@@ -185,7 +187,7 @@ class ContractFixtureSmokeTests(unittest.TestCase):
 
 class DogfoodExampleTests(unittest.TestCase):
     def test_dogfood_local_example_runs_against_fake_ctx(self) -> None:
-        with mock.patch.dict(os.environ, {"CTX_MEMORY_CTX": "", "CTX_MEMORY_DATA_ROOT": ""}):
+        with mock.patch.dict(os.environ, {"CTX_AGENT_HISTORY_CTX": "", "CTX_AGENT_HISTORY_DATA_ROOT": ""}):
             snapshot = dogfood_local.run()
 
         self.assertEqual(snapshot.status["operation"], "status")
@@ -308,7 +310,13 @@ def _fake_ctx_script(*, fail: bool, invalid_json: bool, sleep: bool) -> str:
         elif command == "sources":
             payload.update({"sources": []})
         elif command == "status":
-            payload.update({"initialized": True})
+            payload.update(
+                {
+                    "initialized": True,
+                    "freshness": {"mode": "off", "status": "skipped"},
+                    "future_field": "preserved",
+                }
+            )
         elif command == "setup":
             payload.update({"mode": "ready"})
         elif command == "import":

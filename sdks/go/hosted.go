@@ -1,4 +1,4 @@
-package ctxmemory
+package ctxagenthistory
 
 import "context"
 
@@ -29,7 +29,7 @@ func (h hostedTransport) Do(_ context.Context, op Operation) ([]byte, error) {
 	return nil, &Error{
 		Kind:    ErrorKindHostedNotImplemented,
 		Message: "hosted ctx agent history backend is not available in this in-repo SDK",
-		Err: &MemoryError{
+		Err: &AgentHistoryError{
 			Code:      ErrorKindHostedNotImplemented,
 			Message:   "hosted ctx agent history backend is not available in this in-repo SDK",
 			Retryable: false,

@@ -1,4 +1,4 @@
-package ctxmemory
+package ctxagenthistory
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestStatusDecodesMemoryV1(t *testing.T) {
+func TestStatusDecodesAgentHistoryV1(t *testing.T) {
 	client := NewClient(WithTransport(fakeTransport{
 		response: `{
 			"schema_version": 1,
@@ -42,7 +42,7 @@ func TestStatusDecodesMemoryV1(t *testing.T) {
 	}
 }
 
-func TestSearchBuildsMemoryV1Operation(t *testing.T) {
+func TestSearchBuildsAgentHistoryV1Operation(t *testing.T) {
 	transport := &recordingTransport{response: `{
 		"schema_version": 1,
 		"query": "panic",
@@ -103,7 +103,7 @@ func TestShowAndLocateValidateRequiredEventID(t *testing.T) {
 
 func TestRejectsWrongCanonicalEnvelope(t *testing.T) {
 	client := NewClient(WithTransport(fakeTransport{response: `{
-		"contractVersion": "memory-v2",
+		"contractVersion": "agent-history-v2",
 		"schemaVersion": 1,
 		"operation": "status",
 		"backend": {"kind": "local"},

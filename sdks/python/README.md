@@ -19,9 +19,9 @@ No API keys are required. The local client shells out to `ctx`.
 ## Quick Start
 
 ```python
-from ctx_memory import MemoryClient
+from ctx_agent_history import AgentHistoryClient
 
-client = MemoryClient.local(ctx_binary="ctx", data_root="/tmp/ctx")
+client = AgentHistoryClient.local(ctx_binary="ctx", data_root="/tmp/ctx")
 
 status = client.status()
 sources = client.sources()
@@ -61,7 +61,7 @@ implementation syncs by importing local provider history into the ctx index.
 
 ## Errors
 
-All SDK errors inherit from `CtxMemoryError` and expose:
+All SDK errors inherit from `CtxAgentHistoryError` and expose:
 
 - `code`
 - `message`
@@ -69,15 +69,15 @@ All SDK errors inherit from `CtxMemoryError` and expose:
 - `details`
 - `cause`
 
-CLI failures raise `CtxMemoryCliError` with `exit_code`, `stderr`, and the
-command argv. Invalid or missing JSON raises `CtxMemoryProtocolError`.
+CLI failures raise `CtxAgentHistoryCliError` with `exit_code`, `stderr`, and the
+command argv. Invalid or missing JSON raises `CtxAgentHistoryProtocolError`.
 
 ## Hosted Placeholder
 
 ```python
-from ctx_memory import HostedConfig, MemoryClient
+from ctx_agent_history import HostedConfig, AgentHistoryClient
 
-client = MemoryClient.hosted(HostedConfig(base_url="https://example.invalid"))
+client = AgentHistoryClient.hosted(HostedConfig(base_url="https://example.invalid"))
 client.status()  # raises HostedTransportNotImplementedError
 ```
 
@@ -93,7 +93,7 @@ python3 examples/dogfood_local.py
 By default the example creates a temporary fake `ctx` binary and exercises
 `status`, `search`, `show_event`, `show_session`, `locate_event`, and
 `locate_session` without network access, API keys, or private history. Set
-`CTX_MEMORY_CTX=/path/to/ctx` to point it at a real local CLI instead.
+`CTX_AGENT_HISTORY_CTX=/path/to/ctx` to point it at a real local CLI instead.
 
 ## Tests
 

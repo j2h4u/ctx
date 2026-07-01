@@ -56,7 +56,7 @@ impl BackendInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum MemoryOperation {
+pub enum AgentHistoryOperation {
     Status,
     Init,
     Sources,
@@ -72,7 +72,7 @@ pub enum MemoryOperation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum MemoryErrorCode {
+pub enum AgentHistoryErrorCode {
     InvalidRequest,
     NotFound,
     NotInitialized,
@@ -87,8 +87,8 @@ pub enum MemoryErrorCode {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MemoryErrorBody {
-    pub code: MemoryErrorCode,
+pub struct AgentHistoryErrorBody {
+    pub code: AgentHistoryErrorCode,
     pub message: String,
     pub retryable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,8 +99,8 @@ pub struct MemoryErrorBody {
     pub extra: JsonObject,
 }
 
-impl MemoryErrorBody {
-    pub fn new(code: MemoryErrorCode, message: impl Into<String>, retryable: bool) -> Self {
+impl AgentHistoryErrorBody {
+    pub fn new(code: AgentHistoryErrorCode, message: impl Into<String>, retryable: bool) -> Self {
         Self {
             code,
             message: message.into(),
@@ -156,7 +156,7 @@ pub struct Freshness {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MemoryStatus {
+pub struct AgentHistoryStatus {
     pub initialized: bool,
     pub local_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -313,7 +313,7 @@ pub struct Citation {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MemoryEvent {
+pub struct AgentHistoryEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ctx_event_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -363,9 +363,9 @@ pub struct SourceLocation {
 #[serde(rename_all = "camelCase")]
 pub struct EventResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub event: Option<MemoryEvent>,
+    pub event: Option<AgentHistoryEvent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub events: Vec<MemoryEvent>,
+    pub events: Vec<AgentHistoryEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceLocation>,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -378,7 +378,7 @@ pub struct SessionResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<JsonObject>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub events: Vec<MemoryEvent>,
+    pub events: Vec<AgentHistoryEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -407,14 +407,14 @@ pub struct LocationResult {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MemoryEnvelope {
+pub struct AgentHistoryEnvelope {
     pub contract_version: String,
     pub schema_version: u16,
-    pub operation: MemoryOperation,
+    pub operation: AgentHistoryOperation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<BackendInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<MemoryStatus>,
+    pub status: Option<AgentHistoryStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sources: Option<Vec<ProviderSource>>,
     #[serde(rename = "import", default, skip_serializing_if = "Option::is_none")]
@@ -428,13 +428,13 @@ pub struct MemoryEnvelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<LocationResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<MemoryErrorBody>,
+    pub error: Option<AgentHistoryErrorBody>,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: JsonObject,
 }
 
-impl MemoryEnvelope {
-    pub fn new(operation: MemoryOperation, backend: Option<BackendInfo>) -> Self {
+impl AgentHistoryEnvelope {
+    pub fn new(operation: AgentHistoryOperation, backend: Option<BackendInfo>) -> Self {
         Self {
             contract_version: CONTRACT_VERSION.to_owned(),
             schema_version: SCHEMA_VERSION,
@@ -452,8 +452,8 @@ impl MemoryEnvelope {
         }
     }
 
-    pub fn error(backend: Option<BackendInfo>, error: MemoryErrorBody) -> Self {
-        let mut envelope = Self::new(MemoryOperation::Error, backend);
+    pub fn error(backend: Option<BackendInfo>, error: AgentHistoryErrorBody) -> Self {
+        let mut envelope = Self::new(AgentHistoryOperation::Error, backend);
         envelope.error = Some(error);
         envelope
     }
@@ -525,30 +525,34 @@ mod tests {
                 continue;
             }
             let fixture = fs::read_to_string(entry.path()).unwrap();
-            let envelope: MemoryEnvelope = serde_json::from_str(&fixture).unwrap();
+            let envelope: AgentHistoryEnvelope = serde_json::from_str(&fixture).unwrap();
             assert_eq!(envelope.contract_version, CONTRACT_VERSION);
             assert_eq!(envelope.schema_version, SCHEMA_VERSION);
             match envelope.operation {
-                MemoryOperation::Status | MemoryOperation::Init => {
+                AgentHistoryOperation::Status | AgentHistoryOperation::Init => {
                     assert!(envelope.status.is_some(), "{:?}", entry.path());
                 }
-                MemoryOperation::Sources => {
+                AgentHistoryOperation::Sources => {
                     assert!(envelope.sources.is_some(), "{:?}", entry.path())
                 }
-                MemoryOperation::Import | MemoryOperation::Sync => {
+                AgentHistoryOperation::Import | AgentHistoryOperation::Sync => {
                     assert!(envelope.import_result.is_some(), "{:?}", entry.path());
                 }
-                MemoryOperation::Search => assert!(envelope.search.is_some(), "{:?}", entry.path()),
-                MemoryOperation::ShowEvent => {
+                AgentHistoryOperation::Search => {
+                    assert!(envelope.search.is_some(), "{:?}", entry.path())
+                }
+                AgentHistoryOperation::ShowEvent => {
                     assert!(envelope.event.is_some(), "{:?}", entry.path())
                 }
-                MemoryOperation::ShowSession => {
+                AgentHistoryOperation::ShowSession => {
                     assert!(envelope.session.is_some(), "{:?}", entry.path());
                 }
-                MemoryOperation::LocateEvent | MemoryOperation::LocateSession => {
+                AgentHistoryOperation::LocateEvent | AgentHistoryOperation::LocateSession => {
                     assert!(envelope.location.is_some(), "{:?}", entry.path());
                 }
-                MemoryOperation::Error => assert!(envelope.error.is_some(), "{:?}", entry.path()),
+                AgentHistoryOperation::Error => {
+                    assert!(envelope.error.is_some(), "{:?}", entry.path())
+                }
             }
             seen += 1;
         }
@@ -568,7 +572,7 @@ mod tests {
             },
             "futureEnvelopeField": "kept"
         }"#;
-        let envelope: MemoryEnvelope = serde_json::from_str(fixture).unwrap();
+        let envelope: AgentHistoryEnvelope = serde_json::from_str(fixture).unwrap();
         let status = envelope.status.unwrap();
         assert_eq!(status.extra["futureField"]["enabled"], true);
         assert_eq!(envelope.extra["futureEnvelopeField"], "kept");

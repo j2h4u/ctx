@@ -36,7 +36,7 @@ else
 fi
 
 if command -v go >/dev/null 2>&1 && [ -f sdks/go/go.mod ]; then
-  run go test ./sdks/go/...
+  run go -C sdks/go test ./...
 else
   skip "Go SDK tests (go unavailable or SDK absent)"
 fi
@@ -59,8 +59,8 @@ else
   skip "Swift SDK tests (swift unavailable or SDK absent)"
 fi
 
-if command -v dotnet >/dev/null 2>&1 && [ -f sdks/dotnet/tests/Ctx.Memory.Tests/Ctx.Memory.Tests.csproj ]; then
-  run dotnet run --project sdks/dotnet/tests/Ctx.Memory.Tests/Ctx.Memory.Tests.csproj
+if command -v dotnet >/dev/null 2>&1 && [ -f sdks/dotnet/tests/Ctx.AgentHistory.Tests/Ctx.AgentHistory.Tests.csproj ]; then
+  run dotnet run --project sdks/dotnet/tests/Ctx.AgentHistory.Tests/Ctx.AgentHistory.Tests.csproj
 else
   skip ".NET SDK tests (dotnet unavailable or SDK absent)"
 fi

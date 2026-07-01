@@ -32,7 +32,7 @@ All operations return JSON objects with `contractVersion: "agent-history-v1"` an
 | `status()` | Read local index status and freshness metadata. |
 | `init()` | Initialize local ctx storage, optionally catalog-only. |
 | `sources()` | List local provider sources and importability. |
-| `importMemory()` / `sync()` | Import local provider history into ctx. |
+| `importHistory()` / `sync()` | Import local provider history into ctx. |
 | `search()` | Search indexed agent history. |
 | `showEvent()` | Return one event or an event window. |
 | `showSession()` | Return a session transcript. |

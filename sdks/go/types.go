@@ -1,4 +1,4 @@
-package ctxmemory
+package ctxagenthistory
 
 // Object stores JSON sub-documents whose shape can grow across ctx releases.
 type Object map[string]any
@@ -89,15 +89,15 @@ type Envelope struct {
 	Backend         Backend       `json:"backend"`
 }
 
-// Backend describes the memory backend that produced a response.
+// Backend describes the agent history backend that produced a response.
 type Backend struct {
 	Kind     BackendKind `json:"kind"`
 	DataRoot string      `json:"dataRoot,omitempty"`
 	BaseURL  string      `json:"baseUrl,omitempty"`
 }
 
-// MemoryError is the agent-history-v1 error shape.
-type MemoryError struct {
+// AgentHistoryError is the agent-history-v1 error shape.
+type AgentHistoryError struct {
 	Code      ErrorKind `json:"code"`
 	Message   string    `json:"message"`
 	Retryable bool      `json:"retryable"`
@@ -198,7 +198,7 @@ type SearchResponse struct {
 	Search SearchResult `json:"search"`
 }
 
-// SearchResult contains memory search results.
+// SearchResult contains agent history search results.
 type SearchResult struct {
 	Query       string            `json:"query,omitempty"`
 	Filters     Object            `json:"filters,omitempty"`
@@ -235,7 +235,7 @@ type Freshness struct {
 	Error       string          `json:"error,omitempty"`
 }
 
-// SearchHit is one memory search hit.
+// SearchHit is one agent history search hit.
 type SearchHit struct {
 	CtxEventID            string     `json:"ctxEventId,omitempty"`
 	CtxSessionID          string     `json:"ctxSessionId,omitempty"`
@@ -257,7 +257,7 @@ type SearchHit struct {
 	Visibility            string     `json:"visibility,omitempty"`
 }
 
-// Citation identifies source material for a memory result.
+// Citation identifies source material for a agent history result.
 type Citation struct {
 	ItemID       string `json:"itemId,omitempty"`
 	ItemType     string `json:"itemType,omitempty"`
@@ -301,7 +301,7 @@ type SessionResult struct {
 	Format  string          `json:"format,omitempty"`
 }
 
-// SessionRecord identifies a memory session.
+// SessionRecord identifies a agent history session.
 type SessionRecord struct {
 	CtxSessionID      string `json:"ctxSessionId,omitempty"`
 	Provider          string `json:"provider,omitempty"`
@@ -370,5 +370,5 @@ type SourceLocation struct {
 // ErrorResponse is the agent-history-v1 structured error envelope.
 type ErrorResponse struct {
 	Envelope
-	Error MemoryError `json:"error"`
+	Error AgentHistoryError `json:"error"`
 }

@@ -8,12 +8,12 @@ large dependency footprint.
 
 ## API
 
-`MemoryClient.local()` exposes typed Java 11 response classes for:
+`AgentHistoryClient.local()` exposes typed Java 11 response classes for:
 
 - `status()` -> `StatusResponse`
 - `init(InitOptions)` -> `InitResponse`
 - `sources()` -> `SourcesResponse`
-- `importMemory(ImportOptions)` / `sync(ImportOptions)` -> `ImportResponse`
+- `importHistory(ImportOptions)` / `sync(ImportOptions)` -> `ImportResponse`
 - `search(SearchOptions)` -> `SearchResponse`
 - `showEvent(String, ShowEventOptions)` -> `ShowEventResponse`
 - `showSession(String, ShowSessionOptions)` -> `ShowSessionResponse`
@@ -21,12 +21,12 @@ large dependency footprint.
 - `locateSession(String)` -> `LocateSessionResponse`
 - `version()` -> `VersionInfo`
 
-All data responses extend `MemoryEnvelope`, with `contractVersion`,
+All data responses extend `AgentHistoryEnvelope`, with `contractVersion`,
 `schemaVersion`, `operation`, backend metadata, `asMap()`, and operation payload
 access. Local mode shells out to the `ctx` CLI and performs no network calls or
 provider API calls.
 
-Hosted configuration is present as `MemoryClient.hosted(HostedConfig)` and
+Hosted configuration is present as `AgentHistoryClient.hosted(HostedConfig)` and
 returns a structured `not_supported` error until a hosted ctx service exists.
 
 ## Example
@@ -35,7 +35,7 @@ returns a structured `not_supported` error until a hosted ctx service exists.
 sdks/jvm/scripts/test
 ```
 
-The test script also compiles and runs `examples/ToyMemoryApp.java`, a fake
+The test script also compiles and runs `examples/ToyAgentHistoryApp.java`, a fake
 transport toy app that exercises `status`, `search`, `showEvent`, and
 `locateEvent` without reading local private history.
 

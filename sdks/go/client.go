@@ -1,4 +1,4 @@
-package ctxmemory
+package ctxagenthistory
 
 import (
 	"context"
@@ -274,7 +274,7 @@ func (c *Client) LocateEvent(ctx context.Context, opts LocateEventOptions) (*Loc
 
 func (c *Client) do(ctx context.Context, op Operation, out any) error {
 	if c.transport == nil {
-		return sdkError(ErrorKindTransportUnavailable, "ctxmemory client has no transport", nil)
+		return sdkError(ErrorKindTransportUnavailable, "ctxagenthistory client has no transport", nil)
 	}
 	payload, err := c.transport.Do(ctx, op)
 	if err != nil {
@@ -294,7 +294,7 @@ func (c *Client) do(ctx context.Context, op Operation, out any) error {
 		if envelope.SchemaVersion != SchemaVersion {
 			return sdkError(ErrorKindUnsupportedSchema, fmt.Sprintf("unsupported ctx schema version %d", envelope.SchemaVersion), nil)
 		}
-		if want := OperationName(memoryOperationName(op.Name)); envelope.Operation != want {
+		if want := OperationName(agentHistoryOperationName(op.Name)); envelope.Operation != want {
 			return sdkError(ErrorKindDecode, fmt.Sprintf("decode %s response: operation was %q", op.Name, envelope.Operation), nil)
 		}
 	}

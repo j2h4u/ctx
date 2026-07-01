@@ -18,12 +18,12 @@ python3 - <<'PY'
 import os
 from pathlib import Path
 
-from ctx_memory import MemoryClient
+from ctx_agent_history import AgentHistoryClient
 
 repo_root = Path(os.environ["REPO_ROOT"])
 fixture = repo_root / "tests" / "fixtures" / "provider-history" / "codex-sessions"
 
-client = MemoryClient.local(
+client = AgentHistoryClient.local(
     ctx_binary=os.environ["CTX_BIN"],
     data_root=os.environ["CTX_DATA_ROOT"],
     env={"CTX_ANALYTICS_OFF": "1"},

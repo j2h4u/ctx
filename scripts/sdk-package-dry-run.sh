@@ -46,7 +46,7 @@ else
 fi
 
 if command -v go >/dev/null 2>&1; then
-  run go list ./sdks/go/...
+  run go -C sdks/go list ./...
 else
   skip "Go module dry-run (go unavailable)"
 fi
@@ -59,12 +59,13 @@ fi
 
 if command -v swift >/dev/null 2>&1; then
   run swift package --package-path sdks/swift describe
+  run swift test --package-path sdks/swift
 else
   skip "Swift package describe (swift unavailable)"
 fi
 
 if command -v dotnet >/dev/null 2>&1; then
-  run dotnet run --project sdks/dotnet/tests/Ctx.Memory.Tests/Ctx.Memory.Tests.csproj
+  run dotnet run --project sdks/dotnet/tests/Ctx.AgentHistory.Tests/Ctx.AgentHistory.Tests.csproj
 else
   skip ".NET pack/test dry-run (dotnet unavailable)"
 fi

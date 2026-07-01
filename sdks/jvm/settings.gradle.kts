@@ -1,2 +1,2 @@
-rootProject.name = "ctx-memory-jvm"
+rootProject.name = "ctx-agent-history-jvm"
 

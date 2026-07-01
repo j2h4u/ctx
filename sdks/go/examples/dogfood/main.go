@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	ctxmemory "github.com/ctxrs/ctx/sdks/go"
+	ctxagenthistory "github.com/ctxrs/ctx/sdks/go"
 )
 
 const (
@@ -31,25 +31,25 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	}
 	fmt.Fprintf(stdout, "status initialized=%t indexedItems=%d\n", status.Status.Initialized, status.Status.IndexedItems)
 
-	initResult, err := client.Init(ctx, ctxmemory.InitOptions{CatalogOnly: true})
+	initResult, err := client.Init(ctx, ctxagenthistory.InitOptions{CatalogOnly: true})
 	if err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
 	fmt.Fprintf(stdout, "init initialized=%t\n", initResult.Status.Initialized)
 
-	importResult, err := client.Import(ctx, ctxmemory.ImportOptions{Provider: "codex", Resume: true})
+	importResult, err := client.Import(ctx, ctxagenthistory.ImportOptions{Provider: "codex", Resume: true})
 	if err != nil {
 		return fmt.Errorf("import: %w", err)
 	}
 	fmt.Fprintf(stdout, "import sessions=%d\n", importResult.Import.Totals.ImportedSessions)
 
-	syncResult, err := client.Sync(ctx, ctxmemory.ImportOptions{All: true})
+	syncResult, err := client.Sync(ctx, ctxagenthistory.ImportOptions{All: true})
 	if err != nil {
 		return fmt.Errorf("sync: %w", err)
 	}
 	fmt.Fprintf(stdout, "sync events=%d\n", syncResult.Import.Totals.ImportedEvents)
 
-	search, err := client.Search(ctx, ctxmemory.SearchOptions{
+	search, err := client.Search(ctx, ctxagenthistory.SearchOptions{
 		Query:   "local agent history",
 		Limit:   5,
 		Refresh: "off",
@@ -73,7 +73,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 		return fmt.Errorf("show/locate require CTX_EXAMPLE_SESSION_ID when using a real ctx binary with no search hits")
 	}
 
-	show, err := client.ShowEvent(ctx, ctxmemory.ShowEventOptions{ID: eventID, Before: 1, After: 1})
+	show, err := client.ShowEvent(ctx, ctxagenthistory.ShowEventOptions{ID: eventID, Before: 1, After: 1})
 	if err != nil {
 		return fmt.Errorf("show event: %w", err)
 	}
@@ -81,13 +81,13 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 		fmt.Fprintf(stdout, "show event=%s sequence=%d\n", show.Event.Event.CtxEventID, show.Event.Event.Sequence)
 	}
 
-	session, err := client.ShowSession(ctx, ctxmemory.ShowSessionOptions{ID: sessionID, Mode: "lite"})
+	session, err := client.ShowSession(ctx, ctxagenthistory.ShowSessionOptions{ID: sessionID, Mode: "lite"})
 	if err != nil {
 		return fmt.Errorf("show session: %w", err)
 	}
 	fmt.Fprintf(stdout, "show session events=%d mode=%s\n", len(session.Session.Events), session.Session.Mode)
 
-	locate, err := client.LocateEvent(ctx, ctxmemory.LocateEventOptions{ID: eventID})
+	locate, err := client.LocateEvent(ctx, ctxagenthistory.LocateEventOptions{ID: eventID})
 	if err != nil {
 		return fmt.Errorf("locate event: %w", err)
 	}
@@ -95,7 +95,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 		fmt.Fprintf(stdout, "locate provider=%s cursor=%s\n", locate.Location.Provider, locate.Location.Source.Cursor)
 	}
 
-	sessionLocation, err := client.LocateSession(ctx, ctxmemory.LocateSessionOptions{ID: sessionID})
+	sessionLocation, err := client.LocateSession(ctx, ctxagenthistory.LocateSessionOptions{ID: sessionID})
 	if err != nil {
 		return fmt.Errorf("locate session: %w", err)
 	}
@@ -106,26 +106,26 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	return nil
 }
 
-func newClient(getenv func(string) string) (*ctxmemory.Client, string, string) {
+func newClient(getenv func(string) string) (*ctxagenthistory.Client, string, string) {
 	if path := getenv("CTX_EXAMPLE_CTX_PATH"); path != "" {
-		options := []ctxmemory.LocalCLIOption{ctxmemory.WithCLIPath(path)}
+		options := []ctxagenthistory.LocalCLIOption{ctxagenthistory.WithCLIPath(path)}
 		if dataRoot := getenv("CTX_EXAMPLE_DATA_ROOT"); dataRoot != "" {
-			options = append(options, ctxmemory.WithDataRoot(dataRoot))
+			options = append(options, ctxagenthistory.WithDataRoot(dataRoot))
 		}
-		return ctxmemory.NewLocalClient(options...), getenv("CTX_EXAMPLE_EVENT_ID"), getenv("CTX_EXAMPLE_SESSION_ID")
+		return ctxagenthistory.NewLocalClient(options...), getenv("CTX_EXAMPLE_EVENT_ID"), getenv("CTX_EXAMPLE_SESSION_ID")
 	}
-	return ctxmemory.NewClient(ctxmemory.WithTransport(fakeTransport{})), fixtureEventID, fixtureSessionID
+	return ctxagenthistory.NewClient(ctxagenthistory.WithTransport(fakeTransport{})), fixtureEventID, fixtureSessionID
 }
 
 type fakeTransport struct{}
 
-func (fakeTransport) Do(_ context.Context, op ctxmemory.Operation) ([]byte, error) {
+func (fakeTransport) Do(_ context.Context, op ctxagenthistory.Operation) ([]byte, error) {
 	if op.Name == "version" {
 		return []byte("ctx dogfood"), nil
 	}
 	envelope := map[string]any{
-		"contractVersion": ctxmemory.APIVersion,
-		"schemaVersion":   ctxmemory.SchemaVersion,
+		"contractVersion": ctxagenthistory.APIVersion,
+		"schemaVersion":   ctxagenthistory.SchemaVersion,
 		"operation":       operationName(op.Name),
 		"backend": map[string]any{
 			"kind":     "local",

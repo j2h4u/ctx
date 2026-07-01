@@ -1,4 +1,4 @@
-package ctxmemory
+package ctxagenthistory
 
 import (
 	"encoding/json"
@@ -16,7 +16,7 @@ func normalizePayload(op Operation, payload []byte) ([]byte, error) {
 		}
 	}
 
-	operation := memoryOperationName(op.Name)
+	operation := agentHistoryOperationName(op.Name)
 	envelope := map[string]any{
 		"contractVersion": APIVersion,
 		"schemaVersion":   SchemaVersion,
@@ -58,7 +58,7 @@ func normalizePayload(op Operation, payload []byte) ([]byte, error) {
 	return json.Marshal(envelope)
 }
 
-func memoryOperationName(name string) string {
+func agentHistoryOperationName(name string) string {
 	switch name {
 	case "show_event":
 		return "showEvent"

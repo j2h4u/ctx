@@ -13,11 +13,11 @@ import (
 	"fmt"
 	"log"
 
-	ctxmemory "github.com/ctxrs/ctx/sdks/go"
+	ctxagenthistory "github.com/ctxrs/ctx/sdks/go"
 )
 
 func main() {
-	client := ctxmemory.NewLocalClient()
+	client := ctxagenthistory.NewLocalClient()
 
 	status, err := client.Status(context.Background())
 	if err != nil {
@@ -51,9 +51,9 @@ Version constants:
 ## Local CLI
 
 ```go
-client := ctxmemory.NewLocalClient(
-	ctxmemory.WithCLIPath("/usr/local/bin/ctx"),
-	ctxmemory.WithDataRoot("/tmp/ctx-data"),
+client := ctxagenthistory.NewLocalClient(
+	ctxagenthistory.WithCLIPath("/usr/local/bin/ctx"),
+	ctxagenthistory.WithDataRoot("/tmp/ctx-data"),
 )
 ```
 
@@ -63,8 +63,8 @@ JSON into `agent-history-v1` wrappers with `contractVersion` and `schemaVersion`
 
 ## Errors
 
-SDK calls return `*ctxmemory.Error` for structured failures. Use
-`ctxmemory.IsErrorKind(err, ctxmemory.ErrorKindCommandFailed)` when branching on
+SDK calls return `*ctxagenthistory.Error` for structured failures. Use
+`ctxagenthistory.IsErrorKind(err, ctxagenthistory.ErrorKindCommandFailed)` when branching on
 failure classes.
 
 ## Hosted Placeholder

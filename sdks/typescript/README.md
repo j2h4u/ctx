@@ -5,13 +5,13 @@ The SDK currently talks to a local `ctx` CLI binary and does not require network
 access or API keys.
 
 ```js
-import { createLocalMemoryClient } from "@ctx/memory";
+import { createLocalAgentHistoryClient } from "@ctx/agent-history";
 
-const memory = createLocalMemoryClient({ dataRoot: "/tmp/ctx" });
+const client = createLocalAgentHistoryClient({ dataRoot: "/tmp/ctx" });
 
-await memory.init();
-const status = await memory.status();
-const results = await memory.search("sqlite storage", { refresh: "off" });
+await client.init();
+const status = await client.status();
+const results = await client.search("sqlite storage", { refresh: "off" });
 ```
 
 ## API
@@ -47,7 +47,7 @@ Set `CTX_SDK_EXAMPLE_CTX_PATH` to point it at a real `ctx` binary instead.
 ## Local CLI Adapter
 
 ```js
-import { LocalCliAdapter, LocalMemoryClient } from "@ctx/memory";
+import { LocalCliAdapter, LocalAgentHistoryClient } from "@ctx/agent-history";
 
 const adapter = new LocalCliAdapter({
   ctxPath: "ctx",
@@ -55,16 +55,16 @@ const adapter = new LocalCliAdapter({
   timeoutMs: 60_000,
 });
 
-const memory = new LocalMemoryClient({ adapter });
+const client = new LocalAgentHistoryClient({ adapter });
 ```
 
 For tests, pass a `runner` function to `LocalCliAdapter` or
-`createLocalMemoryClient`. The runner receives `{ command, args, cwd, env,
+`createLocalAgentHistoryClient`. The runner receives `{ command, args, cwd, env,
 timeoutMs }` and returns `{ exitCode, stdout, stderr }`.
 
 ## Hosted Placeholder
 
-`createHostedMemoryClient()` and `createMemoryClient({ hosted: true })` reserve
+`createHostedAgentHistoryClient()` and `createAgentHistoryClient({ hosted: true })` reserve
 the future hosted transport shape. Any data method rejects with
 `CtxUnsupportedError` until ctx exposes a hosted agent-history-v1 service.
 

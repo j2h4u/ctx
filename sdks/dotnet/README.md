@@ -1,4 +1,4 @@
-# ctx Memory SDK for .NET
+# ctx Agent History SDK for .NET
 
 Experimental C# SDK for the `agent-history-v1` ctx contract. The SDK is local-first by
 default: it shells out to the `ctx` CLI, reads JSON from stdout, and wraps the
@@ -10,18 +10,18 @@ service. Hosted operations currently throw a structured `not_supported` error.
 
 ## Projects
 
-- `src/Ctx.Memory/Ctx.Memory.csproj` - SDK library, no NuGet publishing config.
-- `tests/Ctx.Memory.Tests/Ctx.Memory.Tests.csproj` - dependency-free console
+- `src/Ctx.AgentHistory/Ctx.AgentHistory.csproj` - SDK library, no NuGet publishing config.
+- `tests/Ctx.AgentHistory.Tests/Ctx.AgentHistory.Tests.csproj` - dependency-free console
   smoke tests.
-- `examples/LocalMemorySmoke/LocalMemorySmoke.csproj` - offline dogfood toy app
+- `examples/LocalAgentHistorySmoke/LocalAgentHistorySmoke.csproj` - offline dogfood toy app
   that exercises status/search/show/locate with a fake transport by default.
 
 ## Usage
 
 ```csharp
-using Ctx.Memory;
+using Ctx.AgentHistory;
 
-var client = MemoryClient.Local(new LocalMemoryConfig
+var client = AgentHistoryClient.Local(new LocalAgentHistoryConfig
 {
     DataRoot = "/tmp/ctx-data",
     Timeout = TimeSpan.FromSeconds(30)
@@ -29,7 +29,7 @@ var client = MemoryClient.Local(new LocalMemoryConfig
 
 var status = await client.StatusAsync();
 var sources = await client.SourcesAsync();
-var imported = await client.ImportMemoryAsync(new ImportOptions
+var imported = await client.ImportHistoryAsync(new ImportOptions
 {
     Provider = "codex",
     Resume = true
@@ -53,7 +53,7 @@ Console.WriteLine(results.ToJsonObject().ToJsonString());
 - `StatusAsync()`
 - `InitAsync(InitOptions?)`
 - `SourcesAsync()`
-- `ImportMemoryAsync(ImportOptions?)`
+- `ImportHistoryAsync(ImportOptions?)`
 - `SyncAsync(ImportOptions?)`
 - `SearchAsync(SearchOptions?)`
 - `ShowEventAsync(string, ShowEventOptions?)`
@@ -65,13 +65,13 @@ Console.WriteLine(results.ToJsonObject().ToJsonString());
 - `VersionAsync()`
 - `VersioningAsync()`
 
-Memory operations return hand-written response records/classes such as
+Agent history operations return hand-written response records/classes such as
 `StatusResponse`, `SearchResponse`, `ShowEventResponse`, and
 `LocateSessionResponse`. Each response exposes typed properties for stable
 agent-history-v1 fields and `ToJsonObject()` for the canonical envelope, so unknown
 future fields remain additive and accessible. SDK failures derive from
-`CtxMemoryException` and expose `Code`, `Retryable`, `Details`, and
-`ToMemoryError()`.
+`CtxAgentHistoryException` and expose `Code`, `Retryable`, `Details`, and
+`ToAgentHistoryError()`.
 
 ## Local CLI Adapter
 
@@ -87,7 +87,7 @@ future fields remain additive and accessible. SDK failures derive from
 - `ctx locate event ... --format json`
 - `ctx locate session ... --format json`
 
-Set `LocalMemoryConfig.CtxBinary`, `DataRoot`, `WorkingDirectory`,
+Set `LocalAgentHistoryConfig.CtxBinary`, `DataRoot`, `WorkingDirectory`,
 `Environment`, or `Timeout` to control command execution.
 
 ## Tests
@@ -95,14 +95,14 @@ Set `LocalMemoryConfig.CtxBinary`, `DataRoot`, `WorkingDirectory`,
 When the .NET SDK is installed:
 
 ```bash
-dotnet build sdks/dotnet/src/Ctx.Memory/Ctx.Memory.csproj
-dotnet run --project sdks/dotnet/tests/Ctx.Memory.Tests/Ctx.Memory.Tests.csproj
-dotnet run --project sdks/dotnet/examples/LocalMemorySmoke/LocalMemorySmoke.csproj
+dotnet build sdks/dotnet/src/Ctx.AgentHistory/Ctx.AgentHistory.csproj
+dotnet run --project sdks/dotnet/tests/Ctx.AgentHistory.Tests/Ctx.AgentHistory.Tests.csproj
+dotnet run --project sdks/dotnet/examples/LocalAgentHistorySmoke/LocalAgentHistorySmoke.csproj
 ```
 
 The test project uses the shared fixtures under `contracts/agent-history-v1/fixtures`
 and does not require a NuGet test framework.
 
-`LocalMemorySmoke` uses an in-process fake transport unless `CTX_MEMORY_CTX` is
-set to a local `ctx` binary path. Optional `CTX_MEMORY_DATA_ROOT` controls the
+`LocalAgentHistorySmoke` uses an in-process fake transport unless `CTX_AGENT_HISTORY_CTX` is
+set to a local `ctx` binary path. Optional `CTX_AGENT_HISTORY_DATA_ROOT` controls the
 data root for the env-configured local CLI mode.

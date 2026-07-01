@@ -1,4 +1,4 @@
-package ctxmemory
+package ctxagenthistory
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	// APIVersion identifies the ctx memory contract implemented by this SDK.
+	// APIVersion identifies the ctx agent history contract implemented by this SDK.
 	APIVersion = "agent-history-v1"
 
 	// SchemaVersion is the JSON schema version emitted by ctx agent-history-v1 commands.
@@ -34,7 +34,7 @@ func (c *Client) Version(ctx context.Context) (*VersionInfo, error) {
 		Transport:     "custom",
 	}
 	if c.transport == nil {
-		return nil, sdkError(ErrorKindTransportUnavailable, "ctxmemory client has no transport", nil)
+		return nil, sdkError(ErrorKindTransportUnavailable, "ctxagenthistory client has no transport", nil)
 	}
 	payload, err := c.transport.Do(ctx, Operation{Name: "version", Args: []string{"--version"}})
 	if err != nil {
