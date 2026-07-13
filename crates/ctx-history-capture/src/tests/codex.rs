@@ -1317,6 +1317,65 @@ fn codex_session_tail_rejects_malformed_append_atomically() {
 }
 
 #[test]
+fn codex_session_tail_preserves_runtime_user() {
+    let temp = tempdir();
+    let path = temp.path().join("tail-runtime-user-codex.jsonl");
+    let initial = [
+        jsonl_line(json!({
+            "timestamp": "2026-07-13T10:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": "codex-tail-runtime-user", "timestamp": "2026-07-13T10:00:00Z", "cwd": "/workspace", "originator": "codex-cli"}
+        })),
+        jsonl_line(json!({
+            "timestamp": "2026-07-13T10:00:01Z",
+            "type": "response_item",
+            "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "initial runtime user event"}]}
+        })),
+    ]
+    .concat();
+    fs::write(&path, &initial).unwrap();
+    let tail_start = initial.len() as u64;
+    let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+    let options = CodexSessionImportOptions {
+        runtime_user: Some("alice".to_owned()),
+        imported_at: "2026-07-13T10:30:00Z".parse().unwrap(),
+        ..CodexSessionImportOptions::default()
+    };
+    import_codex_session_jsonl(&path, &mut store, options.clone()).unwrap();
+
+    fs::write(
+        &path,
+        [
+            initial,
+            jsonl_line(json!({
+                "timestamp": "2026-07-13T10:00:02Z",
+                "type": "response_item",
+                "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "tailed runtime user event"}]}
+            })),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let summary = import_codex_session_jsonl_tail(&path, tail_start, &mut store, options).unwrap();
+    assert_eq!(summary.failed, 0, "{:?}", summary.failures);
+
+    let conn = Connection::open(temp.path().join("work.sqlite")).unwrap();
+    let runtime_user: Option<String> = conn
+        .query_row("SELECT runtime_user FROM capture_sources", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(runtime_user.as_deref(), Some("alice"));
+    let sessions = store.list_sessions().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(
+        store.events_for_session(sessions[0].id).unwrap().len(),
+        2,
+        "tail events must remain in the runtime-user-scoped session"
+    );
+}
+
+#[test]
 fn codex_session_tail_skips_oversized_required_header_without_failure() {
     let temp = tempdir();
     let path = temp.path().join("tail-oversized-header-codex.jsonl");

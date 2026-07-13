@@ -72,7 +72,7 @@ fn native_import_passes_runtime_user_to_capture_source() {
             "--path",
             brain.to_str().unwrap(),
             "--runtime-user",
-            "root",
+            "alice",
             "--no-daemon",
             "--progress",
             "none",
@@ -86,14 +86,14 @@ fn native_import_passes_runtime_user_to_capture_source() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(runtime_user.as_deref(), Some("root"));
+    assert_eq!(runtime_user.as_deref(), Some("alice"));
 }
 
 #[test]
 fn explicit_codex_session_import_preserves_runtime_user_provenance() {
     let temp = tempdir();
     let sessions = PathBuf::from(provider_history_fixture("codex-sessions"));
-    let session = sessions.join("2026/06/23/root.jsonl");
+    let session = sessions.join("2026/06/23/alice.jsonl");
 
     ctx(&temp)
         .args([
@@ -103,7 +103,7 @@ fn explicit_codex_session_import_preserves_runtime_user_provenance() {
             "--path",
             session.to_str().unwrap(),
             "--runtime-user",
-            "root",
+            "alice",
             "--no-daemon",
             "--progress",
             "none",
@@ -114,13 +114,71 @@ fn explicit_codex_session_import_preserves_runtime_user_provenance() {
     let conn = Connection::open(temp.path().join("work.sqlite")).unwrap();
     let (runtime_user, source_identity): (Option<String>, String) = conn
         .query_row(
-            "SELECT runtime_user, source_identity FROM capture_sources WHERE runtime_user = 'root'",
+            "SELECT runtime_user, source_identity FROM capture_sources WHERE runtime_user = 'alice'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(runtime_user.as_deref(), Some("root"));
-    assert!(source_identity.contains("root"), "{source_identity}");
+    assert_eq!(runtime_user.as_deref(), Some("alice"));
+    assert!(source_identity.contains("alice"), "{source_identity}");
+}
+
+#[test]
+fn codex_directory_import_keeps_runtime_user_observations_separate() {
+    let temp = tempdir();
+    let sessions = temp.path().join("codex-sessions/2026/07/13");
+    fs::create_dir_all(&sessions).unwrap();
+    let session = sessions.join("rollout-2026-07-13T10-00-00-runtime-user.jsonl");
+    fs::write(
+        &session,
+        concat!(
+            r#"{"timestamp":"2026-07-13T10:00:00Z","type":"session_meta","payload":{"id":"runtime-user-shared-session","timestamp":"2026-07-13T10:00:00Z","cwd":"/workspace","originator":"codex-cli"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-07-13T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"*** Begin Patch\n*** Update File: src/runtime_user.rs\n@@\n-old\n+new\n*** End Patch"}]}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    for runtime_user in ["alice", "bob"] {
+        ctx(&temp)
+            .args([
+                "import",
+                "--provider",
+                "codex",
+                "--path",
+                sessions
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                "--runtime-user",
+                runtime_user,
+                "--no-daemon",
+                "--progress",
+                "none",
+            ])
+            .assert()
+            .success();
+    }
+
+    let conn = Connection::open(temp.path().join("work.sqlite")).unwrap();
+    for (table, expected) in [
+        ("capture_sources", 2),
+        ("sessions", 2),
+        ("files_touched", 2),
+        ("events", 1),
+        ("event_observations", 2),
+    ] {
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, expected, "{table}");
+    }
 }
 
 fn write_antigravity_valid_and_malformed_file_tree(temp: &TempDir) -> PathBuf {
