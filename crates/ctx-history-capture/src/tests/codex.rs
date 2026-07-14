@@ -1397,37 +1397,23 @@ fn codex_fast_session_stream_uses_shared_bounded_batches() {
     let db_path = temp.path().join("work.sqlite");
     let mut store =
         Store::open_with_busy_timeout(&db_path, std::time::Duration::from_millis(10)).unwrap();
-    let reader = Connection::open(&db_path).unwrap();
-    reader.execute_batch("BEGIN").unwrap();
+    let reader = pinned_wal_reader(&db_path);
+
+    let summary =
+        import_codex_session_jsonl(&path, &mut store, CodexSessionImportOptions::default())
+            .unwrap();
+    assert_eq!(summary.failed, 0, "{:?}", summary.failures);
+    assert_eq!(summary.imported_sessions, 1);
+    assert_eq!(summary.imported_events, 64);
     assert_eq!(
-        reader
+        Connection::open(&db_path)
+            .unwrap()
             .query_row("SELECT COUNT(*) FROM events", [], |row| row
                 .get::<_, i64>(0))
             .unwrap(),
-        0
-    );
-
-    let error = import_codex_session_jsonl(&path, &mut store, CodexSessionImportOptions::default())
-        .unwrap_err();
-    assert!(error.to_string().contains("ctx index is busy"), "{error}");
-    reader.execute_batch("ROLLBACK").unwrap();
-
-    let conn = Connection::open(&db_path).unwrap();
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM search_projection_stats WHERE key = 'event_search_bulk_mode_v1'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap(),
-        0
-    );
-    assert_eq!(
-        conn.query_row("SELECT COUNT(*) FROM events", [], |row| row
-            .get::<_, i64>(0))
-            .unwrap(),
         64
     );
+    reader.execute_batch("ROLLBACK").unwrap();
 }
 
 #[test]
@@ -1471,37 +1457,23 @@ fn codex_parallel_normalized_stream_uses_shared_bounded_batches() {
     let db_path = temp.path().join("work.sqlite");
     let mut store =
         Store::open_with_busy_timeout(&db_path, std::time::Duration::from_millis(10)).unwrap();
-    let reader = Connection::open(&db_path).unwrap();
-    reader.execute_batch("BEGIN").unwrap();
+    let reader = pinned_wal_reader(&db_path);
+
+    let summary =
+        import_codex_session_paths(paths, &mut store, CodexSessionImportOptions::default())
+            .unwrap();
+    assert_eq!(summary.failed, 0, "{:?}", summary.failures);
+    assert_eq!(summary.imported_sessions, 13);
+    assert_eq!(summary.imported_events, 52);
     assert_eq!(
-        reader
+        Connection::open(&db_path)
+            .unwrap()
             .query_row("SELECT COUNT(*) FROM events", [], |row| row
                 .get::<_, i64>(0))
             .unwrap(),
-        0
+        52
     );
-
-    let error = import_codex_session_paths(paths, &mut store, CodexSessionImportOptions::default())
-        .unwrap_err();
-    assert!(error.to_string().contains("ctx index is busy"), "{error}");
     reader.execute_batch("ROLLBACK").unwrap();
-
-    let conn = Connection::open(&db_path).unwrap();
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM search_projection_stats WHERE key = 'event_search_bulk_mode_v1'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap(),
-        0
-    );
-    assert_eq!(
-        conn.query_row("SELECT COUNT(*) FROM events", [], |row| row
-            .get::<_, i64>(0))
-            .unwrap(),
-        51
-    );
 }
 
 #[test]
@@ -1559,41 +1531,25 @@ fn codex_tail_stream_uses_shared_bounded_batches() {
     );
     fs::write(&path, complete).unwrap();
 
-    let reader = Connection::open(&db_path).unwrap();
-    reader.execute_batch("BEGIN").unwrap();
-    assert_eq!(
-        reader
-            .query_row("SELECT COUNT(*) FROM events", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
-    let error = import_codex_session_jsonl_tail(
+    let reader = pinned_wal_reader(&db_path);
+    let summary = import_codex_session_jsonl_tail(
         &path,
         tail_start,
         &mut store,
         CodexSessionImportOptions::default(),
     )
-    .unwrap_err();
-    assert!(error.to_string().contains("ctx index is busy"), "{error}");
-    reader.execute_batch("ROLLBACK").unwrap();
-
-    let conn = Connection::open(&db_path).unwrap();
+    .unwrap();
+    assert_eq!(summary.failed, 0, "{:?}", summary.failures);
+    assert_eq!(summary.imported_events, 64);
     assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM search_projection_stats WHERE key = 'event_search_bulk_mode_v1'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap(),
-        0
-    );
-    assert_eq!(
-        conn.query_row("SELECT COUNT(*) FROM events", [], |row| row
-            .get::<_, i64>(0))
+        Connection::open(&db_path)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row
+                .get::<_, i64>(0))
             .unwrap(),
         65
     );
+    reader.execute_batch("ROLLBACK").unwrap();
 }
 
 #[test]

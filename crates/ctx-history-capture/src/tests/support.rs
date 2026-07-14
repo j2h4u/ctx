@@ -103,6 +103,28 @@ pub(super) fn tempdir() -> TempDir {
         .unwrap()
 }
 
+pub(super) fn pinned_wal_reader(db_path: &Path) -> Connection {
+    let writer = Connection::open(db_path).unwrap();
+    writer
+        .execute_batch(
+            "CREATE TABLE checkpoint_pin_probe(value INTEGER); INSERT INTO checkpoint_pin_probe VALUES (1);",
+        )
+        .unwrap();
+    drop(writer);
+
+    let reader = Connection::open(db_path).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    assert_eq!(
+        reader
+            .query_row("SELECT COUNT(*) FROM checkpoint_pin_probe", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        1
+    );
+    reader
+}
+
 #[test]
 fn test_tempdir_has_no_symlinked_parent_components() {
     let temp = tempdir();

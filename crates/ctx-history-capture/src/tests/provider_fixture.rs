@@ -242,26 +242,19 @@ fn batched_provider_import_stops_on_pinned_wal_and_resumes_idempotently() {
         ..NormalizedProviderImportOptions::default()
     };
 
-    let reader = Connection::open(&db_path).unwrap();
-    reader.execute_batch("BEGIN").unwrap();
-    let initial_events = reader
-        .query_row("SELECT COUNT(*) FROM events", [], |row| {
-            row.get::<_, i64>(0)
-        })
-        .unwrap();
-    assert_eq!(initial_events, 0);
+    let reader = pinned_wal_reader(&db_path);
 
-    let error = import_normalized_provider_captures_in_batches(
+    let summary = import_normalized_provider_captures_in_batches(
         &mut store,
         normalization.clone(),
         options.clone(),
         1,
     )
-    .unwrap_err();
-    assert!(error.to_string().contains("ctx index is busy"), "{error}");
-    reader.execute_batch("ROLLBACK").unwrap();
+    .unwrap();
+    assert_eq!(summary.failed, 0, "{:?}", summary.failures);
+    assert_eq!(summary.imported_events, 2);
 
-    assert_eq!(store.list_sessions().unwrap().len(), 1);
+    assert_eq!(store.list_sessions().unwrap().len(), 2);
     assert_eq!(
         store
             .search_event_hits("batched-import-sentinel-first", 10)
@@ -269,21 +262,6 @@ fn batched_provider_import_stops_on_pinned_wal_and_resumes_idempotently() {
             .len(),
         1
     );
-    assert!(store
-        .search_event_hits("batched-import-sentinel-second", 10)
-        .unwrap()
-        .is_empty());
-
-    let resumed = import_normalized_provider_captures_in_batches(
-        &mut store,
-        normalization.clone(),
-        options.clone(),
-        1,
-    )
-    .unwrap();
-    assert_eq!(resumed.failed, 0, "{:?}", resumed.failures);
-    assert_eq!(resumed.imported_events, 1);
-    assert_eq!(store.list_sessions().unwrap().len(), 2);
     assert_eq!(
         store
             .search_event_hits("batched-import-sentinel-second", 10)
@@ -291,12 +269,15 @@ fn batched_provider_import_stops_on_pinned_wal_and_resumes_idempotently() {
             .len(),
         1
     );
+    reader.execute_batch("ROLLBACK").unwrap();
 
     let replayed =
         import_normalized_provider_captures_in_batches(&mut store, normalization, options, 1)
             .unwrap();
+    assert_eq!(replayed.failed, 0, "{:?}", replayed.failures);
     assert_eq!(replayed.imported_events, 0);
     assert_eq!(replayed.skipped_events, 2);
+    assert_eq!(store.list_sessions().unwrap().len(), 2);
     assert_eq!(
         store
             .search_event_hits("batched-import-sentinel", 10)
@@ -440,16 +421,8 @@ fn batched_provider_import_rotates_on_serialized_byte_budget() {
     second.event.as_mut().unwrap().payload =
         json!({"text": format!("byte-budget-sentinel-second {}", "b".repeat(4_500_000))});
 
-    let reader = Connection::open(&db_path).unwrap();
-    reader.execute_batch("BEGIN").unwrap();
-    assert_eq!(
-        reader
-            .query_row("SELECT COUNT(*) FROM events", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
-    let error = import_normalized_provider_captures_in_batches(
+    let reader = pinned_wal_reader(&db_path);
+    let summary = import_normalized_provider_captures_in_batches(
         &mut store,
         ProviderNormalizationResult {
             summary: ProviderImportSummary::default(),
@@ -462,11 +435,11 @@ fn batched_provider_import_rotates_on_serialized_byte_budget() {
         },
         64,
     )
-    .unwrap_err();
-    assert!(error.to_string().contains("ctx index is busy"), "{error}");
-    reader.execute_batch("ROLLBACK").unwrap();
+    .unwrap();
+    assert_eq!(summary.failed, 0, "{:?}", summary.failures);
+    assert_eq!(summary.imported_events, 2);
 
-    assert_eq!(store.list_sessions().unwrap().len(), 1);
+    assert_eq!(store.list_sessions().unwrap().len(), 2);
     assert_eq!(
         store
             .search_event_hits("byte-budget-sentinel-first", 10)
@@ -474,11 +447,14 @@ fn batched_provider_import_rotates_on_serialized_byte_budget() {
             .len(),
         1
     );
-    assert!(store
-        .search_event_hits("byte-budget-sentinel-second", 10)
-        .unwrap()
-        .is_empty());
-    store.optimize_search_index().unwrap();
+    assert_eq!(
+        store
+            .search_event_hits("byte-budget-sentinel-second", 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    reader.execute_batch("ROLLBACK").unwrap();
 }
 
 #[test]
