@@ -160,6 +160,17 @@ impl Store {
     /// the marker records the remaining work for a later writable open. A
     /// quiescent pass restores the saved settings and clears that marker.
     pub fn defer_event_search_bulk_mode(&self, guard: &EventSearchBulkGuard) -> Result<()> {
+        self.defer_event_search_bulk_mode_with(guard, || self.maintain_event_search_bulk_mode())
+    }
+
+    fn defer_event_search_bulk_mode_with<F>(
+        &self,
+        guard: &EventSearchBulkGuard,
+        maintain: F,
+    ) -> Result<()>
+    where
+        F: FnOnce() -> Result<()>,
+    {
         if guard.store_path != self.path {
             return Err(StoreError::InvalidBulkSearchGuard);
         }
@@ -169,8 +180,11 @@ impl Store {
         if guard.depth_counted && guard.depth.load(Ordering::SeqCst) != 1 {
             return Err(StoreError::InvalidBulkSearchGuard);
         }
-        let _ = self.maintain_event_search_bulk_mode();
-        Ok(())
+        match maintain() {
+            Ok(()) => Ok(()),
+            Err(error) if is_recoverable_bulk_maintenance_error(&error) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Perform one bounded merge-and-checkpoint maintenance pass.
@@ -390,6 +404,58 @@ impl Store {
             Err(err) if sqlite_is_busy(&err) => Ok(None),
             Err(err) => Err(err.into()),
         }
+    }
+}
+
+/// Whether a bulk-maintenance failure is temporary pressure that can safely
+/// remain marked for a later bounded retry.
+pub fn is_recoverable_bulk_maintenance_error(error: &StoreError) -> bool {
+    match error {
+        StoreError::WalCheckpointBusy { .. } | StoreError::BulkSearchImportBusy => true,
+        StoreError::Sql(rusqlite::Error::SqliteFailure(failure, _)) => matches!(
+            failure.code,
+            ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked | ErrorCode::DiskFull
+        ),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn deferred_maintenance_propagates_fatal_errors() {
+        let temp = tempdir().unwrap();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let guard = store.begin_event_search_bulk_mode().unwrap();
+
+        let error = store
+            .defer_event_search_bulk_mode_with(&guard, || {
+                Err(StoreError::Sql(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
+                    None,
+                )))
+            })
+            .unwrap_err();
+        assert!(matches!(error, StoreError::Sql(_)));
+    }
+
+    #[test]
+    fn deferred_maintenance_suppresses_temporary_pressure() {
+        let temp = tempdir().unwrap();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let guard = store.begin_event_search_bulk_mode().unwrap();
+
+        store
+            .defer_event_search_bulk_mode_with(&guard, || {
+                Err(StoreError::WalCheckpointBusy {
+                    log_frames: 2,
+                    checkpointed_frames: 1,
+                })
+            })
+            .unwrap();
     }
 }
 

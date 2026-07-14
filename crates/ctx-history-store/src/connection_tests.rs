@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::{connection::is_recoverable_bulk_maintenance_error, Store, StoreError};
+use crate::{is_recoverable_bulk_maintenance_error, Store, StoreError};
 
 fn tempdir() -> tempfile::TempDir {
     tempfile::Builder::new()

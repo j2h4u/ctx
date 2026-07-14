@@ -20,7 +20,7 @@ mod sync;
 mod vcs;
 
 pub use archive::validate_archive_version;
-pub use bulk_search::EventSearchBulkGuard;
+pub use bulk_search::{is_recoverable_bulk_maintenance_error, EventSearchBulkGuard};
 pub use catalog::{
     CatalogCounts, CatalogIndexedStatus, CatalogSession, CatalogSourceIndexState,
     CatalogSourceIndexUpdate, IndexedHistoryCounts, SourceImportFile, SourceImportFileCounts,

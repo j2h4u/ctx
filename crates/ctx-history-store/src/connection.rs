@@ -6,14 +6,14 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, ErrorCode, OpenFlags};
+use rusqlite::{Connection, OpenFlags};
 use uuid::Uuid;
 
 use crate::object_store::{
     migrate_legacy_history_layout, restrict_private_dir, restrict_private_file, OBJECTS_DIR,
     SPOOL_DIR,
 };
-use crate::{Result, Store, StoreError, SCHEMA_VERSION};
+use crate::{is_recoverable_bulk_maintenance_error, Result, Store, StoreError, SCHEMA_VERSION};
 
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_millis(30_000);
 
@@ -211,17 +211,6 @@ impl Store {
             ));
         }
         Ok(findings)
-    }
-}
-
-pub(crate) fn is_recoverable_bulk_maintenance_error(error: &StoreError) -> bool {
-    match error {
-        StoreError::WalCheckpointBusy { .. } | StoreError::BulkSearchImportBusy => true,
-        StoreError::Sql(rusqlite::Error::SqliteFailure(failure, _)) => matches!(
-            failure.code,
-            ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked | ErrorCode::DiskFull
-        ),
-        _ => false,
     }
 }
 

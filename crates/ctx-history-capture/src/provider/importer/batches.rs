@@ -4,6 +4,7 @@ use std::{
     num::NonZeroUsize,
 };
 
+use ctx_history_store::is_recoverable_bulk_maintenance_error;
 use serde::Serialize;
 
 use super::*;
@@ -376,13 +377,24 @@ impl ProviderImportTransaction {
     }
 
     fn rotate(&mut self, store: &Store) -> Result<()> {
+        self.rotate_with_maintenance(store, || store.maintain_event_search_bulk_mode())
+    }
+
+    fn rotate_with_maintenance<F>(&mut self, store: &Store, maintain: F) -> Result<()>
+    where
+        F: FnOnce() -> ctx_history_store::Result<()>,
+    {
         store.commit_batch()?;
         self.active = false;
         // Keep the enclosing bulk guard active, but bound FTS maintenance to
         // the same 64-unit/8 MiB write cadence. A failed maintenance step
         // leaves its marker for resumable recovery and must not undo this
         // already-committed import batch.
-        let _ = store.maintain_event_search_bulk_mode();
+        if let Err(error) = maintain() {
+            if !is_recoverable_bulk_maintenance_error(&error) {
+                return Err(error.into());
+            }
+        }
         store.checkpoint_wal_truncate_required()?;
         store.begin_immediate_batch()?;
         self.active = true;
@@ -410,5 +422,49 @@ impl ProviderImportTransaction {
             let _ = store.rollback_batch();
             self.active = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn rotation_propagates_fatal_maintenance_errors() {
+        let temp = tempdir().unwrap();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let mut transaction = ProviderImportTransaction::begin_bounded(&store, true).unwrap();
+
+        let error = transaction
+            .rotate_with_maintenance(&store, || {
+                Err(ctx_history_store::StoreError::Sql(
+                    rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
+                        None,
+                    ),
+                ))
+            })
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("database disk image is malformed"));
+    }
+
+    #[test]
+    fn rotation_defers_temporary_maintenance_pressure() {
+        let temp = tempdir().unwrap();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let mut transaction = ProviderImportTransaction::begin_bounded(&store, true).unwrap();
+
+        transaction
+            .rotate_with_maintenance(&store, || {
+                Err(ctx_history_store::StoreError::WalCheckpointBusy {
+                    log_frames: 2,
+                    checkpointed_frames: 1,
+                })
+            })
+            .unwrap();
+        transaction.rollback(&store);
     }
 }
