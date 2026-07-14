@@ -54,7 +54,7 @@ pub(crate) fn import_codex_session_paths_fast(
     let bulk_guard = store.begin_event_search_bulk_mode()?;
     let import_result =
         import_codex_session_paths_fast_bounded(paths, store, &options, skipped_by_bounds);
-    let finish_result = store.finish_event_search_bulk_mode(&bulk_guard);
+    let finish_result = store.defer_event_search_bulk_mode(&bulk_guard);
     match (import_result, finish_result) {
         (Ok(summary), Ok(())) => Ok(summary),
         (_, Err(err)) => Err(err.into()),

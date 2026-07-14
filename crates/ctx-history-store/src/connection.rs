@@ -88,7 +88,11 @@ impl Store {
             event_search_bulk_depth: Default::default(),
         };
         store.migrate()?;
-        store.recover_event_search_bulk_mode()?;
+        // Recovery is opportunistic: a pending bounded FTS merge must never
+        // prevent opening the history store when disk or checkpoint pressure
+        // makes maintenance temporarily impossible. The marker remains and a
+        // later writable open will resume it.
+        let _ = store.recover_event_search_bulk_mode();
         if migrated_legacy_layout {
             store.normalize_legacy_blob_paths()?;
         }

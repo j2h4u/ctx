@@ -153,6 +153,56 @@ impl Store {
         }
     }
 
+    /// Run at most one best-effort maintenance pass, retaining the bulk marker
+    /// and suppressed merge settings for resumable recovery.
+    ///
+    /// Callers drop `guard` after this returns. A maintenance failure is
+    /// deliberately deferred: its committed import data stays searchable and
+    /// the marker records the remaining work for a later writable open.
+    pub fn defer_event_search_bulk_mode(&self, guard: &EventSearchBulkGuard) -> Result<()> {
+        if guard.store_path != self.path {
+            return Err(StoreError::InvalidBulkSearchGuard);
+        }
+        if guard.lock_conn.is_none() {
+            return Ok(());
+        }
+        if guard.depth_counted && guard.depth.load(Ordering::SeqCst) != 1 {
+            return Err(StoreError::InvalidBulkSearchGuard);
+        }
+        let _ = self.maintain_event_search_bulk_mode();
+        Ok(())
+    }
+
+    /// Perform one bounded merge-and-checkpoint maintenance pass without
+    /// restoring the bulk-import settings or clearing the recovery marker.
+    ///
+    /// Importers use this between bounded write transactions. Failure is safe
+    /// to defer: the marker keeps recovery resumable on the next writable open.
+    pub fn maintain_event_search_bulk_mode(&self) -> Result<()> {
+        self.begin_immediate_batch()?;
+        let result = (|| {
+            if !bulk_mode_pending(self)? {
+                return Ok(false);
+            }
+            merge_event_search_tables_in_transaction(self)
+        })();
+        let changed = match result {
+            Ok(changed) => changed,
+            Err(err) => {
+                let _ = self.rollback_batch();
+                return Err(err);
+            }
+        };
+        if let Err(err) = self.commit_batch() {
+            let _ = self.rollback_batch();
+            return Err(err);
+        }
+        if changed {
+            self.checkpoint_wal_truncate_required()?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn recover_event_search_bulk_mode(&self) -> Result<()> {
         // Check and reassert under one writer lock. A guarded importer may
         // restore settings and clear the marker while another connection is

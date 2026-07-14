@@ -460,7 +460,7 @@ pub fn import_codex_session_jsonl_tail(
     let bulk_guard = store.begin_event_search_bulk_mode()?;
     let import_result =
         import_codex_session_jsonl_tail_bounded(path, start_offset, total_bytes, store, &options);
-    let finish_result = store.finish_event_search_bulk_mode(&bulk_guard);
+    let finish_result = store.defer_event_search_bulk_mode(&bulk_guard);
     match (import_result, finish_result) {
         (Ok(summary), Ok(())) => Ok(summary),
         (_, Err(err)) => Err(err.into()),
@@ -783,7 +783,7 @@ pub(crate) fn import_codex_session_paths_parallel_normalized(
         &options,
         skipped_by_bounds,
     );
-    let finish_result = store.finish_event_search_bulk_mode(&bulk_guard);
+    let finish_result = store.defer_event_search_bulk_mode(&bulk_guard);
     match (import_result, finish_result) {
         (Ok(summary), Ok(())) => Ok(summary),
         (_, Err(err)) => Err(err.into()),

@@ -452,3 +452,43 @@ fn interrupted_bounded_merge_resumes_after_reopen() {
         20
     );
 }
+
+#[test]
+fn deferred_bulk_maintenance_keeps_the_marker_and_does_not_block_reopen() {
+    let temp = tempdir();
+    let db_path = temp.path().join("work.sqlite");
+    let store = Store::open_with_busy_timeout(&db_path, Duration::from_millis(10)).unwrap();
+    let guard = store.begin_event_search_bulk_mode().unwrap();
+    insert_bulk_search_events(&store, "deferred-recovery", 20, 512);
+
+    let reader = Connection::open(&db_path).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    assert_eq!(
+        reader
+            .query_row("SELECT COUNT(*) FROM event_search", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        20
+    );
+
+    // The checkpoint can be pinned, but deferred maintenance must leave the
+    // successful import usable and preserve the resumable marker.
+    store.defer_event_search_bulk_mode(&guard).unwrap();
+    assert_eq!(bulk_mode_marker(&store), Some(1));
+    drop(guard);
+    drop(store);
+
+    // Recovery attempts a bounded pass but must not make opening fail while a
+    // reader still pins the WAL.
+    let reopened = Store::open_with_busy_timeout(&db_path, Duration::from_millis(10)).unwrap();
+    assert_eq!(bulk_mode_marker(&reopened), Some(1));
+    assert_eq!(
+        reopened
+            .conn
+            .query_row("SELECT COUNT(*) FROM event_search", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        20
+    );
+    reader.execute_batch("ROLLBACK").unwrap();
+}

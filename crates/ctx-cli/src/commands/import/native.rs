@@ -81,7 +81,7 @@ pub(crate) fn import_one_source_inner(
     let bulk_guard = store.begin_event_search_bulk_mode()?;
     let import_result =
         import_one_source_inner_batched(store, source, progress, full_rescan, preinventory);
-    let finish_result = store.finish_event_search_bulk_mode(&bulk_guard);
+    let finish_result = store.defer_event_search_bulk_mode(&bulk_guard);
     let summary = match (import_result, finish_result) {
         (Ok(summary), Ok(())) => Ok(summary),
         (_, Err(error)) => Err(error.into()),

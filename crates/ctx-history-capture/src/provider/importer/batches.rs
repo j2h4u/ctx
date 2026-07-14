@@ -155,7 +155,7 @@ fn import_provider_capture_lines_with_batch_size(
     );
     let finish_result = match &bulk_search_guard {
         Some(guard) => store
-            .finish_event_search_bulk_mode(guard)
+            .defer_event_search_bulk_mode(guard)
             .map_err(CaptureError::from),
         None => Ok(()),
     };
@@ -378,6 +378,11 @@ impl ProviderImportTransaction {
     fn rotate(&mut self, store: &Store) -> Result<()> {
         store.commit_batch()?;
         self.active = false;
+        // Keep the enclosing bulk guard active, but bound FTS maintenance to
+        // the same 64-unit/8 MiB write cadence. A failed maintenance step
+        // leaves its marker for resumable recovery and must not undo this
+        // already-committed import batch.
+        let _ = store.maintain_event_search_bulk_mode();
         store.checkpoint_wal_truncate_required()?;
         store.begin_immediate_batch()?;
         self.active = true;

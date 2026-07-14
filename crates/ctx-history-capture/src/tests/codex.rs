@@ -1414,6 +1414,15 @@ fn codex_fast_session_stream_uses_shared_bounded_batches() {
 
     let conn = Connection::open(&db_path).unwrap();
     assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM search_projection_stats WHERE key = 'event_search_bulk_mode_v1'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
         conn.query_row("SELECT COUNT(*) FROM events", [], |row| row
             .get::<_, i64>(0))
             .unwrap(),
@@ -1478,6 +1487,15 @@ fn codex_parallel_normalized_stream_uses_shared_bounded_batches() {
     reader.execute_batch("ROLLBACK").unwrap();
 
     let conn = Connection::open(&db_path).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM search_projection_stats WHERE key = 'event_search_bulk_mode_v1'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        1
+    );
     assert_eq!(
         conn.query_row("SELECT COUNT(*) FROM events", [], |row| row
             .get::<_, i64>(0))
@@ -1561,6 +1579,15 @@ fn codex_tail_stream_uses_shared_bounded_batches() {
     reader.execute_batch("ROLLBACK").unwrap();
 
     let conn = Connection::open(&db_path).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM search_projection_stats WHERE key = 'event_search_bulk_mode_v1'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        1
+    );
     assert_eq!(
         conn.query_row("SELECT COUNT(*) FROM events", [], |row| row
             .get::<_, i64>(0))
