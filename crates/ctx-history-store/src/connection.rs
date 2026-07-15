@@ -98,6 +98,9 @@ impl Store {
         if migrated_legacy_layout {
             store.normalize_legacy_blob_paths()?;
         }
+        // A pending projection rebuild may already have committed destructive
+        // batches. Fail open explicitly on pressure instead of serving a
+        // partial index; the durable marker makes the next open retry it.
         store.ensure_search_projection_initialized()?;
         Ok(store)
     }

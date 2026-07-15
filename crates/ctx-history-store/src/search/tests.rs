@@ -6,10 +6,10 @@ use ctx_history_core::{
     new_id, Event, EventRole, EventType, Fidelity, HistoryRecord, SyncMetadata, SyncState,
     Visibility,
 };
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use uuid::Uuid;
 
-use crate::Store;
+use crate::{Store, StoreError};
 
 #[path = "event_query_tests.rs"]
 mod event_query_tests;
@@ -58,6 +58,121 @@ fn local_preview_event(seq: u64, text: &str) -> Event {
         dedupe_key: None,
         sync: sync_metadata(),
     }
+}
+
+#[test]
+fn refresh_search_index_stops_on_pinned_wal_and_restarts_idempotently() {
+    let temp = tempdir();
+    let db_path = temp.path().join("work.sqlite");
+    let store =
+        Store::open_with_busy_timeout(&db_path, std::time::Duration::from_millis(10)).unwrap();
+    for seq in 0..600 {
+        store
+            .upsert_event(&local_preview_event(
+                seq,
+                &format!("bounded-refresh-sentinel-{seq}"),
+            ))
+            .unwrap();
+    }
+
+    let writer = Connection::open(&db_path).unwrap();
+    writer
+        .execute_batch(
+            "CREATE TABLE refresh_checkpoint_pin(value INTEGER); \
+             INSERT INTO refresh_checkpoint_pin VALUES (1);",
+        )
+        .unwrap();
+    drop(writer);
+    let reader = Connection::open(&db_path).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    assert_eq!(
+        reader
+            .query_row("SELECT COUNT(*) FROM refresh_checkpoint_pin", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        1
+    );
+
+    let error = store.refresh_search_index().unwrap_err();
+    assert!(matches!(error, StoreError::WalCheckpointBusy { .. }));
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_projection_stats WHERE key = 'search_projection_rebuild_required_v1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    reader.execute_batch("ROLLBACK").unwrap();
+    drop(reader);
+    drop(store);
+
+    let store = Store::open(&db_path).unwrap();
+    assert_eq!(
+        store
+            .search_event_hits("bounded-refresh-sentinel", 1000)
+            .unwrap()
+            .len(),
+        600
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_projection_stats WHERE key = 'search_projection_rebuild_required_v1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn refresh_search_index_recreates_malformed_event_lookup() {
+    let temp = tempdir();
+    let db_path = temp.path().join("work.sqlite");
+    let store = Store::open(&db_path).unwrap();
+    store
+        .upsert_event(&local_preview_event(1, "recreated-lookup-sentinel"))
+        .unwrap();
+    store
+        .conn
+        .execute_batch(
+            r#"
+            DROP TABLE event_search_lookup;
+            CREATE TABLE event_search_lookup (
+                event_id TEXT PRIMARY KEY NOT NULL,
+                preview_text TEXT NOT NULL,
+                rank_bucket TEXT NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+
+    store.refresh_search_index().unwrap();
+
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT COUNT(*) FROM event_search_lookup", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        1
+    );
+    store
+        .conn
+        .query_row(
+            "SELECT history_record_id FROM event_search_lookup LIMIT 1",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .unwrap();
 }
 
 fn policy_event(

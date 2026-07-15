@@ -1,11 +1,12 @@
 use rusqlite::Connection;
 
-use crate::schema::ddl::{table_exists, table_has_column};
+use crate::schema::ddl::{
+    create_event_search_lookup_table, ensure_search_projection_stats_table, table_exists,
+    table_has_column,
+};
 use crate::schema::fts::{create_fts_tables_if_supported, drop_fts_table_if_exists};
 use crate::schema::indexes::INDEXES_SQL;
-use crate::search::projections::{
-    rebuild_event_search_lookup_projection, rebuild_search_projection,
-};
+use crate::search::projections::SEARCH_PROJECTION_REBUILD_REQUIRED_STAT_KEY;
 use crate::{Result, StoreError};
 
 pub(crate) fn migrate_to_v45(conn: &Connection) -> Result<()> {
@@ -19,21 +20,17 @@ pub(crate) fn migrate_to_v45(conn: &Connection) -> Result<()> {
         {
             conn.execute_batch("DROP TABLE event_search_lookup;")?;
         }
-        conn.execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS event_search_lookup (
-                event_id TEXT PRIMARY KEY NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-                history_record_id TEXT REFERENCES history_records(id),
-                session_id TEXT REFERENCES sessions(id),
-                role TEXT CHECK (role IS NULL OR role IN ('user', 'assistant', 'system', 'tool', 'unknown')),
-                preview_text TEXT NOT NULL,
-                rank_bucket TEXT NOT NULL
-            );
-            "#,
-        )?;
+        create_event_search_lookup_table(conn)?;
         conn.execute_batch(INDEXES_SQL)?;
-        rebuild_search_projection(conn)?;
-        rebuild_event_search_lookup_projection(conn)?;
+        ensure_search_projection_stats_table(conn)?;
+        conn.execute(
+            r#"
+            INSERT INTO search_projection_stats (key, value, updated_at_ms)
+            VALUES (?1, 1, 0)
+            ON CONFLICT(key) DO UPDATE SET value = 1, updated_at_ms = 0
+            "#,
+            [SEARCH_PROJECTION_REBUILD_REQUIRED_STAT_KEY],
+        )?;
         conn.execute_batch("PRAGMA user_version = 45;")?;
         Ok(())
     })();

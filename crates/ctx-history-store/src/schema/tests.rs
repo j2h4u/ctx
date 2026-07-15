@@ -144,6 +144,24 @@ fn schema_v45_rebuilds_scriptgram_sidecars() {
             params![event_id.as_str(), record_id.as_str()],
         )
         .unwrap();
+        conn.execute(
+            r#"
+            INSERT INTO ctx_history_search
+            (record_id, title, summary, primary_user_text, decision_text, context_text, tag_text)
+            VALUES (?1, 'v44 multilingual record', '', 'OAuth authentication', '', '', '')
+            "#,
+            [record_id.as_str()],
+        )
+        .unwrap();
+        conn.execute(
+            r#"
+            INSERT INTO event_search
+            (event_id, history_record_id, role, preview_text, rank_bucket)
+            VALUES (?1, ?2, 'user', 'OAuth authentication', 'message')
+            "#,
+            params![event_id.as_str(), record_id.as_str()],
+        )
+        .unwrap();
         conn.execute_batch(
             r#"
             DROP TABLE IF EXISTS ctx_history_search_scriptgram;
@@ -162,6 +180,17 @@ fn schema_v45_rebuilds_scriptgram_sidecars() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION);
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_projection_stats WHERE key = 'search_projection_rebuild_required_v1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
     for column in ["record_id", "token_text"] {
         assert!(table_has_column(&store.conn, "ctx_history_search_scriptgram", column).unwrap());
     }

@@ -395,6 +395,12 @@ pub(crate) fn record_select_sql(tail: &str) -> String {
     )
 }
 
+pub(crate) fn record_select_sql_with_rowid(tail: &str) -> String {
+    format!(
+        "SELECT id, title, body, tags_json, kind, workspace, created_at, updated_at, rowid FROM history_records {tail}"
+    )
+}
+
 pub(crate) fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryRecord> {
     let tags_json: String = row.get(3)?;
     Ok(HistoryRecord {

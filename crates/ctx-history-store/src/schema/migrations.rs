@@ -11,7 +11,6 @@ use crate::schema::scriptgram::migrate_to_v45;
 use crate::schema::views::{
     create_stable_sql_views, drop_stable_sql_views, stable_sql_views_exist,
 };
-use crate::search::projections::rebuild_search_projection;
 use crate::{Result, StoreError};
 
 pub(crate) fn run_migrations(conn: &Connection, user_version: i64) -> Result<()> {
@@ -70,7 +69,7 @@ pub(crate) fn run_migrations(conn: &Connection, user_version: i64) -> Result<()>
         migrate_to_v43(conn)?;
     }
     if user_version < 44 {
-        migrate_to_v44(conn, false)?;
+        migrate_to_v44(conn)?;
     }
     if user_version < 45 {
         migrate_to_v45(conn)?;
@@ -374,7 +373,6 @@ fn migrate_to_v10(conn: &Connection) -> Result<()> {
 fn migrate_to_v11(conn: &Connection) -> Result<()> {
     conn.execute_batch("BEGIN IMMEDIATE;")?;
     let migration = (|| -> Result<()> {
-        rebuild_search_projection(conn)?;
         conn.execute_batch("PRAGMA user_version = 11;")?;
         Ok(())
     })();
@@ -397,7 +395,6 @@ fn migrate_to_v12(conn: &Connection) -> Result<()> {
     conn.execute_batch("BEGIN IMMEDIATE;")?;
     let migration = (|| -> Result<()> {
         invalidate_provider_import_indexes(conn)?;
-        rebuild_search_projection(conn)?;
         conn.execute_batch("PRAGMA user_version = 12;")?;
         Ok(())
     })();
@@ -625,7 +622,7 @@ fn migrate_to_v43(conn: &Connection) -> Result<()> {
     }
 }
 
-fn migrate_to_v44(conn: &Connection, rebuild_search_projection_now: bool) -> Result<()> {
+fn migrate_to_v44(conn: &Connection) -> Result<()> {
     let foreign_keys_enabled: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
     conn.execute_batch("PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE;")?;
     let migration = (|| -> Result<()> {
@@ -638,9 +635,6 @@ fn migrate_to_v44(conn: &Connection, rebuild_search_projection_now: bool) -> Res
         create_fts_tables_if_supported(conn)?;
         conn.execute_batch(INDEXES_SQL)?;
         create_stable_sql_views(conn)?;
-        if rebuild_search_projection_now {
-            rebuild_search_projection(conn)?;
-        }
         conn.execute_batch("PRAGMA user_version = 44;")?;
         Ok(())
     })();

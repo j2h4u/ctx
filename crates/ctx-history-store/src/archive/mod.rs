@@ -60,7 +60,7 @@ impl Store {
         import_rich_archive_entities_tx(&tx, &blob_dir, archive, &mut blob_guard)?;
         tx.commit()?;
         blob_guard.commit();
-        self.rebuild_search_projection()?;
+        self.refresh_search_index()?;
         Ok(())
     }
 
@@ -90,7 +90,7 @@ impl Store {
         import_rich_archive_entities_tx(&tx, &blob_dir, archive, &mut blob_guard)?;
         tx.commit()?;
         blob_guard.commit();
-        self.rebuild_search_projection()?;
+        self.refresh_search_index()?;
         Ok(())
     }
 }
