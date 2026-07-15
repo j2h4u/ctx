@@ -9,6 +9,7 @@
 use ctx_history_core::utc_now;
 use std::{
     ffi::OsString,
+    num::NonZeroUsize,
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -20,7 +21,7 @@ use std::{
 use rusqlite::{params, Connection, ErrorCode, OptionalExtension};
 
 use crate::object_store::restrict_private_file;
-use crate::schema::ddl::table_exists;
+use crate::schema::ddl::{ensure_search_projection_stats_table, table_exists};
 use crate::{Result, Store, StoreError};
 
 const EVENT_SEARCH_FTS_TABLES: [&str; 2] = ["event_search", "event_search_scriptgram"];
@@ -43,6 +44,133 @@ const FTS_BULK_CRISISMERGE: i64 = 1_000_000;
 // indexes, not only on compact synthetic fixtures.
 const FTS_MERGE_PAGE_BUDGET: i64 = 16;
 const BULK_LOCK_SUFFIX: &str = ".event-search-bulk.lock.sqlite";
+pub const BULK_WRITE_BATCH_BYTES: usize = 8 * 1024 * 1024;
+pub const BULK_WRITE_BATCH_UNITS: usize = 64;
+const MAX_DEFERRED_MAINTENANCE_ROTATIONS: usize = 8;
+
+/// Shared bounded write lifecycle for provider imports and search rebuilds.
+pub struct BoundedBulkWriteTransaction {
+    active: bool,
+    batch_size: Option<NonZeroUsize>,
+    units: usize,
+    bytes: usize,
+    deferred_maintenance_rotations: usize,
+}
+
+impl BoundedBulkWriteTransaction {
+    pub fn begin(store: &Store, has_work: bool, batch_size: Option<NonZeroUsize>) -> Result<Self> {
+        if has_work {
+            store.begin_immediate_batch()?;
+        }
+        Ok(Self {
+            active: has_work,
+            batch_size,
+            units: 0,
+            bytes: 0,
+            deferred_maintenance_rotations: 0,
+        })
+    }
+
+    pub fn begin_bounded(store: &Store, has_work: bool) -> Result<Self> {
+        Self::begin(store, has_work, NonZeroUsize::new(BULK_WRITE_BATCH_UNITS))
+    }
+
+    pub fn prepare_unit(&mut self, store: &Store, unit_bytes: usize) -> Result<()> {
+        let result = if self.active
+            && self.batch_size.is_some()
+            && self.units > 0
+            && self.bytes.saturating_add(unit_bytes) > BULK_WRITE_BATCH_BYTES
+        {
+            self.rotate(store)
+        } else {
+            Ok(())
+        };
+        if result.is_err() {
+            self.rollback(store);
+        }
+        result
+    }
+
+    pub fn record_unit(&mut self, store: &Store, unit_bytes: usize) -> Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        self.units = self.units.saturating_add(1);
+        self.bytes = self.bytes.saturating_add(unit_bytes);
+        let below_unit_limit = self
+            .batch_size
+            .is_none_or(|batch_size| self.units < batch_size.get());
+        let below_byte_limit = self.batch_size.is_none() || self.bytes < BULK_WRITE_BATCH_BYTES;
+        if below_unit_limit && below_byte_limit {
+            return Ok(());
+        }
+        let result = self.rotate(store);
+        if result.is_err() {
+            self.rollback(store);
+        }
+        result
+    }
+
+    fn rotate(&mut self, store: &Store) -> Result<()> {
+        self.rotate_with_maintenance(store, || store.maintain_event_search_bulk_mode())
+    }
+
+    fn rotate_with_maintenance<F>(&mut self, store: &Store, maintain: F) -> Result<()>
+    where
+        F: FnOnce() -> Result<()>,
+    {
+        store.commit_batch()?;
+        self.active = false;
+        let mut deferred_error = None;
+        if let Err(error) = maintain() {
+            if !is_recoverable_bulk_maintenance_error(&error) {
+                return Err(error);
+            }
+            deferred_error = Some(error);
+        }
+        if let Err(error) = store.checkpoint_wal_truncate_required() {
+            if !is_recoverable_wal_checkpoint_error(&error) {
+                return Err(error);
+            }
+            deferred_error.get_or_insert(error);
+        }
+        if let Some(error) = deferred_error {
+            self.deferred_maintenance_rotations =
+                self.deferred_maintenance_rotations.saturating_add(1);
+            if self.deferred_maintenance_rotations >= MAX_DEFERRED_MAINTENANCE_ROTATIONS {
+                return Err(error);
+            }
+        } else {
+            self.deferred_maintenance_rotations = 0;
+        }
+        store.begin_immediate_batch()?;
+        self.active = true;
+        self.units = 0;
+        self.bytes = 0;
+        Ok(())
+    }
+
+    pub fn commit(&mut self, store: &Store) -> Result<()> {
+        let result = if self.active {
+            store.commit_batch()
+        } else {
+            Ok(())
+        };
+        if result.is_ok() {
+            self.active = false;
+        } else {
+            self.rollback(store);
+        }
+        result
+    }
+
+    pub fn rollback(&mut self, store: &Store) {
+        if self.active {
+            let _ = store.rollback_batch();
+            self.active = false;
+        }
+    }
+}
 
 /// Owns the cross-process lock for one event-search bulk operation.
 ///
@@ -94,7 +222,7 @@ impl Store {
         guard.depth_counted = true;
         self.begin_immediate_batch()?;
         let result = (|| {
-            ensure_search_projection_stats_table(self)?;
+            ensure_search_projection_stats_table(&self.conn)?;
             if !bulk_mode_pending(self)? {
                 for table in EVENT_SEARCH_FTS_TABLES {
                     if !table_exists(&self.conn, table)? {
@@ -160,7 +288,7 @@ impl Store {
     /// the marker records the remaining work for a later writable open. A
     /// quiescent pass restores the saved settings and clears that marker.
     pub fn defer_event_search_bulk_mode(&self, guard: &EventSearchBulkGuard) -> Result<()> {
-        self.defer_event_search_bulk_mode_with(guard, || self.maintain_event_search_bulk_mode())
+        self.defer_event_search_bulk_mode_with(guard, || self.finish_event_search_bulk_mode(guard))
     }
 
     fn defer_event_search_bulk_mode_with<F>(
@@ -187,10 +315,11 @@ impl Store {
         }
     }
 
-    /// Perform one bounded merge-and-checkpoint maintenance pass.
+    /// Perform one bounded merge pass without ending bulk mode.
     ///
-    /// Importers use this between bounded write transactions. Failure is safe
-    /// to defer: the marker keeps recovery resumable on the next writable open.
+    /// Importers use this between bounded write transactions. This method must
+    /// never restore FTS settings or clear the marker: the enclosing import is
+    /// still active and subsequent writes still require merge suppression.
     pub fn maintain_event_search_bulk_mode(&self) -> Result<()> {
         self.begin_immediate_batch()?;
         let result = (|| {
@@ -199,36 +328,17 @@ impl Store {
             }
             merge_event_search_tables_in_transaction(self)
         })();
-        let changed = match result {
-            Ok(changed) => changed,
+        match result {
+            Ok(_) => {}
             Err(err) => {
                 let _ = self.rollback_batch();
                 return Err(err);
             }
-        };
+        }
         if let Err(err) = self.commit_batch() {
             let _ = self.rollback_batch();
             return Err(err);
         }
-        if !changed {
-            self.begin_immediate_batch()?;
-            let restore_result = (|| {
-                if bulk_mode_pending(self)? {
-                    restore_event_search_merge_config(self)?;
-                    clear_bulk_mode_state(self)?;
-                }
-                Ok(())
-            })();
-            if let Err(err) = restore_result {
-                let _ = self.rollback_batch();
-                return Err(err);
-            }
-            if let Err(err) = self.commit_batch() {
-                let _ = self.rollback_batch();
-                return Err(err);
-            }
-        }
-        self.checkpoint_wal_truncate_required()?;
         Ok(())
     }
 
@@ -259,9 +369,11 @@ impl Store {
             return Ok(());
         }
         // A live importer owns this lock. A stale marker has no owner, so the
-        // next writable open adopts one bounded recovery pass only.
-        if let Some(_guard) = self.acquire_event_search_bulk_lock(Duration::ZERO)? {
-            self.maintain_event_search_bulk_mode()?;
+        // next writable open adopts it and completes the bounded merge steps.
+        // Stopping after one step can leave automerge disabled indefinitely
+        // when no later write happens to reopen the store.
+        if let Some(guard) = self.acquire_event_search_bulk_lock(Duration::ZERO)? {
+            self.finish_event_search_bulk_mode(&guard)?;
         }
         Ok(())
     }
@@ -414,10 +526,16 @@ pub fn is_recoverable_bulk_maintenance_error(error: &StoreError) -> bool {
         StoreError::WalCheckpointBusy { .. } | StoreError::BulkSearchImportBusy => true,
         StoreError::Sql(rusqlite::Error::SqliteFailure(failure, _)) => matches!(
             failure.code,
-            ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked | ErrorCode::DiskFull
+            ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked
         ),
         _ => false,
     }
+}
+
+/// Whether a WAL checkpoint failure is temporary pressure that can be retried
+/// without treating exhausted disk space as recoverable.
+pub fn is_recoverable_wal_checkpoint_error(error: &StoreError) -> bool {
+    is_recoverable_bulk_maintenance_error(error)
 }
 
 #[cfg(test)]
@@ -456,6 +574,60 @@ mod tests {
                 })
             })
             .unwrap();
+    }
+
+    #[test]
+    fn disk_full_is_fatal_for_bulk_maintenance_and_checkpoint() {
+        let error = StoreError::Sql(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+            None,
+        ));
+        assert!(!is_recoverable_bulk_maintenance_error(&error));
+        assert!(!is_recoverable_wal_checkpoint_error(&error));
+    }
+
+    #[test]
+    fn bounded_rotation_propagates_fatal_maintenance_errors() {
+        let temp = tempdir().unwrap();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let mut transaction = BoundedBulkWriteTransaction::begin_bounded(&store, true).unwrap();
+        let error = transaction
+            .rotate_with_maintenance(&store, || {
+                Err(StoreError::Sql(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
+                    None,
+                )))
+            })
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("database disk image is malformed"));
+    }
+
+    #[test]
+    fn bounded_rotation_defers_then_stops_on_sustained_pressure() {
+        let temp = tempdir().unwrap();
+        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
+        let mut transaction = BoundedBulkWriteTransaction::begin_bounded(&store, true).unwrap();
+        for _ in 1..MAX_DEFERRED_MAINTENANCE_ROTATIONS {
+            transaction
+                .rotate_with_maintenance(&store, || {
+                    Err(StoreError::WalCheckpointBusy {
+                        log_frames: 2,
+                        checkpointed_frames: 1,
+                    })
+                })
+                .unwrap();
+        }
+        let error = transaction
+            .rotate_with_maintenance(&store, || {
+                Err(StoreError::WalCheckpointBusy {
+                    log_frames: 2,
+                    checkpointed_frames: 1,
+                })
+            })
+            .unwrap_err();
+        assert!(matches!(error, StoreError::WalCheckpointBusy { .. }));
     }
 }
 
@@ -537,20 +709,6 @@ fn fts_config_value(store: &Store, table: &'static str, key: &str, default: i64)
         .query_row(&sql, params![key], |row| row.get(0))
         .optional()?
         .unwrap_or(default))
-}
-
-fn ensure_search_projection_stats_table(store: &Store) -> Result<()> {
-    store.conn.execute(
-        r#"
-        CREATE TABLE IF NOT EXISTS search_projection_stats (
-            key TEXT PRIMARY KEY NOT NULL,
-            value INTEGER NOT NULL,
-            updated_at_ms INTEGER NOT NULL
-        )
-        "#,
-        [],
-    )?;
-    Ok(())
 }
 
 fn bulk_mode_pending(store: &Store) -> Result<bool> {

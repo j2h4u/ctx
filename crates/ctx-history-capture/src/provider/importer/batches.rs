@@ -4,13 +4,12 @@ use std::{
     num::NonZeroUsize,
 };
 
-use ctx_history_store::is_recoverable_bulk_maintenance_error;
+use ctx_history_store::{BoundedBulkWriteTransaction, BULK_WRITE_BATCH_UNITS};
 use serde::Serialize;
 
 use super::*;
 
-pub(crate) const IMPORT_TRANSACTION_BATCH_BYTES: usize = 8 * 1024 * 1024;
-pub(crate) const IMPORT_TRANSACTION_BATCH_UNITS: usize = 64;
+pub(crate) const IMPORT_TRANSACTION_BATCH_UNITS: usize = BULK_WRITE_BATCH_UNITS;
 
 pub(super) fn import_normalized_provider_captures(
     store: &mut Store,
@@ -315,160 +314,4 @@ impl Write for ByteCounter {
     }
 }
 
-pub(crate) struct ProviderImportTransaction {
-    active: bool,
-    batch_size: Option<NonZeroUsize>,
-    units: usize,
-    bytes: usize,
-}
-
-impl ProviderImportTransaction {
-    fn begin(store: &Store, has_work: bool, batch_size: Option<NonZeroUsize>) -> Result<Self> {
-        if has_work {
-            store.begin_immediate_batch()?;
-        }
-        Ok(Self {
-            active: has_work,
-            batch_size,
-            units: 0,
-            bytes: 0,
-        })
-    }
-
-    pub(crate) fn begin_bounded(store: &Store, has_work: bool) -> Result<Self> {
-        Self::begin(store, has_work, provider_transaction_batch_size())
-    }
-
-    pub(crate) fn prepare_unit(&mut self, store: &Store, unit_bytes: usize) -> Result<()> {
-        let result = if self.active
-            && self.batch_size.is_some()
-            && self.units > 0
-            && self.bytes.saturating_add(unit_bytes) > IMPORT_TRANSACTION_BATCH_BYTES
-        {
-            self.rotate(store)
-        } else {
-            Ok(())
-        };
-        if result.is_err() {
-            self.rollback(store);
-        }
-        result
-    }
-
-    pub(crate) fn record_unit(&mut self, store: &Store, unit_bytes: usize) -> Result<()> {
-        if !self.active {
-            return Ok(());
-        }
-        self.units = self.units.saturating_add(1);
-        self.bytes = self.bytes.saturating_add(unit_bytes);
-        let below_unit_limit = self
-            .batch_size
-            .is_none_or(|batch_size| self.units < batch_size.get());
-        let below_byte_limit =
-            self.batch_size.is_none() || self.bytes < IMPORT_TRANSACTION_BATCH_BYTES;
-        if below_unit_limit && below_byte_limit {
-            return Ok(());
-        }
-        let result = self.rotate(store);
-        if result.is_err() {
-            self.rollback(store);
-        }
-        result
-    }
-
-    fn rotate(&mut self, store: &Store) -> Result<()> {
-        self.rotate_with_maintenance(store, || store.maintain_event_search_bulk_mode())
-    }
-
-    fn rotate_with_maintenance<F>(&mut self, store: &Store, maintain: F) -> Result<()>
-    where
-        F: FnOnce() -> ctx_history_store::Result<()>,
-    {
-        store.commit_batch()?;
-        self.active = false;
-        // Keep the enclosing bulk guard active, but bound FTS maintenance to
-        // the same 64-unit/8 MiB write cadence. A failed maintenance step
-        // leaves its marker for resumable recovery and must not undo this
-        // already-committed import batch.
-        if let Err(error) = maintain() {
-            if !is_recoverable_bulk_maintenance_error(&error) {
-                return Err(error.into());
-            }
-        }
-        if let Err(error) = store.checkpoint_wal_truncate_required() {
-            if !is_recoverable_bulk_maintenance_error(&error) {
-                return Err(error.into());
-            }
-        }
-        store.begin_immediate_batch()?;
-        self.active = true;
-        self.units = 0;
-        self.bytes = 0;
-        Ok(())
-    }
-
-    pub(crate) fn commit(&mut self, store: &Store) -> Result<()> {
-        let result = if self.active {
-            store.commit_batch().map_err(CaptureError::from)
-        } else {
-            Ok(())
-        };
-        if result.is_ok() {
-            self.active = false;
-        } else {
-            self.rollback(store);
-        }
-        result
-    }
-
-    pub(crate) fn rollback(&mut self, store: &Store) {
-        if self.active {
-            let _ = store.rollback_batch();
-            self.active = false;
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn rotation_propagates_fatal_maintenance_errors() {
-        let temp = tempdir().unwrap();
-        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
-        let mut transaction = ProviderImportTransaction::begin_bounded(&store, true).unwrap();
-
-        let error = transaction
-            .rotate_with_maintenance(&store, || {
-                Err(ctx_history_store::StoreError::Sql(
-                    rusqlite::Error::SqliteFailure(
-                        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
-                        None,
-                    ),
-                ))
-            })
-            .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("database disk image is malformed"));
-    }
-
-    #[test]
-    fn rotation_defers_temporary_maintenance_pressure() {
-        let temp = tempdir().unwrap();
-        let store = Store::open(temp.path().join("work.sqlite")).unwrap();
-        let mut transaction = ProviderImportTransaction::begin_bounded(&store, true).unwrap();
-
-        transaction
-            .rotate_with_maintenance(&store, || {
-                Err(ctx_history_store::StoreError::WalCheckpointBusy {
-                    log_frames: 2,
-                    checkpointed_frames: 1,
-                })
-            })
-            .unwrap();
-        transaction.rollback(&store);
-    }
-}
+pub(crate) type ProviderImportTransaction = BoundedBulkWriteTransaction;

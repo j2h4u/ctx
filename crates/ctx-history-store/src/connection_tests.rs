@@ -82,7 +82,7 @@ fn bulk_recovery_only_suppresses_temporary_pressure() {
             checkpointed_frames: 1,
         }
     ));
-    assert!(is_recoverable_bulk_maintenance_error(&StoreError::Sql(
+    assert!(!is_recoverable_bulk_maintenance_error(&StoreError::Sql(
         rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL), None,)
     )));
     assert!(!is_recoverable_bulk_maintenance_error(&StoreError::Sql(
@@ -291,6 +291,25 @@ fn bulk_search_mode_crosses_crisis_threshold_without_automatic_merge() {
             .unwrap(),
         20
     );
+}
+
+#[test]
+fn rotation_maintenance_never_ends_active_bulk_mode() {
+    let temp = tempdir();
+    let db_path = temp.path().join("work.sqlite");
+    let store = Store::open(&db_path).unwrap();
+    let guard = store.begin_event_search_bulk_mode().unwrap();
+    insert_bulk_search_events(&store, "one-batch", 1, 16);
+
+    store.maintain_event_search_bulk_mode().unwrap();
+
+    assert_eq!(bulk_mode_marker(&store), Some(1));
+    for table in ["event_search", "event_search_scriptgram"] {
+        assert_eq!(fts_config(&store, table, "automerge", 4), 0);
+        assert_eq!(fts_config(&store, table, "crisismerge", 16), 1_000_000);
+    }
+    store.defer_event_search_bulk_mode(&guard).unwrap();
+    assert_eq!(bulk_mode_marker(&store), None);
 }
 
 #[test]
@@ -514,10 +533,10 @@ fn deferred_bulk_maintenance_keeps_the_marker_and_does_not_block_reopen() {
     drop(guard);
     drop(store);
 
-    // One bounded recovery pass can finish quiescent work, but its checkpoint
-    // must not make opening fail while a reader still pins the WAL.
+    // Recovery must not make opening fail while a reader still pins the WAL,
+    // and it must retain the marker until a truncating checkpoint succeeds.
     let reopened = Store::open_with_busy_timeout(&db_path, Duration::from_millis(10)).unwrap();
-    assert_eq!(bulk_mode_marker(&reopened), None);
+    assert_eq!(bulk_mode_marker(&reopened), Some(1));
     assert_eq!(
         reopened
             .conn
@@ -527,4 +546,8 @@ fn deferred_bulk_maintenance_keeps_the_marker_and_does_not_block_reopen() {
         20
     );
     reader.execute_batch("ROLLBACK").unwrap();
+    drop(reopened);
+
+    let recovered = Store::open_with_busy_timeout(&db_path, Duration::from_millis(10)).unwrap();
+    assert_eq!(bulk_mode_marker(&recovered), None);
 }

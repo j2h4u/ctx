@@ -216,25 +216,23 @@ fn batched_provider_import_stops_on_pinned_wal_and_resumes_idempotently() {
         .with_timezone(&Utc);
     let source_path = temp.path().join("batched-provider.jsonl");
     let source_path = source_path.display().to_string();
-    let mut first = provider_collision_capture(
-        CaptureProvider::Hermes,
-        "batched-provider-first",
-        "hermes_state_sqlite",
-        &source_path,
-        occurred_at,
-    );
-    first.event.as_mut().unwrap().payload = json!({"text": "batched-import-sentinel-first"});
-    let mut second = provider_collision_capture(
-        CaptureProvider::Hermes,
-        "batched-provider-second",
-        "hermes_state_sqlite",
-        &source_path,
-        occurred_at + chrono::Duration::seconds(1),
-    );
-    second.event.as_mut().unwrap().payload = json!({"text": "batched-import-sentinel-second"});
+    let captures = (0..10)
+        .map(|index| {
+            let mut capture = provider_collision_capture(
+                CaptureProvider::Hermes,
+                &format!("batched-provider-{index}"),
+                "hermes_state_sqlite",
+                &source_path,
+                occurred_at + chrono::Duration::seconds(index),
+            );
+            capture.event.as_mut().unwrap().payload =
+                json!({"text": format!("batched-import-sentinel-{index}")});
+            (index as usize + 1, capture)
+        })
+        .collect::<Vec<_>>();
     let normalization = ProviderNormalizationResult {
         summary: ProviderImportSummary::default(),
-        captures: vec![(1, first), (2, second)],
+        captures,
         files_touched: Vec::new(),
     };
     let options = NormalizedProviderImportOptions {
@@ -244,46 +242,33 @@ fn batched_provider_import_stops_on_pinned_wal_and_resumes_idempotently() {
 
     let reader = pinned_wal_reader(&db_path);
 
-    let summary = import_normalized_provider_captures_in_batches(
+    let error = import_normalized_provider_captures_in_batches(
         &mut store,
         normalization.clone(),
         options.clone(),
         1,
     )
-    .unwrap();
-    assert_eq!(summary.failed, 0, "{:?}", summary.failures);
-    assert_eq!(summary.imported_events, 2);
-
-    assert_eq!(store.list_sessions().unwrap().len(), 2);
-    assert_eq!(
-        store
-            .search_event_hits("batched-import-sentinel-first", 10)
-            .unwrap()
-            .len(),
-        1
-    );
-    assert_eq!(
-        store
-            .search_event_hits("batched-import-sentinel-second", 10)
-            .unwrap()
-            .len(),
-        1
-    );
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CaptureError::Store(ctx_history_store::StoreError::WalCheckpointBusy { .. })
+    ));
+    assert_eq!(store.list_sessions().unwrap().len(), 8);
     reader.execute_batch("ROLLBACK").unwrap();
 
     let replayed =
         import_normalized_provider_captures_in_batches(&mut store, normalization, options, 1)
             .unwrap();
     assert_eq!(replayed.failed, 0, "{:?}", replayed.failures);
-    assert_eq!(replayed.imported_events, 0);
-    assert_eq!(replayed.skipped_events, 2);
-    assert_eq!(store.list_sessions().unwrap().len(), 2);
+    assert_eq!(replayed.imported_events, 2);
+    assert_eq!(replayed.skipped_events, 8);
+    assert_eq!(store.list_sessions().unwrap().len(), 10);
     assert_eq!(
         store
             .search_event_hits("batched-import-sentinel", 10)
             .unwrap()
             .len(),
-        2
+        10
     );
 }
 
