@@ -41,33 +41,6 @@ pub(super) fn import_normalized_provider_captures(
     )
 }
 
-pub(super) fn import_normalized_provider_captures_with_progress(
-    store: &mut Store,
-    normalization: ProviderNormalizationResult,
-    options: NormalizedProviderImportOptions,
-    progress: &mut dyn FnMut(usize, usize),
-) -> Result<ProviderImportSummary> {
-    let ProviderNormalizationResult {
-        summary,
-        captures,
-        files_touched,
-    } = normalization;
-    import_provider_capture_lines_with_batch_size(
-        store,
-        options,
-        summary,
-        captures,
-        files_touched,
-        ProviderCaptureBatchSettings {
-            transaction_batch_size: provider_transaction_batch_size(),
-            suppress_search_merges: true,
-            progress: Some(progress),
-            validate_real_messages: true,
-            external_caches: None,
-        },
-    )
-}
-
 pub(super) fn import_normalized_provider_captures_stream_batch(
     store: &mut Store,
     normalization: ProviderNormalizationResult,
@@ -95,6 +68,34 @@ pub(super) fn import_normalized_provider_captures_stream_batch(
             suppress_search_merges: true,
             progress: Some(progress),
             validate_real_messages: false,
+            external_caches: Some(&mut state.caches),
+        },
+    )
+}
+
+pub(super) fn import_normalized_provider_captures_shared_batch(
+    store: &mut Store,
+    normalization: ProviderNormalizationResult,
+    options: NormalizedProviderImportOptions,
+    state: &mut ProviderImportStreamState,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<ProviderImportSummary> {
+    let ProviderNormalizationResult {
+        summary,
+        captures,
+        files_touched,
+    } = normalization;
+    import_provider_capture_lines_with_batch_size(
+        store,
+        options,
+        summary,
+        captures,
+        files_touched,
+        ProviderCaptureBatchSettings {
+            transaction_batch_size: None,
+            suppress_search_merges: true,
+            progress: Some(progress),
+            validate_real_messages: true,
             external_caches: Some(&mut state.caches),
         },
     )

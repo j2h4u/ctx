@@ -112,20 +112,6 @@ pub fn import_normalized_provider_captures(
     batches::import_normalized_provider_captures(store, normalization, options)
 }
 
-pub(crate) fn import_normalized_provider_captures_with_progress(
-    store: &mut Store,
-    normalization: ProviderNormalizationResult,
-    options: NormalizedProviderImportOptions,
-    progress: &mut dyn FnMut(usize, usize),
-) -> Result<ProviderImportSummary> {
-    batches::import_normalized_provider_captures_with_progress(
-        store,
-        normalization,
-        options,
-        progress,
-    )
-}
-
 pub(crate) fn import_normalized_provider_captures_stream_batch(
     store: &mut Store,
     normalization: ProviderNormalizationResult,
@@ -134,6 +120,22 @@ pub(crate) fn import_normalized_provider_captures_stream_batch(
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<ProviderImportSummary> {
     batches::import_normalized_provider_captures_stream_batch(
+        store,
+        normalization,
+        options,
+        state,
+        progress,
+    )
+}
+
+pub(crate) fn import_normalized_provider_captures_shared_batch(
+    store: &mut Store,
+    normalization: ProviderNormalizationResult,
+    options: NormalizedProviderImportOptions,
+    state: &mut ProviderImportStreamState,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<ProviderImportSummary> {
+    batches::import_normalized_provider_captures_shared_batch(
         store,
         normalization,
         options,

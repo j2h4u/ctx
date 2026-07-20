@@ -490,10 +490,20 @@ fn read_journal_summary(path: &Path) -> Result<serde_json::Value> {
         .or_else(|| sample["elapsed_ms"].as_u64())
         .unwrap_or(0);
     let stages = summarize_stages(&samples, elapsed_ms);
+    let status = end
+        .as_ref()
+        .and_then(|value| value["status"].as_str())
+        .unwrap_or_else(|| {
+            if start["pid"].as_u64().is_some_and(process_is_alive) {
+                "running"
+            } else {
+                "interrupted"
+            }
+        });
     Ok(json!({
         "run_id": start["run_id"],
         "started_at": start["timestamp"],
-        "status": end.as_ref().and_then(|value| value["status"].as_str()).unwrap_or("interrupted"),
+        "status": status,
         "elapsed_ms": elapsed_ms,
         "phase": sample["phase"],
         "message": sample["message"],
@@ -504,6 +514,22 @@ fn read_journal_summary(path: &Path) -> Result<serde_json::Value> {
         "valid_records": valid_records,
         "journal_path": path,
     }))
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u64) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: signal 0 performs existence/permission checking without sending
+    // a signal or mutating the target process.
+    (unsafe { libc::kill(pid, 0) == 0 })
+        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn process_is_alive(_pid: u64) -> bool {
+    false
 }
 
 fn summarize_stages(samples: &[serde_json::Value], run_elapsed_ms: u64) -> Vec<ImportStageSummary> {
@@ -674,10 +700,13 @@ mod tests {
             },
         );
         write_sample(&diagnostics.inner);
-        guard.complete();
 
         let journal =
             find_journal(&temp.path().join("diagnostics").join("import-runs"), None).unwrap();
+        let running = read_journal_summary(&journal).unwrap();
+        assert_eq!(running["status"], "running");
+
+        guard.complete();
         fs::OpenOptions::new()
             .append(true)
             .open(&journal)

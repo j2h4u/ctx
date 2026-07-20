@@ -176,6 +176,26 @@ impl ProgressReporter {
         });
     }
 
+    pub(crate) fn search_index_progress(&self, completed_units: usize, total_units: usize) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.emit(ProgressLine {
+            phase: "searching",
+            message: "search index".to_owned(),
+            completed_bytes: 0,
+            total_bytes: 0,
+            completed_files: None,
+            total_files: None,
+            stage: Some("search"),
+            completed_units: Some(completed_units),
+            total_units: Some(total_units),
+            imported_events: None,
+            done: false,
+            force: completed_units == 0 || completed_units >= total_units,
+        });
+    }
+
     pub(crate) fn source_done(
         &self,
         source: &SourceInfo,
@@ -749,6 +769,9 @@ fn progress_line_bytes(line: &ProgressLine) -> (u64, u64) {
 fn progress_line_percent(line: &ProgressLine) -> f64 {
     if line.done {
         100.0
+    } else if line.stage == Some("ingest") {
+        let (completed_bytes, total_bytes) = progress_line_bytes(line);
+        progress_percent(completed_bytes, total_bytes)
     } else {
         if let Some((completed, total)) = line
             .completed_units
@@ -922,6 +945,9 @@ mod tests {
         );
         assert!(rendered.contains("7.0/14.0 GiB read"), "{rendered}");
         assert!(rendered.contains("120,000 records written"), "{rendered}");
+
+        line.total_units = Some(150_000);
+        assert_eq!(progress_line_percent(&line), 50.0);
     }
 
     #[test]

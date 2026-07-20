@@ -13,8 +13,8 @@ use crate::provider::adapter::{
 };
 use crate::provider::importer::{
     import_native_jsonl_tree, import_normalized_provider_captures,
-    import_normalized_provider_captures_stream_batch,
-    import_normalized_provider_captures_with_progress, NativeJsonlTreeImport,
+    import_normalized_provider_captures_shared_batch,
+    import_normalized_provider_captures_stream_batch, NativeJsonlTreeImport,
     ProviderImportStreamState,
 };
 use crate::provider::providers::claude::{
@@ -137,6 +137,7 @@ pub fn import_claude_projects_jsonl_files_bounded_parallel(
         .unwrap_or(1)
         .min(8);
     let mut imported = Vec::with_capacity(paths.len());
+    let mut shared_state = ProviderImportStreamState::default();
     let mut batch = Vec::new();
     let mut batch_bytes = 0u64;
     for path in paths {
@@ -151,6 +152,7 @@ pub fn import_claude_projects_jsonl_files_bounded_parallel(
                     &context,
                     parallelism,
                     options,
+                    &mut shared_state,
                     &mut imported,
                 )?;
                 batch.clear();
@@ -167,6 +169,7 @@ pub fn import_claude_projects_jsonl_files_bounded_parallel(
                 &context,
                 parallelism,
                 options,
+                &mut shared_state,
                 &mut imported,
             )?;
             batch.clear();
@@ -182,6 +185,7 @@ pub fn import_claude_projects_jsonl_files_bounded_parallel(
             &context,
             parallelism,
             options,
+            &mut shared_state,
             &mut imported,
         )?;
     }
@@ -263,55 +267,70 @@ fn import_claude_normalization_batch(
     context: &ProviderAdapterContext,
     parallelism: usize,
     options: &ClaudeProjectsImportOptions,
+    state: &mut ProviderImportStreamState,
     imported: &mut Vec<(PathBuf, ProviderImportSummary)>,
 ) -> Result<()> {
-    for (_, path, normalization) in normalize_claude_projects_jsonl_paths_parallel(
+    let normalized = normalize_claude_projects_jsonl_paths_parallel(
         paths,
         context,
         parallelism,
         options.progress.as_ref(),
-    )? {
-        let file_bytes = std::fs::metadata(&path)
-            .map(|metadata| metadata.len())
-            .unwrap_or(0);
-        let progress_callback = options.progress.as_ref().map(Arc::clone);
-        let progress_path = path.clone();
-        let mut persist_progress = move |completed_units: usize, total_units: usize| {
-            if let Some(callback) = progress_callback.as_ref() {
-                callback(crate::ProviderImportProgress {
-                    stage: crate::ProviderImportStage::Writing,
-                    source_path: Some(progress_path.clone()),
-                    total_files: 1,
-                    total_bytes: file_bytes,
-                    completed_files: usize::from(completed_units >= total_units),
-                    completed_bytes: if completed_units >= total_units {
-                        file_bytes
-                    } else {
-                        0
-                    },
-                    completed_units,
-                    total_units,
-                    imported_sessions: 0,
-                    imported_events: 0,
-                    imported_edges: 0,
-                    skipped: 0,
-                    failed: 0,
-                    done: completed_units >= total_units,
-                });
-            }
-        };
-        let summary = import_normalized_provider_captures_with_progress(
-            store,
-            normalization,
-            NormalizedProviderImportOptions {
-                history_record_id: options.history_record_id,
-                persist_cursors: true,
-                wrap_transaction: true,
-                fast_event_inserts: true,
-            },
-            &mut persist_progress,
-        )?;
-        imported.push((path, summary));
+    )?;
+    store.begin_immediate_batch()?;
+    let import_result = (|| -> Result<()> {
+        for (_, path, normalization) in normalized {
+            let file_bytes = std::fs::metadata(&path)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            let progress_callback = options.progress.as_ref().map(Arc::clone);
+            let progress_path = path.clone();
+            let mut persist_progress = move |completed_units: usize, total_units: usize| {
+                if let Some(callback) = progress_callback.as_ref() {
+                    callback(crate::ProviderImportProgress {
+                        stage: crate::ProviderImportStage::Writing,
+                        source_path: Some(progress_path.clone()),
+                        total_files: 1,
+                        total_bytes: file_bytes,
+                        completed_files: usize::from(completed_units >= total_units),
+                        completed_bytes: if completed_units >= total_units {
+                            file_bytes
+                        } else {
+                            0
+                        },
+                        completed_units,
+                        total_units,
+                        imported_sessions: 0,
+                        imported_events: 0,
+                        imported_edges: 0,
+                        skipped: 0,
+                        failed: 0,
+                        done: completed_units >= total_units,
+                    });
+                }
+            };
+            let summary = import_normalized_provider_captures_shared_batch(
+                store,
+                normalization,
+                NormalizedProviderImportOptions {
+                    history_record_id: options.history_record_id,
+                    persist_cursors: true,
+                    wrap_transaction: false,
+                    fast_event_inserts: true,
+                },
+                state,
+                &mut persist_progress,
+            )?;
+            imported.push((path, summary));
+        }
+        Ok(())
+    })();
+    if let Err(error) = import_result {
+        let _ = store.rollback_batch();
+        return Err(error);
+    }
+    if let Err(error) = store.commit_batch() {
+        let _ = store.rollback_batch();
+        return Err(error.into());
     }
     Ok(())
 }

@@ -464,7 +464,25 @@ pub(crate) fn run_import_internal(
         source,
     })?;
     let db_path = database_path(data_root.clone());
+    let diagnostics_run = if args.format.is_none() {
+        let (guard, diagnostics) =
+            ImportDiagnostics::start(&data_root, &db_path, options.operation)?;
+        diagnostics.phase("opening_database", "Opening and recovering the local index");
+        Some((guard, diagnostics))
+    } else {
+        None
+    };
+    let opening_progress = diagnostics_run.as_ref().map(|(_, diagnostics)| {
+        ProgressReporter::new(options.progress, options.json, options.operation, 0)
+            .with_import_diagnostics(diagnostics.clone())
+    });
+    if let Some(progress) = opening_progress.as_ref() {
+        progress.message("opening_database", "Opening local index...");
+    }
     let mut store = Store::open(&db_path)?;
+    if let Some(progress) = opening_progress.as_ref() {
+        progress.done("opening_database", "Local index ready.", 0);
+    }
     let mut totals = ImportTotals::default();
     let mut imported_sources = Vec::new();
 
@@ -480,7 +498,7 @@ pub(crate) fn run_import_internal(
     }
 
     let (diagnostics_guard, diagnostics) =
-        ImportDiagnostics::start(&data_root, &db_path, options.operation)?;
+        diagnostics_run.expect("non-format imports initialize diagnostics");
 
     let requests = import_requests(args)?;
     let plugin_requests = history_source_plugin_import_requests(
@@ -833,9 +851,12 @@ pub(crate) fn run_import_internal(
         }
 
         if final_refresh_required {
-            progress.message("finalizing", "Refreshing search index...");
+            progress.message("searching", "Building search index...");
             let store = Store::open(&db_path)?;
-            store.refresh_search_index()?;
+            let mut search_progress = |completed: usize, total: usize| {
+                progress.search_index_progress(completed, total);
+            };
+            store.refresh_search_index_with_progress(&mut search_progress)?;
         }
     } else {
         let mut completed_source_bytes = 0u64;

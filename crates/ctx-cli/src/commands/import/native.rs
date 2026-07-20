@@ -80,7 +80,7 @@ pub(crate) fn import_one_source_inner(
 ) -> Result<ProviderImportSummary> {
     let bulk_guard = store.begin_event_search_bulk_mode()?;
     let import_result =
-        import_one_source_inner_batched(store, source, progress, full_rescan, preinventory);
+        import_one_source_inner_batched(store, source, progress.clone(), full_rescan, preinventory);
     let finish_result = store.finish_event_search_bulk_mode(&bulk_guard);
     let summary = match (import_result, finish_result) {
         (Ok(summary), Ok(())) => Ok(summary),
@@ -88,7 +88,27 @@ pub(crate) fn import_one_source_inner(
         (Err(error), Ok(())) => Err(error),
     }?;
     if refresh_search_after_import {
-        store.refresh_search_index()?;
+        let mut search_progress = |completed_units: usize, total_units: usize| {
+            if let Some(callback) = progress.as_ref() {
+                callback(ProviderImportProgress {
+                    stage: ctx_history_capture::ProviderImportStage::Searching,
+                    source_path: Some(source.path.clone()),
+                    total_files: 1,
+                    total_bytes: 0,
+                    completed_files: 1,
+                    completed_bytes: 0,
+                    completed_units,
+                    total_units,
+                    imported_sessions: 0,
+                    imported_events: summary.imported_events,
+                    imported_edges: 0,
+                    skipped: 0,
+                    failed: 0,
+                    done: completed_units >= total_units,
+                });
+            }
+        };
+        store.refresh_search_index_with_progress(&mut search_progress)?;
     }
     Ok(summary)
 }
@@ -847,7 +867,12 @@ fn import_manifested_claude_parallel(
     let parsed_bytes = Arc::new(Mutex::new(
         pending
             .iter()
-            .map(|file| (file.source_path.clone(), (file.file_size_bytes, 0u64)))
+            .map(|file| {
+                (
+                    file.source_path.clone(),
+                    (file.file_size_bytes, 0u64, 0usize),
+                )
+            })
             .collect::<BTreeMap<_, _>>(),
     ));
     let parse_progress = progress.as_ref().map(|callback| {
@@ -855,24 +880,32 @@ fn import_manifested_claude_parallel(
         let parsed_bytes = Arc::clone(&parsed_bytes);
         let source_path = source.path.clone();
         Arc::new(move |file_progress: ProviderImportProgress| {
-            let (completed_bytes, completed_files) = {
+            let (completed_bytes, completed_files, completed_units) = {
                 let mut files = parsed_bytes.lock().expect("Claude progress state poisoned");
-                if file_progress.stage == ctx_history_capture::ProviderImportStage::Reading {
-                    if let Some(path) = file_progress.source_path.as_ref() {
-                        if let Some((total, completed)) = files.get_mut(&path.display().to_string())
+                if let Some(path) = file_progress.source_path.as_ref() {
+                    if let Some((total, completed, units)) =
+                        files.get_mut(&path.display().to_string())
+                    {
+                        if file_progress.stage == ctx_history_capture::ProviderImportStage::Reading
                         {
                             *completed = file_progress.completed_bytes.min(*total);
                         }
+                        if file_progress.stage == ctx_history_capture::ProviderImportStage::Writing
+                        {
+                            *units = (*units).max(file_progress.completed_units);
+                        }
                     }
                 }
-                files
-                    .values()
-                    .fold((0u64, 0usize), |(bytes, files), (total, completed)| {
+                files.values().fold(
+                    (0u64, 0usize, 0usize),
+                    |(bytes, files, units), (total, completed, file_units)| {
                         (
                             bytes.saturating_add(*completed),
                             files.saturating_add(usize::from(*completed >= *total)),
+                            units.saturating_add(*file_units),
                         )
-                    })
+                    },
+                )
             };
             callback(ProviderImportProgress {
                 stage: file_progress.stage,
@@ -881,8 +914,8 @@ fn import_manifested_claude_parallel(
                 total_bytes,
                 completed_files,
                 completed_bytes,
-                completed_units: file_progress.completed_units,
-                total_units: file_progress.total_units,
+                completed_units,
+                total_units: 0,
                 imported_sessions: file_progress.imported_sessions,
                 imported_events: file_progress.imported_events,
                 imported_edges: file_progress.imported_edges,
@@ -904,62 +937,7 @@ fn import_manifested_claude_parallel(
         },
     );
     drop(deferred_search);
-    // Build every FTS projection in one sequential pass after the hot event
-    // insert loop. The outer import already owns the bulk-search guard.
-    let searchable_events = imported_result
-        .as_ref()
-        .ok()
-        .into_iter()
-        .flatten()
-        .map(|(_, summary)| summary.imported_events)
-        .sum::<usize>();
-    if imported_result.is_ok() {
-        if let Some(callback) = progress.as_ref() {
-            callback(ProviderImportProgress {
-                stage: ctx_history_capture::ProviderImportStage::Searching,
-                source_path: Some(source.path.clone()),
-                total_files,
-                total_bytes,
-                completed_files: total_files,
-                completed_bytes: total_bytes,
-                completed_units: 0,
-                total_units: searchable_events,
-                imported_sessions: 0,
-                imported_events: searchable_events,
-                imported_edges: 0,
-                skipped: 0,
-                failed: 0,
-                done: false,
-            });
-        }
-    }
-    // The import connection has a large page cache and has rotated many write
-    // transactions. Build FTS on a fresh connection so the importer working
-    // set is released before the second memory-intensive phase.
-    let reopened_store = Store::open(store.path())?;
-    *store = reopened_store;
     let imported = imported_result?;
-    let mut search_progress = |completed_units: usize, total_units: usize| {
-        if let Some(callback) = progress.as_ref() {
-            callback(ProviderImportProgress {
-                stage: ctx_history_capture::ProviderImportStage::Searching,
-                source_path: Some(source.path.clone()),
-                total_files,
-                total_bytes,
-                completed_files: total_files,
-                completed_bytes: total_bytes,
-                completed_units,
-                total_units,
-                imported_sessions: 0,
-                imported_events: searchable_events,
-                imported_edges: 0,
-                skipped: 0,
-                failed: 0,
-                done: completed_units >= total_units,
-            });
-        }
-    };
-    store.refresh_search_index_with_progress(&mut search_progress)?;
     let mut completed_files = 0usize;
     let mut completed_bytes = 0u64;
     let mut summary = ProviderImportSummary::default();

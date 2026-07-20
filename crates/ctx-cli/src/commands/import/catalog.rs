@@ -269,10 +269,10 @@ pub(crate) fn mark_catalog_sessions_failed(
 }
 
 pub(crate) fn source_uses_incremental_event_search(source: &SourceInfo) -> bool {
-    // Every importable provider persists events through Store APIs that update
-    // the event-search projection transactionally. Unsupported sources have no
-    // importer and therefore cannot make that guarantee.
-    source.import_support.is_importable()
+    // Manifested Claude imports deliberately defer per-event projections and
+    // rebuild them once after the batch. Other importable providers maintain
+    // event search transactionally.
+    source.import_support.is_importable() && source.provider != CaptureProvider::Claude
 }
 
 pub(crate) fn source_stats(path: &Path) -> Result<SourceStats> {
@@ -517,9 +517,10 @@ mod tests {
             );
 
             assert_eq!(source.import_support, spec.import_support);
-            assert!(
+            assert_eq!(
                 source_uses_incremental_event_search(&source),
-                "{} import must maintain event search incrementally",
+                spec.provider != CaptureProvider::Claude,
+                "{} incremental search contract",
                 spec.provider
             );
         }
