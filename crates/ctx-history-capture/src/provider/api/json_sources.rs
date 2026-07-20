@@ -11,6 +11,7 @@ use crate::provider::adapter::{
 use crate::provider::importer::{
     import_native_jsonl_tree, import_normalized_provider_captures, NativeJsonlTreeImport,
 };
+use crate::provider::providers::claude::normalize_claude_projects_jsonl_file;
 use crate::provider::providers::trae::normalize_trae_history;
 use crate::{
     AuggieImportOptions, ClaudeProjectsImportOptions, ClineTaskJsonImportOptions,
@@ -62,17 +63,19 @@ pub fn import_claude_projects_jsonl_tree(
         .source_path
         .clone()
         .unwrap_or_else(|| path.to_path_buf());
-    let normalization = ClaudeProjectsJsonlAdapter.normalize_path(
-        path,
-        &ProviderAdapterContext {
-            machine_id: options.machine_id,
-            source_path: Some(source_path),
-            source_root: None,
-            imported_at: options.imported_at,
-        },
-    )?;
+    let context = ProviderAdapterContext {
+        machine_id: options.machine_id,
+        source_path: Some(source_path),
+        source_root: None,
+        imported_at: options.imported_at,
+    };
+    let normalization = if path.is_file() {
+        normalize_claude_projects_jsonl_file(path, &context, options.progress.as_ref())?
+    } else {
+        ClaudeProjectsJsonlAdapter.normalize_path(path, &context)?
+    };
 
-    import_normalized_provider_captures(
+    let summary = import_normalized_provider_captures(
         store,
         normalization,
         NormalizedProviderImportOptions {
@@ -81,7 +84,26 @@ pub fn import_claude_projects_jsonl_tree(
             wrap_transaction: true,
             fast_event_inserts: true,
         },
-    )
+    )?;
+    if let Some(callback) = options.progress {
+        let total_bytes = std::fs::metadata(path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        callback(crate::ProviderImportProgress {
+            source_path: Some(path.to_path_buf()),
+            total_files: 1,
+            total_bytes,
+            completed_files: 1,
+            completed_bytes: total_bytes,
+            imported_sessions: summary.imported_sessions,
+            imported_events: summary.imported_events,
+            imported_edges: summary.imported_edges,
+            skipped: summary.skipped,
+            failed: summary.failed,
+            done: true,
+        });
+    }
+    Ok(summary)
 }
 
 pub fn import_cline_task_json_history(

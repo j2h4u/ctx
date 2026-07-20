@@ -1,4 +1,9 @@
-use std::{fs::File, io::BufReader, path::Path};
+use std::{
+    fs::File,
+    io::BufReader,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use chrono::{DateTime, Utc};
 use ctx_history_core::{
@@ -20,21 +25,26 @@ use crate::provider::native::{
     provider_value_text,
 };
 use crate::{
-    ProviderAdapterContext, ProviderImportFailure, ProviderNormalizationResult, Result,
+    ProviderAdapterContext, ProviderImportFailure, ProviderImportProgress,
+    ProviderImportProgressCallback, ProviderNormalizationResult, Result,
     CLAUDE_PROJECTS_SOURCE_FORMAT, PROVIDER_MAX_PREVIEW_CHARS,
 };
 
 pub(crate) fn normalize_claude_projects_jsonl_file(
     path: &Path,
     context: &ProviderAdapterContext,
+    progress: Option<&ProviderImportProgressCallback>,
 ) -> Result<ProviderNormalizationResult> {
     ensure_regular_provider_transcript_file(path)?;
+    let total_bytes = std::fs::metadata(path)?.len();
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut result = ProviderNormalizationResult::default();
     let mut rows = Vec::new();
     let mut line = Vec::new();
     let mut line_number = 0usize;
+    let mut completed_bytes = 0u64;
+    let mut last_progress = Instant::now() - Duration::from_secs(1);
 
     while read_provider_jsonl_record_or_skip_oversized(
         &mut reader,
@@ -42,6 +52,13 @@ pub(crate) fn normalize_claude_projects_jsonl_file(
         &mut line_number,
         &mut result.summary,
     )? {
+        completed_bytes = completed_bytes
+            .saturating_add(line.len() as u64)
+            .min(total_bytes);
+        if last_progress.elapsed() >= Duration::from_millis(250) {
+            report_claude_progress(progress, path, total_bytes, completed_bytes, false);
+            last_progress = Instant::now();
+        }
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
@@ -63,6 +80,7 @@ pub(crate) fn normalize_claude_projects_jsonl_file(
             .unwrap_or(context.imported_at);
         rows.push((line_number, value, timestamp));
     }
+    report_claude_progress(progress, path, total_bytes, completed_bytes, false);
     if rows.is_empty() {
         if result.summary.failed == 0 {
             result.summary.skipped += 1;
@@ -191,6 +209,35 @@ pub(crate) fn normalize_claude_projects_jsonl_file(
     }
 
     Ok(result)
+}
+
+fn report_claude_progress(
+    progress: Option<&ProviderImportProgressCallback>,
+    path: &Path,
+    total_bytes: u64,
+    completed_bytes: u64,
+    done: bool,
+) {
+    let Some(callback) = progress else {
+        return;
+    };
+    callback(ProviderImportProgress {
+        source_path: Some(path.to_path_buf()),
+        total_files: 1,
+        total_bytes,
+        completed_files: usize::from(done),
+        completed_bytes: if done {
+            total_bytes
+        } else {
+            completed_bytes.min(total_bytes)
+        },
+        imported_sessions: 0,
+        imported_events: 0,
+        imported_edges: 0,
+        skipped: 0,
+        failed: 0,
+        done,
+    });
 }
 
 pub(crate) fn claude_path_session_ids(

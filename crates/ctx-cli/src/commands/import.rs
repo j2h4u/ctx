@@ -31,16 +31,16 @@ use ctx_history_capture::{
     stable_capture_uuid, AntigravityCliImportOptions, AstrBotSqliteImportOptions,
     AuggieImportOptions, CaptureError, CatalogSummary, ClaudeProjectsImportOptions,
     ClineTaskJsonImportOptions, CodeBuddyImportOptions, CodexHistoryImportOptions,
-    CodexSessionCatalogOptions, CodexSessionImportOptions, CodexSessionImportProgress,
-    CodexSessionImportProgressCallback, ContinueCliImportOptions, CopilotCliImportOptions,
-    CrushSqliteImportOptions, CursorNativeImportOptions, CustomHistoryJsonlV1ImportOptions,
-    DeepAgentsSqliteImportOptions, FactoryAiDroidImportOptions, FirebenderSqliteImportOptions,
-    ForgeCodeSqliteImportOptions, GeminiCliImportOptions, GooseSessionsSqliteImportOptions,
-    HermesSqliteImportOptions, JunieImportOptions, KiloSqliteImportOptions,
-    KimiCodeCliImportOptions, KiroSqliteImportOptions, LingmaSqliteImportOptions,
-    MiMoCodeSqliteImportOptions, MistralVibeImportOptions, MuxImportOptions, NanoClawImportOptions,
-    OpenClawImportOptions, OpenCodeSqliteImportOptions, OpenHandsImportOptions,
-    PiSessionImportOptions, ProviderImportFailure, ProviderImportSummary, ProviderImportSupport,
+    CodexSessionCatalogOptions, CodexSessionImportOptions, ContinueCliImportOptions,
+    CopilotCliImportOptions, CrushSqliteImportOptions, CursorNativeImportOptions,
+    CustomHistoryJsonlV1ImportOptions, DeepAgentsSqliteImportOptions, FactoryAiDroidImportOptions,
+    FirebenderSqliteImportOptions, ForgeCodeSqliteImportOptions, GeminiCliImportOptions,
+    GooseSessionsSqliteImportOptions, HermesSqliteImportOptions, JunieImportOptions,
+    KiloSqliteImportOptions, KimiCodeCliImportOptions, KiroSqliteImportOptions,
+    LingmaSqliteImportOptions, MiMoCodeSqliteImportOptions, MistralVibeImportOptions,
+    MuxImportOptions, NanoClawImportOptions, OpenClawImportOptions, OpenCodeSqliteImportOptions,
+    OpenHandsImportOptions, PiSessionImportOptions, ProviderImportFailure, ProviderImportProgress,
+    ProviderImportProgressCallback, ProviderImportSummary, ProviderImportSupport,
     ProviderSourceStatus, QoderImportOptions, QwenCodeImportOptions, RooTaskJsonImportOptions,
     RovoDevImportOptions, ShelleySqliteImportOptions, TabnineCliImportOptions, TraeImportOptions,
     WarpSqliteImportOptions, WindsurfCascadeHookImportOptions, ZedThreadsSqliteImportOptions,
@@ -676,7 +676,7 @@ pub(crate) fn run_import_internal(
             .enumerate()
             .map(|(index, plan)| {
                 let db_path = db_path.clone();
-                let progress_callback = progress.parallel_codex_import_callback(
+                let progress_callback = progress.parallel_source_import_callback(
                     &plan.source,
                     index,
                     Arc::clone(&source_states),
@@ -843,7 +843,7 @@ pub(crate) fn run_import_internal(
                 );
             }
             let source_progress =
-                progress.codex_import_callback(&plan.source, completed_source_bytes);
+                progress.source_import_callback(&plan.source, completed_source_bytes);
             completed_source_bytes = completed_source_bytes.saturating_add(plan.stats.bytes);
             match import_one_source(
                 &mut store,

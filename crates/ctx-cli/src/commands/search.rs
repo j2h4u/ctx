@@ -569,7 +569,7 @@ pub(crate) fn refresh_sources_for_search(
             .enumerate()
             .map(|(index, plan)| {
                 let db_path = db_path.clone();
-                let progress_callback = progress.parallel_codex_import_callback(
+                let progress_callback = progress.parallel_source_import_callback(
                     &plan.source,
                     index,
                     Arc::clone(&source_states),
@@ -628,7 +628,7 @@ pub(crate) fn refresh_sources_for_search(
                 format!("importing {}", plan.source.provider.as_str()),
             );
             let source_progress =
-                progress.codex_import_callback(&plan.source, completed_source_bytes);
+                progress.source_import_callback(&plan.source, completed_source_bytes);
             completed_source_bytes = completed_source_bytes.saturating_add(plan.stats.bytes);
             let import_result = import_one_source_for_search_refresh(
                 &mut store,

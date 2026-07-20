@@ -22,7 +22,7 @@ pub(crate) fn validate_source_import_supported(source: &SourceInfo) -> Result<()
 pub(crate) fn import_one_source(
     store: &mut Store,
     source: &SourceInfo,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     full_rescan: bool,
     preinventory: &SourcePreinventory,
 ) -> Result<ProviderImportSummary> {
@@ -42,7 +42,7 @@ pub(crate) fn import_one_source(
 pub(crate) fn import_one_source_without_search_refresh(
     store: &mut Store,
     source: &SourceInfo,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     full_rescan: bool,
     preinventory: &SourcePreinventory,
 ) -> Result<ProviderImportSummary> {
@@ -52,7 +52,7 @@ pub(crate) fn import_one_source_without_search_refresh(
 pub(crate) fn import_one_source_for_search_refresh(
     store: &mut Store,
     source: &SourceInfo,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     preinventory: &SourcePreinventory,
 ) -> Result<ProviderImportSummary> {
     if !source_uses_import_file_manifest(source)
@@ -73,7 +73,7 @@ pub(crate) fn import_one_source_for_search_refresh(
 pub(crate) fn import_one_source_inner(
     store: &mut Store,
     source: &SourceInfo,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     refresh_search_after_import: bool,
     full_rescan: bool,
     preinventory: &SourcePreinventory,
@@ -96,7 +96,7 @@ pub(crate) fn import_one_source_inner(
 fn import_one_source_inner_batched(
     store: &mut Store,
     source: &SourceInfo,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     full_rescan: bool,
     preinventory: &SourcePreinventory,
 ) -> Result<ProviderImportSummary> {
@@ -183,6 +183,7 @@ fn import_one_source_inner_batched(
                 ClaudeProjectsImportOptions {
                     source_path: Some(source.path.clone()),
                     history_record_id: Some(record_id),
+                    progress: progress.clone(),
                     ..ClaudeProjectsImportOptions::default()
                 },
             )
@@ -709,7 +710,7 @@ pub(crate) fn import_manifested_source(
     store: &mut Store,
     source: &SourceInfo,
     record_id: Uuid,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     preinventoried_files: Option<&[SourceImportFile]>,
 ) -> Result<ProviderImportSummary> {
     let source_root = source.path.display().to_string();
@@ -742,13 +743,41 @@ pub(crate) fn import_manifested_source(
     let mut completed_bytes = 0u64;
     let mut summary = ProviderImportSummary::default();
     for pending_file in pending {
+        let file_progress = if source.provider == CaptureProvider::Claude {
+            progress.as_ref().map(|callback| {
+                let callback = Arc::clone(callback);
+                let source_path = source.path.clone();
+                let source_completed_files = completed_files;
+                let source_completed_bytes = completed_bytes;
+                Arc::new(move |file_progress: ProviderImportProgress| {
+                    callback(ProviderImportProgress {
+                        source_path: Some(source_path.clone()),
+                        total_files,
+                        total_bytes,
+                        completed_files: source_completed_files
+                            .saturating_add(file_progress.completed_files),
+                        completed_bytes: source_completed_bytes
+                            .saturating_add(file_progress.completed_bytes)
+                            .min(total_bytes),
+                        imported_sessions: file_progress.imported_sessions,
+                        imported_events: file_progress.imported_events,
+                        imported_edges: file_progress.imported_edges,
+                        skipped: file_progress.skipped,
+                        failed: file_progress.failed,
+                        done: false,
+                    });
+                }) as ProviderImportProgressCallback
+            })
+        } else {
+            progress.clone()
+        };
         let path = PathBuf::from(&pending_file.source_path);
         let mut pending_source = explicit_path_source(source.provider, path);
         pending_source.source_format = source.source_format;
         let imported = import_one_source_inner(
             store,
             &pending_source,
-            progress.clone(),
+            file_progress,
             false,
             true,
             &SourcePreinventory::None,
@@ -794,20 +823,22 @@ pub(crate) fn import_manifested_source(
         }
         completed_files = completed_files.saturating_add(1);
         completed_bytes = completed_bytes.saturating_add(pending_file.file_size_bytes);
-        if let Some(callback) = progress.as_ref() {
-            callback(CodexSessionImportProgress {
-                source_path: Some(source.path.clone()),
-                total_files,
-                total_bytes,
-                completed_files,
-                completed_bytes,
-                imported_sessions: summary.imported_sessions,
-                imported_events: summary.imported_events,
-                imported_edges: summary.imported_edges,
-                skipped: summary.skipped,
-                failed: summary.failed,
-                done: false,
-            });
+        if source.provider != CaptureProvider::Claude {
+            if let Some(callback) = progress.as_ref() {
+                callback(ProviderImportProgress {
+                    source_path: Some(source.path.clone()),
+                    total_files,
+                    total_bytes,
+                    completed_files,
+                    completed_bytes,
+                    imported_sessions: summary.imported_sessions,
+                    imported_events: summary.imported_events,
+                    imported_edges: summary.imported_edges,
+                    skipped: summary.skipped,
+                    failed: summary.failed,
+                    done: false,
+                });
+            }
         }
     }
     let _ = record_id;

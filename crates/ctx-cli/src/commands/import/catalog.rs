@@ -13,7 +13,7 @@ pub(crate) fn import_incremental_codex_session_tree(
     store: &mut Store,
     source: &SourceInfo,
     record_id: Uuid,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     preinventory_catalog: Option<&CatalogSummary>,
 ) -> Result<ProviderImportSummary> {
     let source_root = source.path.display().to_string();

@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::commands::import::{source_error_reason, SourceStats};
 use crate::provider_sources::SourceInfo;
 use ctx_history_capture::{
-    CodexSessionImportProgress, CodexSessionImportProgressCallback, ProviderImportSummary,
+    ProviderImportProgress, ProviderImportProgressCallback, ProviderImportSummary,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -203,17 +203,17 @@ impl ProgressReporter {
         }
     }
 
-    pub(crate) fn codex_import_callback(
+    pub(crate) fn source_import_callback(
         &self,
         source: &SourceInfo,
         source_offset_bytes: u64,
-    ) -> Option<CodexSessionImportProgressCallback> {
+    ) -> Option<ProviderImportProgressCallback> {
         if !self.is_enabled() {
             return None;
         }
         let reporter = self.clone();
         let provider = source.provider.as_str().to_owned();
-        Some(Arc::new(move |progress: CodexSessionImportProgress| {
+        Some(Arc::new(move |progress: ProviderImportProgress| {
             let completed_bytes = source_offset_bytes.saturating_add(progress.completed_bytes);
             reporter.emit(ProgressLine {
                 phase: "indexing",
@@ -232,18 +232,18 @@ impl ProgressReporter {
         }))
     }
 
-    pub(crate) fn parallel_codex_import_callback(
+    pub(crate) fn parallel_source_import_callback(
         &self,
         source: &SourceInfo,
         source_index: usize,
         source_states: Arc<Mutex<Vec<SourceProgressSnapshot>>>,
-    ) -> Option<CodexSessionImportProgressCallback> {
+    ) -> Option<ProviderImportProgressCallback> {
         if !self.is_enabled() {
             return None;
         }
         let reporter = self.clone();
         let provider = source.provider.as_str().to_owned();
-        Some(Arc::new(move |progress: CodexSessionImportProgress| {
+        Some(Arc::new(move |progress: ProviderImportProgress| {
             let (completed_bytes, total_bytes) = {
                 let mut states = source_states
                     .lock()
@@ -439,8 +439,11 @@ fn render_progress_line_for_width(
     let bytes = format_byte_range(completed_bytes, total_bytes);
     let files = line
         .completed_files
+        .zip(line.total_files)
         .filter(|_| !line.done)
-        .map(|done| format!(" {} files", format_count(done)))
+        .map(|(completed, total)| {
+            format!(" {}/{} files", format_count(completed), format_count(total))
+        })
         .unwrap_or_default();
     let remaining = if line.done {
         "done".to_owned()
@@ -451,6 +454,14 @@ fn render_progress_line_for_width(
     };
     let target_width = target_width.clamp(36, 76);
     let candidates = [
+        format!(
+            "{phase} {} [{bar}] {percent:>3.0}%  {bytes}{files}  {remaining}",
+            line.message
+        ),
+        format!(
+            "{phase} {} [{bar}] {percent:>3.0}%  {bytes}  {remaining}",
+            line.message
+        ),
         format!("{phase} [{bar}] {percent:>3.0}%  {bytes}{files}  {remaining}"),
         format!("{phase} [{bar}] {percent:>3.0}%  {bytes}  {remaining}"),
         format!("{phase} [{bar}] {percent:>3.0}%  {remaining}"),
@@ -680,10 +691,9 @@ mod tests {
             render_progress_line_for_width(&sample_line(), StdDuration::from_secs(120), 76);
 
         assert!(rendered.chars().count() <= 76, "{rendered}");
-        assert!(rendered.starts_with("Indexing ["), "{rendered}");
+        assert!(rendered.starts_with("Indexing codex ["), "{rendered}");
         assert!(rendered.contains("7.0/14.0 GiB"), "{rendered}");
-        assert!(rendered.contains("8,420 files"), "{rendered}");
-        assert!(!rendered.contains("codex"), "{rendered}");
+        assert!(rendered.contains("codex"), "{rendered}");
         assert!(!rendered.contains("events"), "{rendered}");
     }
 

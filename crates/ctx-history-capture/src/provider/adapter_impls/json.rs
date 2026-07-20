@@ -61,7 +61,7 @@ impl ProviderCaptureAdapter for ClaudeProjectsJsonlAdapter {
 
         let mut merged = ProviderNormalizationResult::default();
         for path in paths {
-            let mut result = normalize_claude_projects_jsonl_file(&path, context)?;
+            let mut result = normalize_claude_projects_jsonl_file(&path, context, None)?;
             merged.summary.merge(result.summary);
             merged.captures.append(&mut result.captures);
             merged.files_touched.append(&mut result.files_touched);
