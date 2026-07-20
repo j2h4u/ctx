@@ -639,7 +639,7 @@ fn render_progress_line_for_width(
                     format_count(completed),
                     format_count(total)
                 )
-            } else if total == 0 {
+            } else if total == 0 || total < completed {
                 format!("{} records written", format_count(completed))
             } else {
                 format!(
@@ -948,6 +948,12 @@ mod tests {
 
         line.total_units = Some(150_000);
         assert_eq!(progress_line_percent(&line), 50.0);
+
+        line.completed_units = Some(150_001);
+        line.total_units = Some(7);
+        let rendered = render_progress_line_for_width(&line, StdDuration::ZERO, 120);
+        assert!(rendered.contains("150,001 records written"), "{rendered}");
+        assert!(!rendered.contains("/7 records"), "{rendered}");
     }
 
     #[test]

@@ -38,6 +38,13 @@ fn bulk_mode_marker(store: &Store) -> Option<i64> {
         .unwrap()
 }
 
+fn wal_autocheckpoint(store: &Store) -> i64 {
+    store
+        .conn
+        .pragma_query_value(None, "wal_autocheckpoint", |row| row.get(0))
+        .unwrap()
+}
+
 #[test]
 fn strict_truncating_checkpoint_reports_pinned_reader() {
     let temp = tempdir();
@@ -86,6 +93,7 @@ fn bulk_search_mode_recovers_on_reopen_and_restores_saved_config() {
 
     let guard = store.begin_event_search_bulk_mode().unwrap();
     assert_eq!(bulk_mode_marker(&store), Some(1));
+    assert_eq!(wal_autocheckpoint(&store), 0);
     for table in ["event_search", "event_search_scriptgram"] {
         assert_eq!(fts_config(&store, table, "automerge", 4), 0);
         assert_eq!(fts_config(&store, table, "crisismerge", 16), 1_000_000);
@@ -95,10 +103,29 @@ fn bulk_search_mode_recovers_on_reopen_and_restores_saved_config() {
 
     let reopened = Store::open(&db_path).unwrap();
     assert_eq!(bulk_mode_marker(&reopened), None);
+    assert_eq!(wal_autocheckpoint(&reopened), 10_000);
     for table in ["event_search", "event_search_scriptgram"] {
         assert_eq!(fts_config(&reopened, table, "automerge", 4), 8);
         assert_eq!(fts_config(&reopened, table, "crisismerge", 16), 32);
     }
+}
+
+#[test]
+fn bulk_search_mode_restores_wal_autocheckpoint_after_clean_finish() {
+    let temp = tempdir();
+    let db_path = temp.path().join("work.sqlite");
+    let store = Store::open(&db_path).unwrap();
+    store
+        .conn
+        .pragma_update(None, "wal_autocheckpoint", 321_000)
+        .unwrap();
+
+    let guard = store.begin_event_search_bulk_mode().unwrap();
+    assert_eq!(wal_autocheckpoint(&store), 0);
+    store.finish_event_search_bulk_mode(&guard).unwrap();
+
+    assert_eq!(wal_autocheckpoint(&store), 321_000);
+    assert_eq!(bulk_mode_marker(&store), None);
 }
 
 #[test]

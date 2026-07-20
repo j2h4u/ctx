@@ -30,6 +30,8 @@ use crate::{
     Result, RooTaskJsonImportOptions, TraeImportOptions,
 };
 
+const CLAUDE_BULK_WAL_CHECKPOINT_BYTES: u64 = 1024 * 1024 * 1024;
+
 pub fn import_pi_session_jsonl(
     path: impl AsRef<Path>,
     store: &mut Store,
@@ -332,6 +334,7 @@ fn import_claude_normalization_batch(
         let _ = store.rollback_batch();
         return Err(error.into());
     }
+    store.checkpoint_wal_passive_if_larger_than(CLAUDE_BULK_WAL_CHECKPOINT_BYTES)?;
     Ok(())
 }
 

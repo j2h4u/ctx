@@ -53,6 +53,7 @@ pub struct EventSearchBulkGuard {
     store_path: PathBuf,
     depth: Arc<AtomicUsize>,
     depth_counted: bool,
+    wal_autocheckpoint: Option<i64>,
 }
 
 impl Drop for EventSearchBulkGuard {
@@ -75,6 +76,7 @@ impl Store {
                 store_path: self.path.clone(),
                 depth: Arc::clone(&self.event_search_bulk_depth),
                 depth_counted: true,
+                wal_autocheckpoint: None,
             });
         }
         let acquired = match self.acquire_event_search_bulk_lock(self.busy_timeout) {
@@ -92,7 +94,13 @@ impl Store {
             }
         };
         guard.depth_counted = true;
-        self.begin_immediate_batch()?;
+        let wal_autocheckpoint = self.wal_autocheckpoint()?;
+        self.set_wal_autocheckpoint(0)?;
+        guard.wal_autocheckpoint = Some(wal_autocheckpoint);
+        if let Err(error) = self.begin_immediate_batch() {
+            let _ = self.restore_wal_autocheckpoint(&guard);
+            return Err(error);
+        }
         let result = (|| {
             ensure_search_projection_stats_table(self)?;
             if !bulk_mode_pending(self)? {
@@ -117,10 +125,12 @@ impl Store {
         })();
         if let Err(err) = result {
             let _ = self.rollback_batch();
+            let _ = self.restore_wal_autocheckpoint(&guard);
             return Err(err);
         }
         if let Err(err) = self.commit_batch() {
             let _ = self.rollback_batch();
+            let _ = self.restore_wal_autocheckpoint(&guard);
             return Err(err);
         }
         Ok(guard)
@@ -143,13 +153,21 @@ impl Store {
         if guard.depth_counted && guard.depth.load(Ordering::SeqCst) != 1 {
             return Err(StoreError::InvalidBulkSearchGuard);
         }
-        if !bulk_mode_pending(self)? {
-            return Ok(());
-        }
-        loop {
-            if self.finish_event_search_bulk_mode_step()? {
+        let finish_result = (|| {
+            if !bulk_mode_pending(self)? {
                 return Ok(());
             }
+            loop {
+                if self.finish_event_search_bulk_mode_step()? {
+                    return Ok(());
+                }
+            }
+        })();
+        let restore_result = self.restore_wal_autocheckpoint(guard);
+        match (finish_result, restore_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (_, Err(error)) => Err(error),
+            (Err(error), Ok(())) => Err(error),
         }
     }
 
@@ -321,10 +339,29 @@ impl Store {
                 store_path: self.path.clone(),
                 depth: Arc::clone(&self.event_search_bulk_depth),
                 depth_counted: false,
+                wal_autocheckpoint: None,
             })),
             Err(err) if sqlite_is_busy(&err) => Ok(None),
             Err(err) => Err(err.into()),
         }
+    }
+
+    fn wal_autocheckpoint(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .pragma_query_value(None, "wal_autocheckpoint", |row| row.get(0))?)
+    }
+
+    fn set_wal_autocheckpoint(&self, pages: i64) -> Result<()> {
+        self.conn.pragma_update(None, "wal_autocheckpoint", pages)?;
+        Ok(())
+    }
+
+    fn restore_wal_autocheckpoint(&self, guard: &EventSearchBulkGuard) -> Result<()> {
+        if let Some(pages) = guard.wal_autocheckpoint {
+            self.set_wal_autocheckpoint(pages)?;
+        }
+        Ok(())
     }
 }
 

@@ -63,7 +63,14 @@ pub(crate) fn import_one_source_for_search_refresh(
     {
         store.upsert_record(&import_record_for_source(source))?;
         if store.event_search_projection_needs_backfill()? {
-            store.refresh_search_index()?;
+            let bulk_guard = store.begin_event_search_bulk_mode()?;
+            let refresh_result = store.refresh_search_index();
+            let finish_result = store.finish_event_search_bulk_mode(&bulk_guard);
+            match (refresh_result, finish_result) {
+                (Ok(()), Ok(())) => {}
+                (_, Err(error)) => return Err(error.into()),
+                (Err(error), Ok(())) => return Err(error.into()),
+            }
         }
         return Ok(ProviderImportSummary::default());
     }
@@ -81,36 +88,38 @@ pub(crate) fn import_one_source_inner(
     let bulk_guard = store.begin_event_search_bulk_mode()?;
     let import_result =
         import_one_source_inner_batched(store, source, progress.clone(), full_rescan, preinventory);
+    let import_result = import_result.and_then(|summary| {
+        if refresh_search_after_import {
+            let mut search_progress = |completed_units: usize, total_units: usize| {
+                if let Some(callback) = progress.as_ref() {
+                    callback(ProviderImportProgress {
+                        stage: ctx_history_capture::ProviderImportStage::Searching,
+                        source_path: Some(source.path.clone()),
+                        total_files: 1,
+                        total_bytes: 0,
+                        completed_files: 1,
+                        completed_bytes: 0,
+                        completed_units,
+                        total_units,
+                        imported_sessions: 0,
+                        imported_events: summary.imported_events,
+                        imported_edges: 0,
+                        skipped: 0,
+                        failed: 0,
+                        done: completed_units >= total_units,
+                    });
+                }
+            };
+            store.refresh_search_index_with_progress(&mut search_progress)?;
+        }
+        Ok(summary)
+    });
     let finish_result = store.finish_event_search_bulk_mode(&bulk_guard);
-    let summary = match (import_result, finish_result) {
+    match (import_result, finish_result) {
         (Ok(summary), Ok(())) => Ok(summary),
         (_, Err(error)) => Err(error.into()),
         (Err(error), Ok(())) => Err(error),
-    }?;
-    if refresh_search_after_import {
-        let mut search_progress = |completed_units: usize, total_units: usize| {
-            if let Some(callback) = progress.as_ref() {
-                callback(ProviderImportProgress {
-                    stage: ctx_history_capture::ProviderImportStage::Searching,
-                    source_path: Some(source.path.clone()),
-                    total_files: 1,
-                    total_bytes: 0,
-                    completed_files: 1,
-                    completed_bytes: 0,
-                    completed_units,
-                    total_units,
-                    imported_sessions: 0,
-                    imported_events: summary.imported_events,
-                    imported_edges: 0,
-                    skipped: 0,
-                    failed: 0,
-                    done: completed_units >= total_units,
-                });
-            }
-        };
-        store.refresh_search_index_with_progress(&mut search_progress)?;
     }
-    Ok(summary)
 }
 
 fn import_one_source_inner_batched(
@@ -925,7 +934,6 @@ fn import_manifested_claude_parallel(
             });
         }) as ProviderImportProgressCallback
     });
-    let deferred_search = store.defer_event_search_projections();
     let imported_result = import_claude_projects_jsonl_files_bounded_parallel(
         store,
         &paths,
@@ -936,7 +944,6 @@ fn import_manifested_claude_parallel(
             ..ClaudeProjectsImportOptions::default()
         },
     );
-    drop(deferred_search);
     let imported = imported_result?;
     let mut completed_files = 0usize;
     let mut completed_bytes = 0u64;

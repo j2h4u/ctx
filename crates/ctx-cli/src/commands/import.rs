@@ -853,10 +853,17 @@ pub(crate) fn run_import_internal(
         if final_refresh_required {
             progress.message("searching", "Building search index...");
             let store = Store::open(&db_path)?;
+            let bulk_guard = store.begin_event_search_bulk_mode()?;
             let mut search_progress = |completed: usize, total: usize| {
                 progress.search_index_progress(completed, total);
             };
-            store.refresh_search_index_with_progress(&mut search_progress)?;
+            let refresh_result = store.refresh_search_index_with_progress(&mut search_progress);
+            let finish_result = store.finish_event_search_bulk_mode(&bulk_guard);
+            match (refresh_result, finish_result) {
+                (Ok(()), Ok(())) => {}
+                (_, Err(error)) => return Err(error.into()),
+                (Err(error), Ok(())) => return Err(error.into()),
+            }
         }
     } else {
         let mut completed_source_bytes = 0u64;
