@@ -603,8 +603,8 @@ fn render_progress_line_for_width(
     let bar = progress_bar(percent, 10);
     let bytes = if line.stage == Some("search") {
         String::new()
-    } else if line.stage == Some("import") {
-        format!("read {}", format_byte_range(completed_bytes, total_bytes))
+    } else if line.stage == Some("ingest") {
+        format!("{} read", format_byte_range(completed_bytes, total_bytes))
     } else {
         format_byte_range(completed_bytes, total_bytes)
     };
@@ -633,7 +633,7 @@ fn render_progress_line_for_width(
     let files = line
         .completed_files
         .zip(line.total_files)
-        .filter(|_| !line.done && !matches!(line.stage, Some("import" | "search")))
+        .filter(|_| !line.done && !matches!(line.stage, Some("ingest" | "search")))
         .map(|(completed, total)| {
             format!("{}/{} files", format_count(completed), format_count(total))
         })
@@ -654,21 +654,12 @@ fn render_progress_line_for_width(
     .collect::<Vec<_>>()
     .join(" · ");
     let target_width = target_width.clamp(36, 100);
-    let indeterminate = line.stage == Some("import") && line.total_units == Some(0);
-    let candidates = if indeterminate {
-        vec![
-            format!("{title}  {details}"),
-            format!("{phase}  {details}"),
-            format!("{phase}  {remaining}"),
-        ]
-    } else {
-        vec![
-            format!("{title} [{bar}] {percent:>3.0}%  {details}"),
-            format!("{phase} [{bar}] {percent:>3.0}%  {details}"),
-            format!("{phase} {percent:>3.0}%  {details}"),
-            format!("{phase} {percent:>3.0}%  {remaining}"),
-        ]
-    };
+    let candidates = vec![
+        format!("{title} [{bar}] {percent:>3.0}%  {details}"),
+        format!("{phase} [{bar}] {percent:>3.0}%  {details}"),
+        format!("{phase} {percent:>3.0}%  {details}"),
+        format!("{phase} {percent:>3.0}%  {remaining}"),
+    ];
     candidates
         .into_iter()
         .find(|line| line.chars().count() <= target_width)
@@ -775,7 +766,7 @@ fn progress_line_percent(line: &ProgressLine) -> f64 {
 fn provider_stage_name(stage: ProviderImportStage) -> &'static str {
     match stage {
         ProviderImportStage::Reading => "read",
-        ProviderImportStage::Writing => "import",
+        ProviderImportStage::Writing => "ingest",
         ProviderImportStage::Searching => "search",
     }
 }
@@ -914,6 +905,23 @@ mod tests {
         assert!(rendered.chars().count() <= 45, "{rendered}");
         assert!(rendered.starts_with("Importing"), "{rendered}");
         assert!(!rendered.contains("files"), "{rendered}");
+    }
+
+    #[test]
+    fn streaming_ingest_uses_byte_progress_with_unknown_record_total() {
+        let mut line = sample_line();
+        line.stage = Some("ingest");
+        line.completed_units = Some(120_000);
+        line.total_units = Some(0);
+
+        let rendered = render_progress_line_for_width(&line, StdDuration::from_secs(20), 100);
+
+        assert!(
+            rendered.starts_with("codex · ingest [#####-----]  50%"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("7.0/14.0 GiB read"), "{rendered}");
+        assert!(rendered.contains("120,000 records written"), "{rendered}");
     }
 
     #[test]
