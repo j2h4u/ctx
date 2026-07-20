@@ -299,17 +299,29 @@ impl ProgressReporter {
             if let Some(diagnostics) = &reporter.diagnostics {
                 diagnostics.provider_progress(&provider, &progress);
             }
-            let (stage, completed_units, total_units) = {
+            let (completed_bytes, total_bytes, stage, completed_units, total_units) = {
                 let mut state = display_state
                     .lock()
                     .expect("provider progress state poisoned");
-                coalesce_provider_stage(&mut state, &progress)
+                state.total_bytes = state.total_bytes.max(progress.total_bytes);
+                state.completed_bytes = state
+                    .completed_bytes
+                    .max(progress.completed_bytes.min(state.total_bytes));
+                let (stage, completed_units, total_units) =
+                    coalesce_provider_stage(&mut state, &progress);
+                (
+                    state.completed_bytes,
+                    state.total_bytes,
+                    stage,
+                    completed_units,
+                    total_units,
+                )
             };
             reporter.emit(ProgressLine {
                 phase: "indexing",
                 message: provider.clone(),
-                completed_bytes: progress.completed_bytes,
-                total_bytes: progress.total_bytes,
+                completed_bytes,
+                total_bytes,
                 completed_files: Some(progress.completed_files),
                 total_files: Some(progress.total_files),
                 stage: Some(provider_stage_name(stage)),
@@ -346,9 +358,9 @@ impl ProgressReporter {
                     .expect("parallel progress state poisoned");
                 if let Some(state) = states.get_mut(source_index) {
                     state.total_bytes = state.total_bytes.max(progress.total_bytes);
-                    state.completed_bytes = progress
+                    state.completed_bytes = state
                         .completed_bytes
-                        .min(state.total_bytes.max(progress.completed_bytes));
+                        .max(progress.completed_bytes.min(state.total_bytes));
                     let (stage, completed_units, total_units) =
                         coalesce_provider_stage(state, &progress);
                     let (completed_bytes, total_bytes) = aggregate_source_progress(&states);

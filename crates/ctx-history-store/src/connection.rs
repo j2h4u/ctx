@@ -166,7 +166,7 @@ impl Store {
 
     pub fn checkpoint_wal_truncate_required(&self) -> Result<()> {
         let outcome = self.checkpoint_wal("TRUNCATE")?;
-        if outcome.busy {
+        if outcome.busy && outcome.checkpointed_frames < outcome.log_frames {
             return Err(StoreError::WalCheckpointBusy {
                 log_frames: outcome.log_frames,
                 checkpointed_frames: outcome.checkpointed_frames,

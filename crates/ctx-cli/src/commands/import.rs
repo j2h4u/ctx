@@ -867,82 +867,105 @@ pub(crate) fn run_import_internal(
         }
     } else {
         let mut completed_source_bytes = 0u64;
-        for plan in planned_sources {
-            if options.print_human {
-                progress.finish_line();
-                println!(
-                    "importing {} {} ({} files, {})",
-                    plan.source.provider.as_str(),
-                    plan.source.path.display(),
-                    plan.stats.files,
-                    format_bytes(plan.stats.bytes)
-                );
-            }
-            let source_progress =
-                progress.source_import_callback(&plan.source, completed_source_bytes);
-            completed_source_bytes = completed_source_bytes.saturating_add(plan.stats.bytes);
-            match import_one_source(
-                &mut store,
-                &plan.source,
-                source_progress,
-                args.resume,
-                &plan.preinventory,
-            ) {
-                Ok(summary) => {
-                    totals.add(&summary, &plan.stats);
-                    progress.source_done(&plan.source, plan.stats, &summary);
-                    if options.print_human {
-                        progress.finish_line();
-                        print_source_imported(&plan.source, &summary);
-                    }
-                    imported_sources.push(source_import_json(&plan.source, &plan.stats, &summary));
+        let command_bulk_guard = (!planned_sources.is_empty())
+            .then(|| store.begin_event_search_bulk_mode())
+            .transpose()?;
+        let import_result = (|| -> Result<()> {
+            for plan in planned_sources {
+                if options.print_human {
+                    progress.finish_line();
+                    println!(
+                        "importing {} {} ({} files, {})",
+                        plan.source.provider.as_str(),
+                        plan.source.path.display(),
+                        plan.stats.files,
+                        format_bytes(plan.stats.bytes)
+                    );
                 }
-                Err(err) => {
-                    let failure_scope = import_error_scope(&err);
-                    let failure_type = import_failure_type(&err);
-                    let rejected_summary = rejected_source_summary(&err);
-                    let error = error_summary(&err);
-                    if failure_scope == ImportFailureScope::Source {
-                        let failure = ImportSourceFailure {
-                            index: imported_sources.len(),
-                            source: plan.source,
-                            stats: plan.stats,
-                            error,
-                            failure_scope,
-                            failure_type,
-                            rejected_summary,
-                            system_error: None,
-                        };
-                        if let Some(summary) = failure.rejected_summary.as_ref() {
-                            totals.add_rejected_source(summary, &failure.stats);
-                        } else {
-                            totals.add_source_failure(&failure.stats);
-                        }
-                        progress.update(
-                            "indexing",
-                            format!(
-                                "skipped {}: {}",
-                                failure.source.provider.as_str(),
-                                source_error_reason(&failure.source, &failure.error)
-                            ),
-                            completed_source_bytes,
-                        );
+                let source_progress =
+                    progress.source_import_callback(&plan.source, completed_source_bytes);
+                completed_source_bytes = completed_source_bytes.saturating_add(plan.stats.bytes);
+                match import_one_source(
+                    &mut store,
+                    &plan.source,
+                    source_progress,
+                    args.resume,
+                    &plan.preinventory,
+                ) {
+                    Ok(summary) => {
+                        totals.add(&summary, &plan.stats);
+                        progress.source_done(&plan.source, plan.stats, &summary);
                         if options.print_human {
                             progress.finish_line();
-                            print_source_failed(&failure);
+                            print_source_imported(&plan.source, &summary);
                         }
-                        imported_sources.push(source_failure_json(&failure));
-                    } else {
-                        return Err(err);
+                        imported_sources.push(source_import_json(
+                            &plan.source,
+                            &plan.stats,
+                            &summary,
+                        ));
+                    }
+                    Err(err) => {
+                        let failure_scope = import_error_scope(&err);
+                        let failure_type = import_failure_type(&err);
+                        let rejected_summary = rejected_source_summary(&err);
+                        let error = error_summary(&err);
+                        if failure_scope == ImportFailureScope::Source {
+                            let failure = ImportSourceFailure {
+                                index: imported_sources.len(),
+                                source: plan.source,
+                                stats: plan.stats,
+                                error,
+                                failure_scope,
+                                failure_type,
+                                rejected_summary,
+                                system_error: None,
+                            };
+                            if let Some(summary) = failure.rejected_summary.as_ref() {
+                                totals.add_rejected_source(summary, &failure.stats);
+                            } else {
+                                totals.add_source_failure(&failure.stats);
+                            }
+                            progress.update(
+                                "indexing",
+                                format!(
+                                    "skipped {}: {}",
+                                    failure.source.provider.as_str(),
+                                    source_error_reason(&failure.source, &failure.error)
+                                ),
+                                completed_source_bytes,
+                            );
+                            if options.print_human {
+                                progress.finish_line();
+                                print_source_failed(&failure);
+                            }
+                            imported_sources.push(source_failure_json(&failure));
+                        } else {
+                            return Err(err);
+                        }
                     }
                 }
             }
+            Ok(())
+        })();
+        if command_bulk_guard.is_some() {
+            progress.message("finalizing", "Finalizing bulk index...");
         }
-    }
-
-    if totals.imported_sessions > 0 || totals.imported_events > 0 || totals.imported_edges > 0 {
-        progress.message("finalizing", "Optimizing search index...");
-        Store::open(&db_path)?.optimize_search_index()?;
+        let finish_result = command_bulk_guard
+            .as_ref()
+            .map(|guard| store.finish_event_search_bulk_mode(guard))
+            .transpose();
+        match (import_result, finish_result) {
+            (Ok(()), Ok(_)) => {}
+            (_, Err(error)) => {
+                progress.finish_line();
+                return Err(error.into());
+            }
+            (Err(error), Ok(_)) => {
+                progress.finish_line();
+                return Err(error);
+            }
+        }
     }
 
     progress.message("finalizing", "Checkpointing search database...");
