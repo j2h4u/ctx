@@ -151,11 +151,14 @@ pub(crate) fn report_codex_import_progress(
         return;
     };
     callback(CodexSessionImportProgress {
+        stage: crate::ProviderImportStage::Writing,
         source_path: options.source_path.clone(),
         total_files,
         total_bytes,
         completed_files,
         completed_bytes,
+        completed_units: summary.imported_events,
+        total_units: summary.imported_events,
         imported_sessions: summary.imported_sessions,
         imported_events: summary.imported_events,
         imported_edges: summary.imported_edges,

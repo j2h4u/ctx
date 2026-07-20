@@ -14,6 +14,7 @@ mod docs;
 mod execution_capabilities;
 mod history_source_plugins;
 mod identity;
+mod import_diagnostics;
 mod install_marker;
 mod integrations;
 mod mcp;
@@ -123,6 +124,30 @@ enum CommandRoot {
     Upgrade(upgrade::UpgradeArgs),
     #[command(about = "Check local ctx health")]
     Doctor(DoctorArgs),
+    #[command(about = "Inspect local performance diagnostics")]
+    Diagnostics(DiagnosticsArgs),
+}
+
+#[derive(Debug, Args)]
+struct DiagnosticsArgs {
+    #[command(subcommand)]
+    command: DiagnosticsCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum DiagnosticsCommand {
+    #[command(about = "Inspect a completed or interrupted import run")]
+    Imports(ImportDiagnosticsArgs),
+}
+
+#[derive(Debug, Args)]
+struct ImportDiagnosticsArgs {
+    #[arg(help = "Run UUID or a unique fragment; defaults to the latest run")]
+    run: Option<String>,
+    #[arg(long, help = "Compare with another run UUID or unique fragment")]
+    compare: Option<String>,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -580,12 +605,17 @@ impl CommandRoot {
             Self::Daemon(_) => "daemon",
             Self::Upgrade(_) => "upgrade",
             Self::Doctor(_) => "doctor",
+            Self::Diagnostics(_) => "diagnostics",
         }
     }
 
     fn sends_analytics(&self) -> bool {
         match self {
-            Self::Status(_) | Self::Index(_) | Self::Sql(_) | Self::Mcp(_) => false,
+            Self::Status(_)
+            | Self::Index(_)
+            | Self::Sql(_)
+            | Self::Mcp(_)
+            | Self::Diagnostics(_) => false,
             Self::Daemon(args) => !matches!(&args.command, DaemonCommand::Status(_)),
             _ => true,
         }
@@ -613,6 +643,9 @@ impl CommandRoot {
             },
             Self::Upgrade(args) => args.json_output(),
             Self::Doctor(args) => args.json,
+            Self::Diagnostics(args) => match &args.command {
+                DiagnosticsCommand::Imports(args) => args.json,
+            },
         }
     }
 
@@ -723,6 +756,7 @@ fn main() -> Result<()> {
             &mut analytics_properties,
         ),
         CommandRoot::Doctor(args) => run_doctor(args, data_root.clone(), &mut analytics_properties),
+        CommandRoot::Diagnostics(args) => import_diagnostics::run(args, data_root.clone()),
     };
     if is_setup {
         analytics::insert_bool(&mut analytics_properties, "setup_completed", result.is_ok());
@@ -772,7 +806,8 @@ fn command_analytics_properties(command: &CommandRoot) -> AnalyticsProperties {
         | CommandRoot::Index(_)
         | CommandRoot::Sources(_)
         | CommandRoot::Sql(_)
-        | CommandRoot::Doctor(_) => {}
+        | CommandRoot::Doctor(_)
+        | CommandRoot::Diagnostics(_) => {}
         CommandRoot::Import(args) => {
             analytics::insert_bool(&mut properties, "resume", args.resume);
             analytics::insert_bool(&mut properties, "all_sources", args.all);

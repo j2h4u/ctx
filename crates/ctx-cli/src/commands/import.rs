@@ -59,6 +59,7 @@ use crate::history_source_plugins::{
     discover_history_source_plugins, run_history_source_plugin, HistorySourcePluginRunOptions,
     HistorySourcePluginSource,
 };
+use crate::import_diagnostics::ImportDiagnostics;
 use crate::output::print_json;
 use crate::progress::{
     format_bytes, format_count, plural, ProgressArg, ProgressReporter, SourceProgressSnapshot,
@@ -478,6 +479,9 @@ pub(crate) fn run_import_internal(
         );
     }
 
+    let (diagnostics_guard, diagnostics) =
+        ImportDiagnostics::start(&data_root, &db_path, options.operation)?;
+
     let requests = import_requests(args)?;
     let plugin_requests = history_source_plugin_import_requests(
         args,
@@ -494,7 +498,8 @@ pub(crate) fn run_import_internal(
     }
 
     let inventory_progress =
-        ProgressReporter::new(options.progress, options.json, options.operation, 0);
+        ProgressReporter::new(options.progress, options.json, options.operation, 0)
+            .with_import_diagnostics(diagnostics.clone());
     inventory_progress.message("inventorying", "Preparing local history...");
     let inventory = inventory_import_sources(&store, requests, args.resume)
         .context("inventory local history sources")?;
@@ -542,7 +547,8 @@ pub(crate) fn run_import_internal(
         options.json,
         options.operation,
         planned_total_bytes,
-    );
+    )
+    .with_import_diagnostics(diagnostics.clone());
     if let Some(warning) = low_disk_space_warning(&db_path, planned_total_bytes) {
         progress.warning(warning);
     }
@@ -669,6 +675,7 @@ pub(crate) fn run_import_internal(
                 .map(|plan| SourceProgressSnapshot {
                     completed_bytes: 0,
                     total_bytes: plan.stats.bytes,
+                    ..SourceProgressSnapshot::default()
                 })
                 .collect::<Vec<_>>(),
         ));
@@ -855,11 +862,7 @@ pub(crate) fn run_import_internal(
             ) {
                 Ok(summary) => {
                     totals.add(&summary, &plan.stats);
-                    progress.update(
-                        "indexing",
-                        format!("Indexed {}.", source_provider_label(&plan.source)),
-                        completed_source_bytes,
-                    );
+                    progress.source_done(&plan.source, plan.stats, &summary);
                     if options.print_human {
                         progress.finish_line();
                         print_source_imported(&plan.source, &summary);
@@ -964,20 +967,16 @@ pub(crate) fn run_import_internal(
         "rejected_records_bucket",
         totals.failed as u64,
     );
-    Ok(ImportReport {
+    let report = ImportReport {
         resume: args.resume && native_import_requested,
         totals,
         inventory: inventory.totals,
         catalog: inventory.catalog,
         catalog_sources: inventory.catalog_sources,
         sources: imported_sources,
-    })
-}
-
-fn source_provider_label(source: &SourceInfo) -> &'static str {
-    provider_source_spec(source.provider)
-        .map(|spec| spec.display_name)
-        .unwrap_or_else(|| source.provider.as_str())
+    };
+    diagnostics_guard.complete();
+    Ok(report)
 }
 
 #[derive(Debug)]

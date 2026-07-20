@@ -1,5 +1,6 @@
 use ctx_history_core::{CaptureProvider, Event, EventRole, EventType};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::connection::{
@@ -15,6 +16,28 @@ use crate::sync::sync_metadata_from_row;
 use crate::{Result, Store, StoreError};
 
 impl Store {
+    pub fn event_ids_by_seq(&self) -> Result<HashMap<u64, Uuid>> {
+        let mut statement = self.conn.prepare("SELECT seq, id FROM events")?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                nonnegative_i64_to_u64(row.get::<_, i64>(0)?)?,
+                parse_uuid(row.get::<_, String>(1)?)?,
+            ))
+        })?;
+        collect_rows(rows).map(|rows| rows.into_iter().collect())
+    }
+
+    pub fn capture_source_has_events(&self, source_id: Uuid) -> Result<bool> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE capture_source_id = ?1 LIMIT 1)",
+                [source_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
+            .map_err(StoreError::from)
+    }
+
     pub fn provider_event_dedupe_key(
         provider: CaptureProvider,
         external_session_id: &str,

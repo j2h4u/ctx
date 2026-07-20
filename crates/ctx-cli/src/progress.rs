@@ -9,9 +9,11 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde_json::json;
 
 use crate::commands::import::{source_error_reason, SourceStats};
+use crate::import_diagnostics::ImportDiagnostics;
 use crate::provider_sources::SourceInfo;
 use ctx_history_capture::{
-    ProviderImportProgress, ProviderImportProgressCallback, ProviderImportSummary,
+    ProviderImportProgress, ProviderImportProgressCallback, ProviderImportStage,
+    ProviderImportSummary,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -25,6 +27,10 @@ pub(crate) enum ProgressArg {
 pub(crate) struct SourceProgressSnapshot {
     pub(crate) completed_bytes: u64,
     pub(crate) total_bytes: u64,
+    pub(crate) completed_units: usize,
+    pub(crate) total_units: usize,
+    pub(crate) writing_started: bool,
+    pub(crate) searching_started: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +52,7 @@ pub(crate) struct ProgressReporter {
     operation: &'static str,
     total_bytes: u64,
     state: Arc<Mutex<ProgressState>>,
+    diagnostics: Option<ImportDiagnostics>,
 }
 
 impl ProgressReporter {
@@ -76,7 +83,13 @@ impl ProgressReporter {
                 last_emit: None,
                 terminal_bar,
             })),
+            diagnostics: None,
         }
+    }
+
+    pub(crate) fn with_import_diagnostics(mut self, diagnostics: ImportDiagnostics) -> Self {
+        self.diagnostics = Some(diagnostics);
+        self
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
@@ -84,10 +97,13 @@ impl ProgressReporter {
     }
 
     pub(crate) fn message(&self, phase: &'static str, message: impl Into<String>) {
+        let message = message.into();
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.phase(phase, message.clone());
+        }
         if !self.is_enabled() {
             return;
         }
-        let message = message.into();
         self.emit_status(ProgressLine {
             phase,
             message,
@@ -95,6 +111,9 @@ impl ProgressReporter {
             total_bytes: self.total_bytes,
             completed_files: None,
             total_files: None,
+            stage: None,
+            completed_units: None,
+            total_units: None,
             imported_events: None,
             done: false,
             force: true,
@@ -117,6 +136,9 @@ impl ProgressReporter {
             total_bytes: self.total_bytes.max(completed_bytes),
             completed_files: None,
             total_files: None,
+            stage: None,
+            completed_units: None,
+            total_units: None,
             imported_events: None,
             done: true,
             force: true,
@@ -145,10 +167,50 @@ impl ProgressReporter {
             total_bytes: self.total_bytes.max(completed_bytes),
             completed_files: None,
             total_files: None,
+            stage: None,
+            completed_units: None,
+            total_units: None,
             imported_events: None,
             done: false,
             force: true,
         });
+    }
+
+    pub(crate) fn source_done(
+        &self,
+        source: &SourceInfo,
+        stats: SourceStats,
+        summary: &ProviderImportSummary,
+    ) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.finish_line();
+        let label = format!(
+            "✓ {} · {} {} · {} · {} events",
+            source_provider_display(source),
+            format_count(stats.files),
+            plural(stats.files, "file", "files"),
+            format_bytes(stats.bytes),
+            format_count(summary.imported_events),
+        );
+        match self.mode {
+            ProgressRenderMode::Json => eprintln!(
+                "{}",
+                json!({
+                    "type": "ctx_progress",
+                    "operation": self.operation,
+                    "phase": "source_complete",
+                    "provider": source.provider.as_str(),
+                    "files": stats.files,
+                    "bytes": stats.bytes,
+                    "events": summary.imported_events,
+                    "done": true,
+                })
+            ),
+            ProgressRenderMode::Plain { .. } => eprintln!("{label}"),
+            ProgressRenderMode::None => {}
+        }
     }
 
     pub(crate) fn finish_line(&self) {
@@ -205,22 +267,34 @@ impl ProgressReporter {
     pub(crate) fn source_import_callback(
         &self,
         source: &SourceInfo,
-        source_offset_bytes: u64,
+        _source_offset_bytes: u64,
     ) -> Option<ProviderImportProgressCallback> {
-        if !self.is_enabled() {
+        if !self.is_enabled() && self.diagnostics.is_none() {
             return None;
         }
         let reporter = self.clone();
         let provider = source.provider.as_str().to_owned();
+        let display_state = Arc::new(Mutex::new(SourceProgressSnapshot::default()));
         Some(Arc::new(move |progress: ProviderImportProgress| {
-            let completed_bytes = source_offset_bytes.saturating_add(progress.completed_bytes);
+            if let Some(diagnostics) = &reporter.diagnostics {
+                diagnostics.provider_progress(&provider, &progress);
+            }
+            let (stage, completed_units, total_units) = {
+                let mut state = display_state
+                    .lock()
+                    .expect("provider progress state poisoned");
+                coalesce_provider_stage(&mut state, &progress)
+            };
             reporter.emit(ProgressLine {
                 phase: "indexing",
                 message: provider.clone(),
-                completed_bytes,
-                total_bytes: reporter.total_bytes.max(completed_bytes),
+                completed_bytes: progress.completed_bytes,
+                total_bytes: progress.total_bytes,
                 completed_files: Some(progress.completed_files),
                 total_files: Some(progress.total_files),
+                stage: Some(provider_stage_name(stage)),
+                completed_units: Some(completed_units),
+                total_units: Some(total_units),
                 imported_events: Some(progress.imported_events),
                 // This reports a provider-source milestone, not the end of
                 // the whole `ctx import` operation. Only the command-level
@@ -237,13 +311,16 @@ impl ProgressReporter {
         source_index: usize,
         source_states: Arc<Mutex<Vec<SourceProgressSnapshot>>>,
     ) -> Option<ProviderImportProgressCallback> {
-        if !self.is_enabled() {
+        if !self.is_enabled() && self.diagnostics.is_none() {
             return None;
         }
         let reporter = self.clone();
         let provider = source.provider.as_str().to_owned();
         Some(Arc::new(move |progress: ProviderImportProgress| {
-            let (completed_bytes, total_bytes) = {
+            if let Some(diagnostics) = &reporter.diagnostics {
+                diagnostics.provider_progress(&provider, &progress);
+            }
+            let (completed_bytes, total_bytes, stage, completed_units, total_units) = {
                 let mut states = source_states
                     .lock()
                     .expect("parallel progress state poisoned");
@@ -252,8 +329,26 @@ impl ProgressReporter {
                     state.completed_bytes = progress
                         .completed_bytes
                         .min(state.total_bytes.max(progress.completed_bytes));
+                    let (stage, completed_units, total_units) =
+                        coalesce_provider_stage(state, &progress);
+                    let (completed_bytes, total_bytes) = aggregate_source_progress(&states);
+                    (
+                        completed_bytes,
+                        total_bytes,
+                        stage,
+                        completed_units,
+                        total_units,
+                    )
+                } else {
+                    let (completed_bytes, total_bytes) = aggregate_source_progress(&states);
+                    (
+                        completed_bytes,
+                        total_bytes,
+                        progress.stage,
+                        progress.completed_units,
+                        progress.total_units,
+                    )
                 }
-                aggregate_source_progress(&states)
             };
             reporter.emit(ProgressLine {
                 phase: "indexing",
@@ -262,6 +357,9 @@ impl ProgressReporter {
                 total_bytes: reporter.total_bytes.max(total_bytes).max(completed_bytes),
                 completed_files: Some(progress.completed_files),
                 total_files: Some(progress.total_files),
+                stage: Some(provider_stage_name(stage)),
+                completed_units: Some(completed_units),
+                total_units: Some(total_units),
                 imported_events: Some(progress.imported_events),
                 // A source can finish while other sources are still running;
                 // do not print a completed overall bar for it.
@@ -299,6 +397,9 @@ impl ProgressReporter {
             total_bytes: self.total_bytes.max(total_bytes).max(completed_bytes),
             completed_files: Some(stats.files),
             total_files: Some(stats.files),
+            stage: None,
+            completed_units: None,
+            total_units: None,
             imported_events: Some(summary.imported_events),
             done: false,
             force: true,
@@ -337,6 +438,9 @@ impl ProgressReporter {
             total_bytes: self.total_bytes.max(total_bytes).max(completed_bytes),
             completed_files: Some(stats.files),
             total_files: Some(stats.files),
+            stage: None,
+            completed_units: None,
+            total_units: None,
             imported_events: Some(0),
             done: false,
             force: true,
@@ -349,7 +453,7 @@ impl ProgressReporter {
         if !line.force
             && state
                 .last_emit
-                .is_some_and(|last| now.duration_since(last) < StdDuration::from_millis(900))
+                .is_some_and(|last| now.duration_since(last) < StdDuration::from_secs(2))
         {
             return;
         }
@@ -424,6 +528,47 @@ fn aggregate_source_progress(states: &[SourceProgressSnapshot]) -> (u64, u64) {
         })
 }
 
+fn coalesce_provider_stage(
+    state: &mut SourceProgressSnapshot,
+    progress: &ProviderImportProgress,
+) -> (ProviderImportStage, usize, usize) {
+    if progress.stage == ProviderImportStage::Searching {
+        state.searching_started = true;
+        state.completed_units = progress.completed_units;
+        state.total_units = progress.total_units;
+        return (
+            ProviderImportStage::Searching,
+            progress.completed_units,
+            progress.total_units,
+        );
+    }
+    if state.searching_started {
+        return (
+            ProviderImportStage::Searching,
+            state.completed_units,
+            state.total_units,
+        );
+    }
+    if progress.stage == ProviderImportStage::Writing {
+        state.writing_started = true;
+        state.completed_units = state.completed_units.max(progress.completed_units);
+        state.total_units = state.total_units.max(progress.total_units);
+    }
+    if state.writing_started {
+        (
+            ProviderImportStage::Writing,
+            state.completed_units,
+            state.total_units,
+        )
+    } else {
+        (
+            ProviderImportStage::Reading,
+            progress.completed_units,
+            progress.total_units,
+        )
+    }
+}
+
 struct ProgressLine {
     phase: &'static str,
     message: String,
@@ -431,6 +576,9 @@ struct ProgressLine {
     total_bytes: u64,
     completed_files: Option<usize>,
     total_files: Option<usize>,
+    stage: Option<&'static str>,
+    completed_units: Option<usize>,
+    total_units: Option<usize>,
     imported_events: Option<usize>,
     done: bool,
     force: bool,
@@ -442,41 +590,85 @@ fn render_progress_line(line: &ProgressLine, elapsed: StdDuration) -> String {
 
 fn render_progress_line_for_width(
     line: &ProgressLine,
-    elapsed: StdDuration,
+    _elapsed: StdDuration,
     target_width: usize,
 ) -> String {
     let (completed_bytes, total_bytes) = progress_line_bytes(line);
     let percent = progress_line_percent(line);
     let phase = progress_phase_label(line.phase);
+    let title = line.stage.map_or_else(
+        || line.message.clone(),
+        |stage| format!("{} · {stage}", line.message),
+    );
     let bar = progress_bar(percent, 10);
-    let bytes = format_byte_range(completed_bytes, total_bytes);
+    let bytes = if line.stage == Some("search") {
+        String::new()
+    } else if line.stage == Some("import") {
+        format!("read {}", format_byte_range(completed_bytes, total_bytes))
+    } else {
+        format_byte_range(completed_bytes, total_bytes)
+    };
+    let units = line
+        .completed_units
+        .zip(line.total_units)
+        .filter(|(_, total)| !(line.stage == Some("read") && *total == 0))
+        .map(|(completed, total)| {
+            if line.stage == Some("search") {
+                format!(
+                    "{}/{} events scanned",
+                    format_count(completed),
+                    format_count(total)
+                )
+            } else if total == 0 {
+                format!("{} records written", format_count(completed))
+            } else {
+                format!(
+                    "{}/{} records",
+                    format_count(completed),
+                    format_count(total)
+                )
+            }
+        })
+        .unwrap_or_default();
     let files = line
         .completed_files
         .zip(line.total_files)
-        .filter(|_| !line.done)
+        .filter(|_| !line.done && !matches!(line.stage, Some("import" | "search")))
         .map(|(completed, total)| {
             format!("{}/{} files", format_count(completed), format_count(total))
         })
         .unwrap_or_default();
     let remaining = if line.done {
         "done".to_owned()
-    } else if let Some(eta) = progress_line_eta_seconds(line, elapsed) {
-        format!("ETA {}", format_eta_compact(eta))
     } else {
-        "estimating…".to_owned()
+        "working".to_owned()
     };
-    let details = [bytes.as_str(), files.as_str(), remaining.as_str()]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" · ");
+    let details = [
+        bytes.as_str(),
+        files.as_str(),
+        units.as_str(),
+        remaining.as_str(),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join(" · ");
     let target_width = target_width.clamp(36, 100);
-    let candidates = [
-        format!("{} [{bar}] total {percent:>3.0}%  {details}", line.message),
-        format!("{phase} overall [{bar}] {percent:>3.0}%  {details}"),
-        format!("{phase} {percent:>3.0}%  {details}"),
-        format!("{phase} {percent:>3.0}%  {remaining}"),
-    ];
+    let indeterminate = line.stage == Some("import") && line.total_units == Some(0);
+    let candidates = if indeterminate {
+        vec![
+            format!("{title}  {details}"),
+            format!("{phase}  {details}"),
+            format!("{phase}  {remaining}"),
+        ]
+    } else {
+        vec![
+            format!("{title} [{bar}] {percent:>3.0}%  {details}"),
+            format!("{phase} [{bar}] {percent:>3.0}%  {details}"),
+            format!("{phase} {percent:>3.0}%  {details}"),
+            format!("{phase} {percent:>3.0}%  {remaining}"),
+        ]
+    };
     candidates
         .into_iter()
         .find(|line| line.chars().count() <= target_width)
@@ -495,14 +687,17 @@ fn progress_json(operation: &'static str, line: &ProgressLine, elapsed: StdDurat
         "type": "ctx_progress",
         "operation": operation,
         "phase": line.phase,
+        "stage": line.stage,
         "message": line.message,
         "completed_bytes": completed_bytes,
         "total_bytes": total_bytes,
         "percent": progress_line_percent(line),
         "elapsed_seconds": elapsed.as_secs_f64(),
-        "eta_seconds": progress_line_eta_seconds(line, elapsed),
+        "eta_seconds": serde_json::Value::Null,
         "completed_files": line.completed_files,
         "total_files": line.total_files,
+        "completed_units": line.completed_units,
+        "total_units": line.total_units,
         "imported_events": line.imported_events,
         "done": line.done,
     })
@@ -514,9 +709,9 @@ fn progress_render_width() -> usize {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value >= 40)
-        .unwrap_or(80)
+        .unwrap_or(100)
         .saturating_sub(1)
-        .min(76)
+        .min(120)
 }
 
 fn progress_phase_label(phase: &str) -> String {
@@ -564,29 +759,34 @@ fn progress_line_percent(line: &ProgressLine) -> f64 {
     if line.done {
         100.0
     } else {
-        let (completed_bytes, total_bytes) = progress_line_bytes(line);
-        progress_percent(completed_bytes, total_bytes)
+        if let Some((completed, total)) = line
+            .completed_units
+            .zip(line.total_units)
+            .filter(|(_, total)| *total > 0)
+        {
+            progress_percent(completed as u64, total as u64)
+        } else {
+            let (completed_bytes, total_bytes) = progress_line_bytes(line);
+            progress_percent(completed_bytes, total_bytes)
+        }
     }
 }
 
-fn progress_line_eta_seconds(line: &ProgressLine, elapsed: StdDuration) -> Option<f64> {
-    if line.done || elapsed < StdDuration::from_secs(3) {
-        None
-    } else {
-        let (completed_bytes, total_bytes) = progress_line_bytes(line);
-        eta_seconds(completed_bytes, total_bytes, elapsed)
+fn provider_stage_name(stage: ProviderImportStage) -> &'static str {
+    match stage {
+        ProviderImportStage::Reading => "read",
+        ProviderImportStage::Writing => "import",
+        ProviderImportStage::Searching => "search",
     }
 }
 
-fn eta_seconds(completed: u64, total: u64, elapsed: StdDuration) -> Option<f64> {
-    if completed == 0 || total <= completed {
-        return None;
+fn source_provider_display(source: &SourceInfo) -> String {
+    let provider = source.provider.as_str();
+    let mut chars = provider.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => "Source".to_owned(),
     }
-    let rate = completed as f64 / elapsed.as_secs_f64().max(0.001);
-    if rate <= 0.0 {
-        return None;
-    }
-    Some((total - completed) as f64 / rate)
 }
 
 fn progress_bar(percent: f64, width: usize) -> String {
@@ -596,17 +796,6 @@ fn progress_bar(percent: f64, width: usize) -> String {
         "#".repeat(filled.min(width)),
         "-".repeat(width.saturating_sub(filled))
     )
-}
-
-fn format_eta_compact(seconds: f64) -> String {
-    let seconds = seconds.max(0.0).round() as u64;
-    if seconds < 60 {
-        format!("~{}s", seconds.max(1))
-    } else if seconds < 3600 {
-        format!("~{}m", (seconds + 30) / 60)
-    } else {
-        format!("~{}h", (seconds + 1800) / 3600)
-    }
 }
 
 pub(crate) fn format_bytes(bytes: u64) -> String {
@@ -696,6 +885,9 @@ mod tests {
             total_bytes: 14 * 1024 * 1024 * 1024,
             completed_files: Some(8_420),
             total_files: Some(32_581),
+            stage: Some("read"),
+            completed_units: None,
+            total_units: None,
             imported_events: Some(418_204),
             done: false,
             force: false,
@@ -708,9 +900,9 @@ mod tests {
             render_progress_line_for_width(&sample_line(), StdDuration::from_secs(120), 76);
 
         assert!(rendered.chars().count() <= 76, "{rendered}");
-        assert!(rendered.starts_with("Importing ["), "{rendered}");
+        assert!(rendered.starts_with("codex · read ["), "{rendered}");
         assert!(rendered.contains("7.0/14.0 GiB"), "{rendered}");
-        assert!(rendered.contains("ETA"), "{rendered}");
+        assert!(rendered.contains("working"), "{rendered}");
         assert!(!rendered.contains("events"), "{rendered}");
     }
 
@@ -758,5 +950,49 @@ mod tests {
         assert_eq!(value["percent"], 100.0);
         assert_eq!(value["eta_seconds"], serde_json::Value::Null);
         assert_eq!(value["done"], true);
+    }
+
+    #[test]
+    fn provider_stage_never_regresses_after_writing_or_searching() {
+        let mut state = SourceProgressSnapshot::default();
+        let mut progress = ProviderImportProgress {
+            stage: ProviderImportStage::Writing,
+            source_path: None,
+            total_files: 1,
+            total_bytes: 100,
+            completed_files: 0,
+            completed_bytes: 0,
+            completed_units: 40,
+            total_units: 0,
+            imported_sessions: 0,
+            imported_events: 0,
+            imported_edges: 0,
+            skipped: 0,
+            failed: 0,
+            done: false,
+        };
+        assert_eq!(
+            coalesce_provider_stage(&mut state, &progress),
+            (ProviderImportStage::Writing, 40, 0)
+        );
+        progress.stage = ProviderImportStage::Reading;
+        progress.completed_units = 0;
+        assert_eq!(
+            coalesce_provider_stage(&mut state, &progress),
+            (ProviderImportStage::Writing, 40, 0)
+        );
+        progress.stage = ProviderImportStage::Searching;
+        progress.completed_units = 10;
+        progress.total_units = 100;
+        assert_eq!(
+            coalesce_provider_stage(&mut state, &progress),
+            (ProviderImportStage::Searching, 10, 100)
+        );
+        progress.stage = ProviderImportStage::Writing;
+        progress.completed_units = 120;
+        assert_eq!(
+            coalesce_provider_stage(&mut state, &progress),
+            (ProviderImportStage::Searching, 10, 100)
+        );
     }
 }

@@ -1478,11 +1478,13 @@ fn codex_parallel_normalized_stream_uses_shared_bounded_batches() {
     reader.execute_batch("ROLLBACK").unwrap();
 
     let conn = Connection::open(&db_path).unwrap();
+    // All normalized capture batches commit before the deferred search merge
+    // reports the reader-induced busy error.
     assert_eq!(
         conn.query_row("SELECT COUNT(*) FROM events", [], |row| row
             .get::<_, i64>(0))
             .unwrap(),
-        51
+        52
     );
 }
 

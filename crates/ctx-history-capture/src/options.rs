@@ -204,13 +204,25 @@ impl std::fmt::Debug for CodexSessionImportOptions {
 pub type ProviderImportProgressCallback =
     Arc<dyn Fn(ProviderImportProgress) + Send + Sync + 'static>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderImportStage {
+    Reading,
+    Writing,
+    Searching,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderImportProgress {
+    pub stage: ProviderImportStage,
     pub source_path: Option<PathBuf>,
     pub total_files: usize,
     pub total_bytes: u64,
     pub completed_files: usize,
     pub completed_bytes: u64,
+    /// Work units for the current stage. For `Writing`, one unit is one
+    /// normalized capture/file-touch persisted by the single SQLite writer.
+    pub completed_units: usize,
+    pub total_units: usize,
     pub imported_sessions: usize,
     pub imported_events: usize,
     pub imported_edges: usize,

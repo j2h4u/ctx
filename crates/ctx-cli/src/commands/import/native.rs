@@ -809,11 +809,14 @@ pub(crate) fn import_manifested_source(
         completed_bytes = completed_bytes.saturating_add(pending_file.file_size_bytes);
         if let Some(callback) = progress.as_ref() {
             callback(ProviderImportProgress {
+                stage: ctx_history_capture::ProviderImportStage::Writing,
                 source_path: Some(source.path.clone()),
                 total_files,
                 total_bytes,
                 completed_files,
                 completed_bytes,
+                completed_units: summary.imported_events,
+                total_units: summary.imported_events,
                 imported_sessions: summary.imported_sessions,
                 imported_events: summary.imported_events,
                 imported_edges: summary.imported_edges,
@@ -854,9 +857,12 @@ fn import_manifested_claude_parallel(
         Arc::new(move |file_progress: ProviderImportProgress| {
             let (completed_bytes, completed_files) = {
                 let mut files = parsed_bytes.lock().expect("Claude progress state poisoned");
-                if let Some(path) = file_progress.source_path.as_ref() {
-                    if let Some((total, completed)) = files.get_mut(&path.display().to_string()) {
-                        *completed = file_progress.completed_bytes.min(*total);
+                if file_progress.stage == ctx_history_capture::ProviderImportStage::Reading {
+                    if let Some(path) = file_progress.source_path.as_ref() {
+                        if let Some((total, completed)) = files.get_mut(&path.display().to_string())
+                        {
+                            *completed = file_progress.completed_bytes.min(*total);
+                        }
                     }
                 }
                 files
@@ -869,11 +875,14 @@ fn import_manifested_claude_parallel(
                     })
             };
             callback(ProviderImportProgress {
+                stage: file_progress.stage,
                 source_path: Some(source_path.clone()),
                 total_files,
                 total_bytes,
                 completed_files,
                 completed_bytes,
+                completed_units: file_progress.completed_units,
+                total_units: file_progress.total_units,
                 imported_sessions: file_progress.imported_sessions,
                 imported_events: file_progress.imported_events,
                 imported_edges: file_progress.imported_edges,
@@ -895,15 +904,67 @@ fn import_manifested_claude_parallel(
         },
     );
     drop(deferred_search);
-    let imported = imported_result?;
     // Build every FTS projection in one sequential pass after the hot event
     // insert loop. The outer import already owns the bulk-search guard.
-    store.refresh_search_index()?;
+    let searchable_events = imported_result
+        .as_ref()
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|(_, summary)| summary.imported_events)
+        .sum::<usize>();
+    if imported_result.is_ok() {
+        if let Some(callback) = progress.as_ref() {
+            callback(ProviderImportProgress {
+                stage: ctx_history_capture::ProviderImportStage::Searching,
+                source_path: Some(source.path.clone()),
+                total_files,
+                total_bytes,
+                completed_files: total_files,
+                completed_bytes: total_bytes,
+                completed_units: 0,
+                total_units: searchable_events,
+                imported_sessions: 0,
+                imported_events: searchable_events,
+                imported_edges: 0,
+                skipped: 0,
+                failed: 0,
+                done: false,
+            });
+        }
+    }
+    // The import connection has a large page cache and has rotated many write
+    // transactions. Build FTS on a fresh connection so the importer working
+    // set is released before the second memory-intensive phase.
+    let reopened_store = Store::open(store.path())?;
+    *store = reopened_store;
+    let imported = imported_result?;
+    let mut search_progress = |completed_units: usize, total_units: usize| {
+        if let Some(callback) = progress.as_ref() {
+            callback(ProviderImportProgress {
+                stage: ctx_history_capture::ProviderImportStage::Searching,
+                source_path: Some(source.path.clone()),
+                total_files,
+                total_bytes,
+                completed_files: total_files,
+                completed_bytes: total_bytes,
+                completed_units,
+                total_units,
+                imported_sessions: 0,
+                imported_events: searchable_events,
+                imported_edges: 0,
+                skipped: 0,
+                failed: 0,
+                done: completed_units >= total_units,
+            });
+        }
+    };
+    store.refresh_search_index_with_progress(&mut search_progress)?;
     let mut completed_files = 0usize;
     let mut completed_bytes = 0u64;
     let mut summary = ProviderImportSummary::default();
     for (pending_file, (path, file_summary)) in pending.into_iter().zip(imported) {
-        if path != PathBuf::from(&pending_file.source_path) {
+        if path.as_path() != std::path::Path::new(&pending_file.source_path) {
             return Err(anyhow!(
                 "Claude parallel importer returned files out of order"
             ));
@@ -924,11 +985,14 @@ fn import_manifested_claude_parallel(
         completed_bytes = completed_bytes.saturating_add(pending_file.file_size_bytes);
         if let Some(callback) = progress.as_ref() {
             callback(ProviderImportProgress {
+                stage: ctx_history_capture::ProviderImportStage::Writing,
                 source_path: Some(source.path.clone()),
                 total_files,
                 total_bytes,
                 completed_files,
                 completed_bytes,
+                completed_units: summary.imported_events,
+                total_units: summary.imported_events,
                 imported_sessions: summary.imported_sessions,
                 imported_events: summary.imported_events,
                 imported_edges: summary.imported_edges,

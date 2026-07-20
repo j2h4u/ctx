@@ -78,8 +78,8 @@ pub use options::{
     LingmaSqliteImportOptions, MiMoCodeSqliteImportOptions, MistralVibeImportOptions,
     MuxImportOptions, NanoClawImportOptions, OpenClawImportOptions, OpenCodeSqliteImportOptions,
     OpenHandsImportOptions, PiSessionImportOptions, ProviderFixtureImportOptions,
-    ProviderImportProgress, ProviderImportProgressCallback, QoderImportOptions,
-    QwenCodeImportOptions, RooTaskJsonImportOptions, RovoDevImportOptions,
+    ProviderImportProgress, ProviderImportProgressCallback, ProviderImportStage,
+    QoderImportOptions, QwenCodeImportOptions, RooTaskJsonImportOptions, RovoDevImportOptions,
     ShelleySqliteImportOptions, TabnineCliImportOptions, TraeImportOptions,
     WarpSqliteImportOptions, WindsurfCascadeHookImportOptions, ZedThreadsSqliteImportOptions,
 };

@@ -561,6 +561,7 @@ pub(crate) fn refresh_sources_for_search(
                 .map(|plan| SourceProgressSnapshot {
                     completed_bytes: 0,
                     total_bytes: plan.stats.bytes,
+                    ..SourceProgressSnapshot::default()
                 })
                 .collect::<Vec<_>>(),
         ));
