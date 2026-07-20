@@ -1084,7 +1084,7 @@ pub(crate) fn large_import_notice(
         return None;
     }
     Some(format!(
-        "Large first import: scanning {} existing history {} ({}). This may take a while.",
+        "Large history set: scanning {} existing history {} ({}). This may take a while.",
         format_count(planned_total_files),
         plural(planned_total_files, "file", "files"),
         format_bytes(planned_total_bytes)
