@@ -225,8 +225,11 @@ impl ProgressReporter {
                 completed_files: Some(progress.completed_files),
                 total_files: Some(progress.total_files),
                 imported_events: Some(progress.imported_events),
-                done: progress.done,
-                force: progress.done,
+                // This reports a provider-source milestone, not the end of
+                // the whole `ctx import` operation. Only the command-level
+                // finalizer may close the terminal progress line.
+                done: false,
+                force: !progress.done,
             });
         }))
     }
@@ -263,8 +266,10 @@ impl ProgressReporter {
                 completed_files: Some(progress.completed_files),
                 total_files: Some(progress.total_files),
                 imported_events: Some(progress.imported_events),
-                done: progress.done,
-                force: progress.done,
+                // A source can finish while other sources are still running;
+                // do not print a completed overall bar for it.
+                done: false,
+                force: !progress.done,
             });
         }))
     }
