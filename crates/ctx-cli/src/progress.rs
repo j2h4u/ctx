@@ -123,6 +123,34 @@ impl ProgressReporter {
         });
     }
 
+    /// Reports a completed source while keeping the overall import progress active.
+    ///
+    /// A single import can contain several sources. Marking each of them as
+    /// `done` finalizes the terminal line repeatedly, which both produces a
+    /// stack of completed bars and makes intermediate source completions look
+    /// like the entire import has finished.
+    pub(crate) fn update(
+        &self,
+        phase: &'static str,
+        message: impl Into<String>,
+        completed_bytes: u64,
+    ) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.emit(ProgressLine {
+            phase,
+            message: message.into(),
+            completed_bytes,
+            total_bytes: self.total_bytes.max(completed_bytes),
+            completed_files: None,
+            total_files: None,
+            imported_events: None,
+            done: false,
+            force: true,
+        });
+    }
+
     pub(crate) fn finish_line(&self) {
         let mut state = self.state.lock().expect("progress state poisoned");
         if matches!(self.mode, ProgressRenderMode::Plain { interactive: true })
@@ -270,7 +298,7 @@ impl ProgressReporter {
             completed_files: Some(stats.files),
             total_files: Some(stats.files),
             imported_events: Some(summary.imported_events),
-            done: true,
+            done: false,
             force: true,
         });
     }
@@ -308,7 +336,7 @@ impl ProgressReporter {
             completed_files: Some(stats.files),
             total_files: Some(stats.files),
             imported_events: Some(0),
-            done: true,
+            done: false,
             force: true,
         });
     }

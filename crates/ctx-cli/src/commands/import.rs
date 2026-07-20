@@ -551,7 +551,7 @@ pub(crate) fn run_import_internal(
 
     for failure in inventory_failures {
         totals.add_source_failure(&failure.stats);
-        progress.done(
+        progress.update(
             "inventorying",
             format!(
                 "skipped {}: {}",
@@ -584,7 +584,7 @@ pub(crate) fn run_import_internal(
         ) {
             Ok((summary, stats)) => {
                 totals.add(&summary, &stats);
-                progress.done(
+                progress.update(
                     "indexing",
                     format!("imported history source plugin {}", plugin_source.label()),
                     planned_total_bytes,
@@ -610,7 +610,7 @@ pub(crate) fn run_import_internal(
                     } else {
                         totals.add_source_failure(&SourceStats::default());
                     }
-                    progress.done(
+                    progress.update(
                         "indexing",
                         format!(
                             "skipped history source plugin {}: {}",
@@ -854,7 +854,7 @@ pub(crate) fn run_import_internal(
             ) {
                 Ok(summary) => {
                     totals.add(&summary, &plan.stats);
-                    progress.done(
+                    progress.update(
                         "indexing",
                         format!("Indexed {}.", source_provider_label(&plan.source)),
                         completed_source_bytes,
@@ -886,7 +886,7 @@ pub(crate) fn run_import_internal(
                         } else {
                             totals.add_source_failure(&failure.stats);
                         }
-                        progress.done(
+                        progress.update(
                             "indexing",
                             format!(
                                 "skipped {}: {}",
