@@ -18,10 +18,11 @@ mod native_streams;
 mod sqlite_sources;
 
 pub use json_sources::{
-    import_auggie_history, import_claude_projects_jsonl_tree, import_cline_task_json_history,
-    import_codebuddy_history, import_crush_sqlite, import_goose_sessions_sqlite,
-    import_hermes_sqlite, import_junie_history, import_openclaw_history, import_pi_session_jsonl,
-    import_roo_task_json_history, import_trae_history,
+    import_auggie_history, import_claude_projects_jsonl_files_bounded_parallel,
+    import_claude_projects_jsonl_tree, import_cline_task_json_history, import_codebuddy_history,
+    import_crush_sqlite, import_goose_sessions_sqlite, import_hermes_sqlite, import_junie_history,
+    import_openclaw_history, import_pi_session_jsonl, import_roo_task_json_history,
+    import_trae_history,
 };
 pub use native_streams::{
     import_antigravity_cli_history, import_copilot_cli_session_events,

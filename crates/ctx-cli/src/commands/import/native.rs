@@ -737,40 +737,24 @@ pub(crate) fn import_manifested_source(
         return Ok(ProviderImportSummary::default());
     }
 
+    if source.provider == CaptureProvider::Claude {
+        return import_manifested_claude_parallel(
+            store,
+            source,
+            record_id,
+            progress,
+            &source_root,
+            pending,
+        );
+    }
+
     let total_files = pending.len();
     let total_bytes = pending.iter().map(|file| file.file_size_bytes).sum::<u64>();
     let mut completed_files = 0usize;
     let mut completed_bytes = 0u64;
     let mut summary = ProviderImportSummary::default();
     for pending_file in pending {
-        let file_progress = if source.provider == CaptureProvider::Claude {
-            progress.as_ref().map(|callback| {
-                let callback = Arc::clone(callback);
-                let source_path = source.path.clone();
-                let source_completed_files = completed_files;
-                let source_completed_bytes = completed_bytes;
-                Arc::new(move |file_progress: ProviderImportProgress| {
-                    callback(ProviderImportProgress {
-                        source_path: Some(source_path.clone()),
-                        total_files,
-                        total_bytes,
-                        completed_files: source_completed_files
-                            .saturating_add(file_progress.completed_files),
-                        completed_bytes: source_completed_bytes
-                            .saturating_add(file_progress.completed_bytes)
-                            .min(total_bytes),
-                        imported_sessions: file_progress.imported_sessions,
-                        imported_events: file_progress.imported_events,
-                        imported_edges: file_progress.imported_edges,
-                        skipped: file_progress.skipped,
-                        failed: file_progress.failed,
-                        done: false,
-                    });
-                }) as ProviderImportProgressCallback
-            })
-        } else {
-            progress.clone()
-        };
+        let file_progress = progress.clone();
         let path = PathBuf::from(&pending_file.source_path);
         let mut pending_source = explicit_path_source(source.provider, path);
         pending_source.source_format = source.source_format;
@@ -823,25 +807,131 @@ pub(crate) fn import_manifested_source(
         }
         completed_files = completed_files.saturating_add(1);
         completed_bytes = completed_bytes.saturating_add(pending_file.file_size_bytes);
-        if source.provider != CaptureProvider::Claude {
-            if let Some(callback) = progress.as_ref() {
-                callback(ProviderImportProgress {
-                    source_path: Some(source.path.clone()),
-                    total_files,
-                    total_bytes,
-                    completed_files,
-                    completed_bytes,
-                    imported_sessions: summary.imported_sessions,
-                    imported_events: summary.imported_events,
-                    imported_edges: summary.imported_edges,
-                    skipped: summary.skipped,
-                    failed: summary.failed,
-                    done: false,
-                });
-            }
+        if let Some(callback) = progress.as_ref() {
+            callback(ProviderImportProgress {
+                source_path: Some(source.path.clone()),
+                total_files,
+                total_bytes,
+                completed_files,
+                completed_bytes,
+                imported_sessions: summary.imported_sessions,
+                imported_events: summary.imported_events,
+                imported_edges: summary.imported_edges,
+                skipped: summary.skipped,
+                failed: summary.failed,
+                done: false,
+            });
         }
     }
     let _ = record_id;
+    Ok(summary)
+}
+
+fn import_manifested_claude_parallel(
+    store: &mut Store,
+    source: &SourceInfo,
+    record_id: Uuid,
+    progress: Option<ProviderImportProgressCallback>,
+    source_root: &str,
+    pending: Vec<SourceImportFile>,
+) -> Result<ProviderImportSummary> {
+    let total_files = pending.len();
+    let total_bytes = pending.iter().map(|file| file.file_size_bytes).sum::<u64>();
+    let paths = pending
+        .iter()
+        .map(|file| PathBuf::from(&file.source_path))
+        .collect::<Vec<_>>();
+    let parsed_bytes = Arc::new(Mutex::new(
+        pending
+            .iter()
+            .map(|file| (file.source_path.clone(), (file.file_size_bytes, 0u64)))
+            .collect::<BTreeMap<_, _>>(),
+    ));
+    let parse_progress = progress.as_ref().map(|callback| {
+        let callback = Arc::clone(callback);
+        let parsed_bytes = Arc::clone(&parsed_bytes);
+        let source_path = source.path.clone();
+        Arc::new(move |file_progress: ProviderImportProgress| {
+            let (completed_bytes, completed_files) = {
+                let mut files = parsed_bytes.lock().expect("Claude progress state poisoned");
+                if let Some(path) = file_progress.source_path.as_ref() {
+                    if let Some((total, completed)) = files.get_mut(&path.display().to_string()) {
+                        *completed = file_progress.completed_bytes.min(*total);
+                    }
+                }
+                files
+                    .values()
+                    .fold((0u64, 0usize), |(bytes, files), (total, completed)| {
+                        (
+                            bytes.saturating_add(*completed),
+                            files.saturating_add(usize::from(*completed >= *total)),
+                        )
+                    })
+            };
+            callback(ProviderImportProgress {
+                source_path: Some(source_path.clone()),
+                total_files,
+                total_bytes,
+                completed_files,
+                completed_bytes,
+                imported_sessions: file_progress.imported_sessions,
+                imported_events: file_progress.imported_events,
+                imported_edges: file_progress.imported_edges,
+                skipped: file_progress.skipped,
+                failed: file_progress.failed,
+                done: false,
+            });
+        }) as ProviderImportProgressCallback
+    });
+    let imported = import_claude_projects_jsonl_files_bounded_parallel(
+        store,
+        &paths,
+        &ClaudeProjectsImportOptions {
+            source_path: Some(source.path.clone()),
+            history_record_id: Some(record_id),
+            progress: parse_progress,
+            ..ClaudeProjectsImportOptions::default()
+        },
+    )?;
+    let mut completed_files = 0usize;
+    let mut completed_bytes = 0u64;
+    let mut summary = ProviderImportSummary::default();
+    for (pending_file, (path, file_summary)) in pending.into_iter().zip(imported) {
+        if path != PathBuf::from(&pending_file.source_path) {
+            return Err(anyhow!(
+                "Claude parallel importer returned files out of order"
+            ));
+        }
+        if file_summary.failed > 0 {
+            mark_source_import_file_failed(
+                store,
+                source.provider,
+                source_root,
+                &pending_file.source_path,
+                &source_import_file_failure(&file_summary),
+            )?;
+        } else {
+            mark_source_import_file_indexed(store, source.provider, source_root, &pending_file)?;
+        }
+        summary.merge_from(file_summary);
+        completed_files = completed_files.saturating_add(1);
+        completed_bytes = completed_bytes.saturating_add(pending_file.file_size_bytes);
+        if let Some(callback) = progress.as_ref() {
+            callback(ProviderImportProgress {
+                source_path: Some(source.path.clone()),
+                total_files,
+                total_bytes,
+                completed_files,
+                completed_bytes,
+                imported_sessions: summary.imported_sessions,
+                imported_events: summary.imported_events,
+                imported_edges: summary.imported_edges,
+                skipped: summary.skipped,
+                failed: summary.failed,
+                done: false,
+            });
+        }
+    }
     Ok(summary)
 }
 

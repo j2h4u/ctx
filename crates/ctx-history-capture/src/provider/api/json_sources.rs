@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ctx_history_store::Store;
 
@@ -11,7 +11,9 @@ use crate::provider::adapter::{
 use crate::provider::importer::{
     import_native_jsonl_tree, import_normalized_provider_captures, NativeJsonlTreeImport,
 };
-use crate::provider::providers::claude::normalize_claude_projects_jsonl_file;
+use crate::provider::providers::claude::{
+    normalize_claude_projects_jsonl_file, normalize_claude_projects_jsonl_paths_parallel,
+};
 use crate::provider::providers::trae::normalize_trae_history;
 use crate::{
     AuggieImportOptions, ClaudeProjectsImportOptions, ClineTaskJsonImportOptions,
@@ -104,6 +106,88 @@ pub fn import_claude_projects_jsonl_tree(
         });
     }
     Ok(summary)
+}
+
+/// Uses parallel workers only for CPU-bound transcript normalization; all
+/// SQLite writes remain on the caller thread in deterministic path order.
+pub fn import_claude_projects_jsonl_files_bounded_parallel(
+    store: &mut Store,
+    paths: &[PathBuf],
+    options: &ClaudeProjectsImportOptions,
+) -> Result<Vec<(PathBuf, ProviderImportSummary)>> {
+    const NORMALIZATION_BATCH_BYTES: u64 = 64 * 1024 * 1024;
+    let context = ProviderAdapterContext {
+        machine_id: options.machine_id.clone(),
+        source_path: options.source_path.clone(),
+        source_root: None,
+        imported_at: options.imported_at,
+    };
+    let parallelism = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(8);
+    let mut imported = Vec::with_capacity(paths.len());
+    let mut batch = Vec::new();
+    let mut batch_bytes = 0u64;
+    for path in paths {
+        let bytes = std::fs::metadata(path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        if !batch.is_empty() && batch_bytes.saturating_add(bytes) > NORMALIZATION_BATCH_BYTES {
+            import_claude_normalization_batch(
+                store,
+                &batch,
+                &context,
+                parallelism,
+                options,
+                &mut imported,
+            )?;
+            batch.clear();
+            batch_bytes = 0;
+        }
+        batch.push(path.clone());
+        batch_bytes = batch_bytes.saturating_add(bytes);
+    }
+    if !batch.is_empty() {
+        import_claude_normalization_batch(
+            store,
+            &batch,
+            &context,
+            parallelism,
+            options,
+            &mut imported,
+        )?;
+    }
+    Ok(imported)
+}
+
+fn import_claude_normalization_batch(
+    store: &mut Store,
+    paths: &[PathBuf],
+    context: &ProviderAdapterContext,
+    parallelism: usize,
+    options: &ClaudeProjectsImportOptions,
+    imported: &mut Vec<(PathBuf, ProviderImportSummary)>,
+) -> Result<()> {
+    for (_, path, normalization) in normalize_claude_projects_jsonl_paths_parallel(
+        paths,
+        context,
+        parallelism,
+        options.progress.as_ref(),
+    )? {
+        let summary = import_normalized_provider_captures(
+            store,
+            normalization,
+            NormalizedProviderImportOptions {
+                history_record_id: options.history_record_id,
+                persist_cursors: true,
+                wrap_transaction: true,
+                fast_event_inserts: true,
+            },
+        )?;
+        imported.push((path, summary));
+    }
+    Ok(())
 }
 
 pub fn import_cline_task_json_history(

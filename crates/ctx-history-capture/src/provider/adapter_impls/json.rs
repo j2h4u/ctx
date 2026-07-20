@@ -12,7 +12,7 @@ use crate::provider::adapter::{
 };
 use crate::provider::providers::{
     auggie::normalize_auggie_sessions,
-    claude::normalize_claude_projects_jsonl_file,
+    claude::normalize_claude_projects_jsonl_paths_parallel,
     codebuddy::normalize_codebuddy_history,
     continue_cli::normalize_continue_cli_sessions,
     junie::normalize_junie_session_events,
@@ -59,9 +59,15 @@ impl ProviderCaptureAdapter for ClaudeProjectsJsonlAdapter {
             });
         }
 
+        let parallelism = std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1)
+            .min(paths.len())
+            .min(8);
         let mut merged = ProviderNormalizationResult::default();
-        for path in paths {
-            let mut result = normalize_claude_projects_jsonl_file(&path, context, None)?;
+        for (_, _, mut result) in
+            normalize_claude_projects_jsonl_paths_parallel(&paths, context, parallelism, None)?
+        {
             merged.summary.merge(result.summary);
             merged.captures.append(&mut result.captures);
             merged.files_touched.append(&mut result.files_touched);

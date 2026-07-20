@@ -1,7 +1,8 @@
 use std::{
     fs::File,
     io::BufReader,
-    path::Path,
+    path::{Path, PathBuf},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -209,6 +210,72 @@ pub(crate) fn normalize_claude_projects_jsonl_file(
     }
 
     Ok(result)
+}
+
+/// Normalizes independent Claude transcripts concurrently while preserving a
+/// deterministic order for the single SQLite writer that consumes the result.
+/// Callers must keep the input chunk bounded: normalization retains captures
+/// until that chunk is written.
+pub(crate) fn normalize_claude_projects_jsonl_paths_parallel(
+    paths: &[PathBuf],
+    context: &ProviderAdapterContext,
+    parallelism: usize,
+    progress: Option<&ProviderImportProgressCallback>,
+) -> Result<Vec<(usize, PathBuf, ProviderNormalizationResult)>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    if parallelism <= 1 || paths.len() == 1 {
+        return paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                Ok((
+                    index,
+                    path.clone(),
+                    normalize_claude_projects_jsonl_file(path, context, progress)?,
+                ))
+            })
+            .collect();
+    }
+
+    let worker_count = parallelism.min(paths.len());
+    let paths_per_worker = paths.len().div_ceil(worker_count);
+    let mut batches = thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for (worker_index, chunk) in paths.chunks(paths_per_worker).enumerate() {
+            let chunk = chunk.to_vec();
+            handles.push(scope.spawn(move || {
+                let base_index = worker_index * paths_per_worker;
+                chunk
+                    .iter()
+                    .enumerate()
+                    .map(|(offset, path)| {
+                        Ok((
+                            base_index + offset,
+                            path.clone(),
+                            normalize_claude_projects_jsonl_file(path, context, progress)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .map_err(|_| crate::CaptureError::WorkerPanicked("Claude import"))?
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+    let total = batches.iter().map(Vec::len).sum();
+    let mut normalized = Vec::with_capacity(total);
+    for batch in batches.drain(..) {
+        normalized.extend(batch);
+    }
+    normalized.sort_by_key(|(index, _, _)| *index);
+    Ok(normalized)
 }
 
 fn report_claude_progress(
