@@ -65,16 +65,8 @@ impl ProgressReporter {
             ProgressArg::Auto if json_output || !stderr_is_terminal => ProgressRenderMode::None,
             ProgressArg::Auto => ProgressRenderMode::Plain { interactive: true },
         };
-        let terminal_bar =
-            matches!(mode, ProgressRenderMode::Plain { interactive: true }).then(|| {
-                let bar =
-                    ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr_with_hz(12));
-                bar.set_style(
-                    ProgressStyle::with_template("{msg}")
-                        .expect("static progress template must be valid"),
-                );
-                bar
-            });
+        let terminal_bar = matches!(mode, ProgressRenderMode::Plain { interactive: true })
+            .then(new_terminal_progress_bar);
         Self {
             mode,
             operation,
@@ -373,8 +365,7 @@ impl ProgressReporter {
                 if interactive {
                     let bar = state
                         .terminal_bar
-                        .as_ref()
-                        .expect("interactive progress must have an indicatif bar");
+                        .get_or_insert_with(new_terminal_progress_bar);
                     if line.done {
                         bar.finish_with_message(rendered);
                         state.terminal_bar = None;
@@ -411,6 +402,14 @@ impl ProgressReporter {
             }
         }
     }
+}
+
+fn new_terminal_progress_bar() -> ProgressBar {
+    let bar = ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr_with_hz(12));
+    bar.set_style(
+        ProgressStyle::with_template("{msg}").expect("static progress template must be valid"),
+    );
+    bar
 }
 
 fn aggregate_source_progress(states: &[SourceProgressSnapshot]) -> (u64, u64) {
