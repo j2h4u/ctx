@@ -40,7 +40,10 @@ pub use search::projections::{EventEmbeddingDocument, EventSearchHit};
 
 use std::{
     path::PathBuf,
-    sync::{atomic::AtomicUsize, Arc, OnceLock},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, OnceLock,
+    },
     time::Duration,
 };
 
@@ -54,7 +57,18 @@ pub struct Store {
     conn: Connection,
     busy_timeout: Duration,
     event_search_bulk_depth: Arc<AtomicUsize>,
+    deferred_event_search_depth: Arc<AtomicUsize>,
     event_search_projection_tables: OnceLock<search::projections::EventSearchProjectionTables>,
+}
+
+pub struct DeferredEventSearchGuard {
+    depth: Arc<AtomicUsize>,
+}
+
+impl Drop for DeferredEventSearchGuard {
+    fn drop(&mut self) {
+        self.depth.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 #[cfg(test)]

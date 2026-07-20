@@ -883,7 +883,8 @@ fn import_manifested_claude_parallel(
             });
         }) as ProviderImportProgressCallback
     });
-    let imported = import_claude_projects_jsonl_files_bounded_parallel(
+    let deferred_search = store.defer_event_search_projections();
+    let imported_result = import_claude_projects_jsonl_files_bounded_parallel(
         store,
         &paths,
         &ClaudeProjectsImportOptions {
@@ -892,7 +893,12 @@ fn import_manifested_claude_parallel(
             progress: parse_progress,
             ..ClaudeProjectsImportOptions::default()
         },
-    )?;
+    );
+    drop(deferred_search);
+    let imported = imported_result?;
+    // Build every FTS projection in one sequential pass after the hot event
+    // insert loop. The outer import already owns the bulk-search guard.
+    store.refresh_search_index()?;
     let mut completed_files = 0usize;
     let mut completed_bytes = 0u64;
     let mut summary = ProviderImportSummary::default();

@@ -151,7 +151,7 @@ impl Store {
                 reject_provider_event_hash_conflict(&self.conn, dedupe_key)?;
             }
         }
-        if changed > 0 {
+        if changed > 0 && !self.event_search_projections_deferred() {
             insert_event_search_projection_for_event_id_with_tables(
                 &self.conn,
                 event.id,

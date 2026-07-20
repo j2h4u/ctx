@@ -2,6 +2,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
     time::Duration,
 };
 
@@ -56,6 +57,7 @@ impl Store {
             conn,
             busy_timeout: BUSY_TIMEOUT,
             event_search_bulk_depth: Default::default(),
+            deferred_event_search_depth: Default::default(),
             event_search_projection_tables: Default::default(),
         })
     }
@@ -87,6 +89,7 @@ impl Store {
             conn,
             busy_timeout,
             event_search_bulk_depth: Default::default(),
+            deferred_event_search_depth: Default::default(),
             event_search_projection_tables: Default::default(),
         };
         store.migrate()?;
@@ -101,6 +104,20 @@ impl Store {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn defer_event_search_projections(&self) -> crate::DeferredEventSearchGuard {
+        self.deferred_event_search_depth
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        crate::DeferredEventSearchGuard {
+            depth: Arc::clone(&self.deferred_event_search_depth),
+        }
+    }
+
+    pub(crate) fn event_search_projections_deferred(&self) -> bool {
+        self.deferred_event_search_depth
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0
     }
 
     fn initialize_event_search_projection_tables(&self) -> Result<()> {
