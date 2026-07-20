@@ -9,7 +9,10 @@ use serde::Serialize;
 use super::*;
 
 pub(crate) const IMPORT_TRANSACTION_BATCH_BYTES: usize = 8 * 1024 * 1024;
-pub(crate) const IMPORT_TRANSACTION_BATCH_UNITS: usize = 64;
+// The byte cap bounds WAL growth and recovery work. A tiny row cap causes a
+// full commit/checkpoint cycle for almost every short transcript turn, which
+// dominates large imports without providing additional safety.
+pub(crate) const IMPORT_TRANSACTION_BATCH_UNITS: usize = 4_096;
 
 pub(super) fn import_normalized_provider_captures(
     store: &mut Store,

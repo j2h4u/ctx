@@ -56,6 +56,7 @@ impl Store {
             conn,
             busy_timeout: BUSY_TIMEOUT,
             event_search_bulk_depth: Default::default(),
+            event_search_projection_tables: Default::default(),
         })
     }
 
@@ -86,6 +87,7 @@ impl Store {
             conn,
             busy_timeout,
             event_search_bulk_depth: Default::default(),
+            event_search_projection_tables: Default::default(),
         };
         store.migrate()?;
         store.recover_event_search_bulk_mode()?;
@@ -93,11 +95,31 @@ impl Store {
             store.normalize_legacy_blob_paths()?;
         }
         store.ensure_search_projection_initialized()?;
+        store.initialize_event_search_projection_tables()?;
         Ok(store)
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn initialize_event_search_projection_tables(&self) -> Result<()> {
+        let tables = crate::search::projections::event_search_projection_tables(&self.conn)?;
+        let _ = self.event_search_projection_tables.set(tables);
+        Ok(())
+    }
+
+    pub(crate) fn event_search_projection_tables(
+        &self,
+    ) -> Result<crate::search::projections::EventSearchProjectionTables> {
+        if let Some(tables) = self.event_search_projection_tables.get() {
+            return Ok(*tables);
+        }
+        self.initialize_event_search_projection_tables()?;
+        Ok(*self
+            .event_search_projection_tables
+            .get()
+            .expect("projection tables must be initialized"))
     }
 
     pub fn begin_immediate_batch(&self) -> Result<()> {

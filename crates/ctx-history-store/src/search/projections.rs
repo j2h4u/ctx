@@ -26,6 +26,13 @@ const SEMANTIC_SEARCHABLE_ITEMS_STAT_KEY: &str = "semantic_searchable_lite_turn_
 const SEMANTIC_TURN_TEXT_MAX_CHARS: usize = 64 * 1024;
 const SEMANTIC_LITE_TURN_RANK_BUCKET: &str = "lite_turn";
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EventSearchProjectionTables {
+    has_event_search: bool,
+    has_event_lookup: bool,
+    has_event_scriptgram: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventSearchHit {
     pub event_id: Uuid,
@@ -742,6 +749,16 @@ pub(crate) fn event_scriptgram_table_ready(conn: &Connection) -> Result<bool> {
     )
 }
 
+pub(crate) fn event_search_projection_tables(
+    conn: &Connection,
+) -> Result<EventSearchProjectionTables> {
+    Ok(EventSearchProjectionTables {
+        has_event_search: table_exists(conn, "event_search")?,
+        has_event_lookup: event_search_lookup_table_ready(conn)?,
+        has_event_scriptgram: event_scriptgram_table_ready(conn)?,
+    })
+}
+
 fn fts_table_has_columns(conn: &Connection, table: &str, required: &[&str]) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -1352,38 +1369,29 @@ pub(crate) fn populate_event_search_projection_from_query(
     Ok(())
 }
 
-pub(crate) fn insert_event_search_projection_for_event(
-    conn: &Connection,
-    event: &Event,
-) -> Result<()> {
-    insert_event_search_projection_for_event_id(conn, event.id, event)
-}
-
 pub(crate) fn upsert_event_search_projection_for_event(
     conn: &Connection,
     event_id: Uuid,
     event: &Event,
 ) -> Result<()> {
-    let has_event_search = table_exists(conn, "event_search")?;
-    let has_event_lookup = table_exists(conn, "event_search_lookup")?;
-    let has_event_scriptgram = event_scriptgram_table_ready(conn)?;
-    if !has_event_search && !has_event_lookup && !has_event_scriptgram {
+    let tables = event_search_projection_tables(conn)?;
+    if !tables.has_event_search && !tables.has_event_lookup && !tables.has_event_scriptgram {
         return Ok(());
     }
     let event_id_text = event_id.to_string();
-    if has_event_search {
+    if tables.has_event_search {
         conn.execute(
             "DELETE FROM event_search WHERE event_id = ?1",
             params![&event_id_text],
         )?;
     }
-    if has_event_scriptgram {
+    if tables.has_event_scriptgram {
         conn.execute(
             "DELETE FROM event_search_scriptgram WHERE event_id = ?1",
             params![&event_id_text],
         )?;
     }
-    if has_event_lookup {
+    if tables.has_event_lookup {
         conn.execute(
             "DELETE FROM event_search_lookup WHERE event_id = ?1",
             params![&event_id_text],
@@ -1397,10 +1405,17 @@ pub(crate) fn insert_event_search_projection_for_event_id(
     event_id: Uuid,
     event: &Event,
 ) -> Result<()> {
-    let has_event_search = table_exists(conn, "event_search")?;
-    let has_event_lookup = table_exists(conn, "event_search_lookup")?;
-    let has_event_scriptgram = event_scriptgram_table_ready(conn)?;
-    if !has_event_search && !has_event_lookup && !has_event_scriptgram {
+    let tables = event_search_projection_tables(conn)?;
+    insert_event_search_projection_for_event_id_with_tables(conn, event_id, event, tables)
+}
+
+pub(crate) fn insert_event_search_projection_for_event_id_with_tables(
+    conn: &Connection,
+    event_id: Uuid,
+    event: &Event,
+    tables: EventSearchProjectionTables,
+) -> Result<()> {
+    if !tables.has_event_search && !tables.has_event_lookup && !tables.has_event_scriptgram {
         return Ok(());
     }
     if !event_searchable_event_parts(
@@ -1428,7 +1443,7 @@ pub(crate) fn insert_event_search_projection_for_event_id(
     let session_id = optional_uuid_string(event.session_id);
     let role = event.role.map(|role| role.as_str());
     let rank_bucket = event.event_type.as_str();
-    if has_event_search {
+    if tables.has_event_search {
         conn.prepare_cached(
             r#"
             INSERT INTO event_search
@@ -1445,7 +1460,7 @@ pub(crate) fn insert_event_search_projection_for_event_id(
             rank_bucket,
         ])?;
     }
-    if has_event_scriptgram {
+    if tables.has_event_scriptgram {
         let token_text = scriptgram_index_text(&preview);
         if !token_text.is_empty() {
             conn.prepare_cached(
@@ -1465,7 +1480,7 @@ pub(crate) fn insert_event_search_projection_for_event_id(
             ])?;
         }
     }
-    if has_event_lookup && semantic_lookup_event_parts(event.event_type, role) {
+    if tables.has_event_lookup && semantic_lookup_event_parts(event.event_type, role) {
         conn.prepare_cached(
             r#"
             INSERT INTO event_search_lookup

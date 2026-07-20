@@ -7,7 +7,7 @@ use crate::connection::{
     parse_json, parse_optional_uuid, parse_text_enum, parse_uuid, timestamp_ms,
 };
 use crate::search::projections::{
-    adjust_semantic_searchable_item_stats, insert_event_search_projection_for_event,
+    adjust_semantic_searchable_item_stats, insert_event_search_projection_for_event_id_with_tables,
     semantic_searchable_document_count_for_event,
     semantic_searchable_document_count_from_stored_event, upsert_event_search_projection_for_event,
 };
@@ -152,7 +152,12 @@ impl Store {
             }
         }
         if changed > 0 {
-            insert_event_search_projection_for_event(&self.conn, event)?;
+            insert_event_search_projection_for_event_id_with_tables(
+                &self.conn,
+                event.id,
+                event,
+                self.event_search_projection_tables()?,
+            )?;
             adjust_semantic_searchable_item_stats(
                 &self.conn,
                 0,

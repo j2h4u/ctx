@@ -40,7 +40,7 @@ pub use search::projections::{EventEmbeddingDocument, EventSearchHit};
 
 use std::{
     path::PathBuf,
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{atomic::AtomicUsize, Arc, OnceLock},
     time::Duration,
 };
 
@@ -54,6 +54,7 @@ pub struct Store {
     conn: Connection,
     busy_timeout: Duration,
     event_search_bulk_depth: Arc<AtomicUsize>,
+    event_search_projection_tables: OnceLock<search::projections::EventSearchProjectionTables>,
 }
 
 #[cfg(test)]

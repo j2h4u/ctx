@@ -1,10 +1,11 @@
 use std::{
-    io::{IsTerminal, Write},
+    io::IsTerminal,
     sync::{Arc, Mutex},
     time::{Duration as StdDuration, Instant},
 };
 
 use clap::ValueEnum;
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde_json::json;
 
 use crate::commands::import::{source_error_reason, SourceStats};
@@ -33,11 +34,10 @@ enum ProgressRenderMode {
     Json,
 }
 
-#[derive(Debug)]
 struct ProgressState {
     started: Instant,
     last_emit: Option<Instant>,
-    last_line_len: usize,
+    terminal_bar: Option<ProgressBar>,
 }
 
 #[derive(Clone)]
@@ -65,6 +65,16 @@ impl ProgressReporter {
             ProgressArg::Auto if json_output || !stderr_is_terminal => ProgressRenderMode::None,
             ProgressArg::Auto => ProgressRenderMode::Plain { interactive: true },
         };
+        let terminal_bar =
+            matches!(mode, ProgressRenderMode::Plain { interactive: true }).then(|| {
+                let bar =
+                    ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr_with_hz(12));
+                bar.set_style(
+                    ProgressStyle::with_template("{msg}")
+                        .expect("static progress template must be valid"),
+                );
+                bar
+            });
         Self {
             mode,
             operation,
@@ -72,7 +82,7 @@ impl ProgressReporter {
             state: Arc::new(Mutex::new(ProgressState {
                 started: Instant::now(),
                 last_emit: None,
-                last_line_len: 0,
+                terminal_bar,
             })),
         }
     }
@@ -151,11 +161,8 @@ impl ProgressReporter {
 
     pub(crate) fn finish_line(&self) {
         let mut state = self.state.lock().expect("progress state poisoned");
-        if matches!(self.mode, ProgressRenderMode::Plain { interactive: true })
-            && state.last_line_len > 0
-        {
-            eprintln!();
-            state.last_line_len = 0;
+        if let Some(bar) = state.terminal_bar.take() {
+            bar.finish_and_clear();
         }
     }
 
@@ -364,13 +371,15 @@ impl ProgressReporter {
             ProgressRenderMode::Plain { interactive } => {
                 let rendered = render_progress_line(&line, elapsed);
                 if interactive {
-                    eprint!("\r\u{1b}[2K{rendered}");
+                    let bar = state
+                        .terminal_bar
+                        .as_ref()
+                        .expect("interactive progress must have an indicatif bar");
                     if line.done {
-                        eprintln!();
-                        state.last_line_len = 0;
+                        bar.finish_with_message(rendered);
+                        state.terminal_bar = None;
                     } else {
-                        state.last_line_len = rendered.len();
-                        let _ = std::io::stderr().flush();
+                        bar.set_message(rendered);
                     }
                 } else {
                     eprintln!("{rendered}");
@@ -391,8 +400,13 @@ impl ProgressReporter {
                     .elapsed();
                 eprintln!("{}", progress_json(self.operation, &line, elapsed));
             }
-            ProgressRenderMode::Plain { .. } => {
-                self.finish_line();
+            ProgressRenderMode::Plain { interactive } => {
+                if interactive {
+                    let mut state = self.state.lock().expect("progress state poisoned");
+                    if let Some(bar) = state.terminal_bar.take() {
+                        bar.finish_and_clear();
+                    }
+                }
                 eprintln!("{}", line.message);
             }
         }
@@ -442,29 +456,30 @@ fn render_progress_line_for_width(
         .zip(line.total_files)
         .filter(|_| !line.done)
         .map(|(completed, total)| {
-            format!(" {}/{} files", format_count(completed), format_count(total))
+            format!("{}/{} files", format_count(completed), format_count(total))
         })
         .unwrap_or_default();
     let remaining = if line.done {
         "done".to_owned()
     } else if let Some(eta) = progress_line_eta_seconds(line, elapsed) {
-        format_eta_compact(eta)
+        format!("ETA {}", format_eta_compact(eta))
     } else {
-        "working".to_owned()
+        "estimating…".to_owned()
     };
-    let target_width = target_width.clamp(36, 76);
+    let details = [bytes.as_str(), files.as_str(), remaining.as_str()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let target_width = target_width.clamp(36, 100);
     let candidates = [
         format!(
-            "{phase} {} [{bar}] {percent:>3.0}%  {bytes}{files}  {remaining}",
+            "{phase} {} [{bar}] {percent:>3.0}%  {details}",
             line.message
         ),
-        format!(
-            "{phase} {} [{bar}] {percent:>3.0}%  {bytes}  {remaining}",
-            line.message
-        ),
-        format!("{phase} [{bar}] {percent:>3.0}%  {bytes}{files}  {remaining}"),
-        format!("{phase} [{bar}] {percent:>3.0}%  {bytes}  {remaining}"),
-        format!("{phase} [{bar}] {percent:>3.0}%  {remaining}"),
+        format!("{phase} [{bar}] {percent:>3.0}%  {details}"),
+        format!("{phase} {percent:>3.0}%  {details}"),
+        format!("{phase} {percent:>3.0}%  {remaining}"),
     ];
     candidates
         .into_iter()
@@ -509,10 +524,16 @@ fn progress_render_width() -> usize {
 }
 
 fn progress_phase_label(phase: &str) -> String {
-    let mut chars = phase.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-        None => "Working".to_owned(),
+    match phase {
+        "indexing" => "Importing".to_owned(),
+        "inventorying" => "Scanning".to_owned(),
+        _ => {
+            let mut chars = phase.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+                None => "Working".to_owned(),
+            }
+        }
     }
 }
 
@@ -553,7 +574,7 @@ fn progress_line_percent(line: &ProgressLine) -> f64 {
 }
 
 fn progress_line_eta_seconds(line: &ProgressLine, elapsed: StdDuration) -> Option<f64> {
-    if line.done {
+    if line.done || elapsed < StdDuration::from_secs(3) {
         None
     } else {
         let (completed_bytes, total_bytes) = progress_line_bytes(line);
@@ -691,9 +712,9 @@ mod tests {
             render_progress_line_for_width(&sample_line(), StdDuration::from_secs(120), 76);
 
         assert!(rendered.chars().count() <= 76, "{rendered}");
-        assert!(rendered.starts_with("Indexing codex ["), "{rendered}");
+        assert!(rendered.starts_with("Importing ["), "{rendered}");
         assert!(rendered.contains("7.0/14.0 GiB"), "{rendered}");
-        assert!(rendered.contains("codex"), "{rendered}");
+        assert!(rendered.contains("ETA"), "{rendered}");
         assert!(!rendered.contains("events"), "{rendered}");
     }
 
@@ -703,7 +724,7 @@ mod tests {
             render_progress_line_for_width(&sample_line(), StdDuration::from_secs(120), 45);
 
         assert!(rendered.chars().count() <= 45, "{rendered}");
-        assert!(rendered.starts_with("Indexing ["), "{rendered}");
+        assert!(rendered.starts_with("Importing"), "{rendered}");
         assert!(!rendered.contains("files"), "{rendered}");
     }
 
