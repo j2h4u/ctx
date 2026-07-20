@@ -245,7 +245,7 @@ pub(crate) fn configure_connection(conn: &Connection, busy_timeout: Duration) ->
         PRAGMA journal_mode = WAL;
         PRAGMA synchronous = NORMAL;
         PRAGMA temp_store = MEMORY;
-        PRAGMA cache_size = -32768;
+        PRAGMA cache_size = -262144;
         PRAGMA wal_autocheckpoint = 10000;
         "#,
     )?;
@@ -278,7 +278,7 @@ pub(crate) fn configure_read_only_connection(
         r#"
         PRAGMA foreign_keys = ON;
         PRAGMA temp_store = MEMORY;
-        PRAGMA cache_size = -32768;
+        PRAGMA cache_size = -262144;
         PRAGMA query_only = ON;
         "#,
     )?;

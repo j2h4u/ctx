@@ -472,11 +472,8 @@ fn render_progress_line_for_width(
         .join(" · ");
     let target_width = target_width.clamp(36, 100);
     let candidates = [
-        format!(
-            "{phase} {} [{bar}] {percent:>3.0}%  {details}",
-            line.message
-        ),
-        format!("{phase} [{bar}] {percent:>3.0}%  {details}"),
+        format!("{} [{bar}] total {percent:>3.0}%  {details}", line.message),
+        format!("{phase} overall [{bar}] {percent:>3.0}%  {details}"),
         format!("{phase} {percent:>3.0}%  {details}"),
         format!("{phase} {percent:>3.0}%  {remaining}"),
     ];
