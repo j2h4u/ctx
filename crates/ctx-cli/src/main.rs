@@ -613,6 +613,7 @@ impl CommandRoot {
         match self {
             Self::Status(_)
             | Self::Index(_)
+            | Self::Search(_)
             | Self::Sql(_)
             | Self::Mcp(_)
             | Self::Diagnostics(_) => false,

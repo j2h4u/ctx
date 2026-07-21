@@ -3,14 +3,14 @@ use ctx_history_core::{
     ContextCitation, ContextLinks, ContextPagination, ContextTruncation, Visibility,
 };
 use ctx_history_store::EventSearchHit;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::query::{PacketOptions, SearchFilters};
 
 pub const SEARCH_PACKET_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchPacket {
     pub schema_version: u32,
     pub query: String,
@@ -21,7 +21,7 @@ pub struct SearchPacket {
     pub truncation: ContextTruncation,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchPacketResult {
     pub record_id: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -73,7 +73,7 @@ pub struct SearchPacketResult {
     pub visibility: Visibility,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchResultScope {
     Session,

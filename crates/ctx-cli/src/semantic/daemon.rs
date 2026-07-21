@@ -137,6 +137,27 @@ struct DaemonQueryService {
 const DAEMON_QUERY_REQUEST_MAX_BYTES: usize = 256 * 1024;
 const DAEMON_QUERY_REQUEST_READ_TIMEOUT: StdDuration = StdDuration::from_secs(2);
 
+thread_local! {
+    /// The query service is single-threaded, so one read-only connection can
+    /// keep SQLite's page cache and prepared schema state warm across CLI calls.
+    static DAEMON_LEXICAL_STATE: std::cell::RefCell<Option<DaemonLexicalState>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+struct DaemonLexicalState {
+    db_path: PathBuf,
+    store: Store,
+    fingerprint: Option<(u64, std::time::SystemTime)>,
+    cache: std::collections::VecDeque<(String, ctx_history_search::SearchPacket)>,
+}
+
+const DAEMON_LEXICAL_CACHE_CAPACITY: usize = 64;
+
+fn lexical_db_fingerprint(path: &Path) -> Option<(u64, std::time::SystemTime)> {
+    let metadata = fs::metadata(path).ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
 impl Drop for DaemonQueryService {
     fn drop(&mut self) {
         remove_daemon_query_endpoint(&self.data_root);
@@ -396,7 +417,7 @@ fn start_daemon_query_service_with_request_timeout(
                         );
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(StdDuration::from_millis(25));
+                        std::thread::sleep(StdDuration::from_millis(2));
                     }
                     Err(_) => break,
                 }
@@ -824,6 +845,75 @@ fn handle_daemon_query_stream_inner<S: std::io::Write>(
         )?;
         return Ok(());
     }
+    if op == "lexical_search" {
+        let query = request.get("query").and_then(Value::as_str).unwrap_or("");
+        let terms = request
+            .get("terms")
+            .cloned()
+            .map(serde_json::from_value::<Vec<String>>)
+            .transpose()?
+            .unwrap_or_default();
+        let options = request
+            .get("options")
+            .cloned()
+            .ok_or_else(|| anyhow!("daemon lexical query options are missing"))
+            .and_then(|value| {
+                serde_json::from_value::<ctx_history_search::PacketOptions>(value)
+                    .context("parse daemon lexical query options")
+            })?;
+        let mut cache_options = options.clone();
+        if let Some(since) = cache_options.filters.since {
+            let minute = since.timestamp().div_euclid(60) * 60;
+            cache_options.filters.since = chrono::DateTime::from_timestamp(minute, 0);
+        }
+        let cache_key = serde_json::to_string(&(query, &terms, &cache_options))?;
+        let db_path = data_root.join("work.sqlite");
+        let packet = DAEMON_LEXICAL_STATE.with(|slot| -> Result<_> {
+            let mut slot = slot.borrow_mut();
+            if slot
+                .as_ref()
+                .is_none_or(|state| state.db_path != db_path)
+            {
+                *slot = Some(DaemonLexicalState {
+                    db_path: db_path.clone(),
+                    store: Store::open_read_only(&db_path)?,
+                    fingerprint: lexical_db_fingerprint(&db_path),
+                    cache: std::collections::VecDeque::new(),
+                });
+            }
+            let state = slot.as_mut().expect("lexical state initialized");
+            let fingerprint = lexical_db_fingerprint(&db_path);
+            if state.fingerprint != fingerprint {
+                state.fingerprint = fingerprint;
+                state.cache.clear();
+            }
+            if let Some(index) = state.cache.iter().position(|(key, _)| key == &cache_key) {
+                let cached = state.cache.remove(index).expect("cached query exists");
+                let packet = cached.1.clone();
+                state.cache.push_front(cached);
+                return Ok(packet);
+            }
+            let packet = if terms.iter().any(|term| !term.trim().is_empty()) {
+                ctx_history_search::search_packet_terms(&state.store, query, &terms, &options)
+                    .map_err(anyhow::Error::from)?
+            } else {
+                ctx_history_search::search_packet(&state.store, query, &options)
+                    .map_err(anyhow::Error::from)?
+            };
+            state.cache.push_front((cache_key, packet.clone()));
+            state.cache.truncate(DAEMON_LEXICAL_CACHE_CAPACITY);
+            Ok(packet)
+        })?;
+        writeln!(
+            stream,
+            "{}",
+            serde_json::to_string(&compact_json(json!({
+                "ok": true,
+                "packet": packet,
+            })))?
+        )?;
+        return Ok(());
+    }
     if op != "embed_query" {
         return Err(anyhow!("unknown daemon query operation `{op}`"));
     }
@@ -1125,7 +1215,7 @@ fn run_daemon_inner(
     write_daemon_lifecycle_status(data_root, &args, "running", started_at_ms, None, None)?;
 
     let mut runtime = DaemonRuntime::default();
-    let query_service = if semantic_enabled {
+    let query_service = if semantic_query_service_supported() {
         Some(start_daemon_query_service(data_root, runtime.semantic_embedder.clone())?)
     } else {
         None

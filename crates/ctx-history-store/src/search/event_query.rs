@@ -6,52 +6,36 @@ pub(super) fn lexical_event_search_query(
     offset: usize,
     prefer_conversation: bool,
 ) -> (String, Vec<Value>) {
-    let mut values = Vec::<Value>::new();
     let candidate_limit = limit.max(1).saturating_add(offset);
-    let selects = match_clauses
-        .into_iter()
-        .enumerate()
-        .map(|(term_index, clause)| {
-            values.push(Value::Text(clause));
-            format!(
-                r#"SELECT * FROM (
-                   SELECT event_search.event_id,
-                          event_search.history_record_id,
-                          event_search.session_id,
-                          event_search.role,
-                          event_search.preview_text,
-                          {term_index},
-                          bm25(event_search)
-                   FROM event_search
-                   WHERE event_search MATCH ?{}
-                   ORDER BY rank
-                   LIMIT {candidate_limit}
-                )"#,
-                values.len(),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" UNION ALL ");
+    let match_query = match_clauses.join(" OR ");
+    let mut values = vec![Value::Text(match_query)];
     values.push(Value::Integer(limit.max(1) as i64));
     let limit_parameter = values.len();
     values.push(Value::Integer(offset as i64));
     let offset_parameter = values.len();
     let sql = format!(
         r#"
-        WITH matches(event_id, history_record_id, session_id, role, preview_text, term_index, score) AS MATERIALIZED (
-            {selects}
+        WITH candidates(event_id, history_record_id, session_id, role, preview_text, score) AS MATERIALIZED (
+            SELECT event_id,
+                   history_record_id,
+                   session_id,
+                   role,
+                   preview_text,
+                   bm25(event_search)
+            FROM event_search
+            WHERE event_search MATCH ?1
+            ORDER BY rank
+            LIMIT {candidate_limit}
         ),
         ranked(event_id, history_record_id, session_id, role, preview_text, matched_terms, score) AS (
-            -- Projection maintenance keeps one row per event. Grouping only by the
-            -- canonical event key also collapses legacy duplicate result rows.
             SELECT event_id,
                    MIN(history_record_id),
                    MIN(session_id),
                    MIN(role),
                    MIN(preview_text),
-                   COUNT(*),
-                   SUM(score)
-            FROM matches
+                   1,
+                   MIN(score)
+            FROM candidates
             GROUP BY event_id
         )
         {}
