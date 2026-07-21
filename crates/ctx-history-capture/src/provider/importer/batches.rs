@@ -9,7 +9,10 @@ use serde::Serialize;
 use super::*;
 
 pub(crate) const IMPORT_TRANSACTION_BATCH_BYTES: usize = 8 * 1024 * 1024;
-pub(crate) const IMPORT_TRANSACTION_BATCH_UNITS: usize = 64;
+// The byte cap bounds WAL growth and recovery work. A tiny row cap causes a
+// full commit/checkpoint cycle for almost every short transcript turn, which
+// dominates large imports without providing additional safety.
+pub(crate) const IMPORT_TRANSACTION_BATCH_UNITS: usize = 4_096;
 
 pub(super) fn import_normalized_provider_captures(
     store: &mut Store,
@@ -28,8 +31,73 @@ pub(super) fn import_normalized_provider_captures(
         summary,
         captures,
         files_touched,
-        transaction_batch_size,
-        true,
+        ProviderCaptureBatchSettings {
+            transaction_batch_size,
+            suppress_search_merges: true,
+            progress: None,
+            validate_real_messages: true,
+            external_caches: None,
+        },
+    )
+}
+
+pub(super) fn import_normalized_provider_captures_stream_batch(
+    store: &mut Store,
+    normalization: ProviderNormalizationResult,
+    options: NormalizedProviderImportOptions,
+    state: &mut ProviderImportStreamState,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<ProviderImportSummary> {
+    // A session's earliest timestamp can be discovered in a later stream batch.
+    // Re-upsert it once per bounded batch while keeping run-wide summary and
+    // identity caches intact.
+    state.caches.processed_sessions.clear();
+    let ProviderNormalizationResult {
+        summary,
+        captures,
+        files_touched,
+    } = normalization;
+    import_provider_capture_lines_with_batch_size(
+        store,
+        options,
+        summary,
+        captures,
+        files_touched,
+        ProviderCaptureBatchSettings {
+            transaction_batch_size: None,
+            suppress_search_merges: true,
+            progress: Some(progress),
+            validate_real_messages: false,
+            external_caches: Some(&mut state.caches),
+        },
+    )
+}
+
+pub(super) fn import_normalized_provider_captures_shared_batch(
+    store: &mut Store,
+    normalization: ProviderNormalizationResult,
+    options: NormalizedProviderImportOptions,
+    state: &mut ProviderImportStreamState,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<ProviderImportSummary> {
+    let ProviderNormalizationResult {
+        summary,
+        captures,
+        files_touched,
+    } = normalization;
+    import_provider_capture_lines_with_batch_size(
+        store,
+        options,
+        summary,
+        captures,
+        files_touched,
+        ProviderCaptureBatchSettings {
+            transaction_batch_size: None,
+            suppress_search_merges: true,
+            progress: Some(progress),
+            validate_real_messages: true,
+            external_caches: Some(&mut state.caches),
+        },
     )
 }
 
@@ -61,8 +129,13 @@ pub(crate) fn import_normalized_provider_captures_in_batches(
         summary,
         captures,
         files_touched,
-        Some(transaction_batch_size),
-        true,
+        ProviderCaptureBatchSettings {
+            transaction_batch_size: Some(transaction_batch_size),
+            suppress_search_merges: true,
+            progress: None,
+            validate_real_messages: true,
+            external_caches: None,
+        },
     )
 }
 
@@ -79,13 +152,26 @@ pub(super) fn import_provider_capture_lines(
         summary,
         captures,
         files_touched,
-        provider_transaction_batch_size(),
-        true,
+        ProviderCaptureBatchSettings {
+            transaction_batch_size: provider_transaction_batch_size(),
+            suppress_search_merges: true,
+            progress: None,
+            validate_real_messages: true,
+            external_caches: None,
+        },
     )
 }
 
 fn provider_transaction_batch_size() -> Option<NonZeroUsize> {
     NonZeroUsize::new(IMPORT_TRANSACTION_BATCH_UNITS)
+}
+
+struct ProviderCaptureBatchSettings<'a> {
+    transaction_batch_size: Option<NonZeroUsize>,
+    suppress_search_merges: bool,
+    progress: Option<&'a mut dyn FnMut(usize, usize)>,
+    validate_real_messages: bool,
+    external_caches: Option<&'a mut ProviderImportCaches>,
 }
 
 fn import_provider_capture_lines_with_batch_size(
@@ -94,20 +180,32 @@ fn import_provider_capture_lines_with_batch_size(
     mut summary: ProviderImportSummary,
     mut captures: Vec<(usize, ProviderCaptureEnvelope)>,
     mut files_touched: Vec<(usize, ProviderFileTouchedEnvelope)>,
-    transaction_batch_size: Option<NonZeroUsize>,
-    suppress_search_merges: bool,
+    settings: ProviderCaptureBatchSettings<'_>,
 ) -> Result<ProviderImportSummary> {
-    let caches = ProviderImportCaches::default();
-    filter_provider_capture_lines_without_real_session_messages(
-        &mut summary,
-        &mut captures,
-        &mut files_touched,
-    );
+    let ProviderCaptureBatchSettings {
+        transaction_batch_size,
+        suppress_search_merges,
+        progress,
+        validate_real_messages,
+        external_caches,
+    } = settings;
+    let mut local_caches = ProviderImportCaches::default();
+    let caches = external_caches.unwrap_or(&mut local_caches);
+    if validate_real_messages {
+        filter_provider_capture_lines_without_real_session_messages(
+            &mut summary,
+            &mut captures,
+            &mut files_touched,
+        );
+    }
     let supplied_file_touch_lines = files_touched
         .iter()
         .map(|(line_number, _)| *line_number)
         .collect::<BTreeSet<_>>();
-    if summary.failed == 0 && !provider_capture_lines_have_real_message(&captures) {
+    if validate_real_messages
+        && summary.failed == 0
+        && !provider_capture_lines_have_real_message(&captures)
+    {
         let line = captures
             .first()
             .map(|(line_number, _)| *line_number)
@@ -152,6 +250,7 @@ fn import_provider_capture_lines_with_batch_size(
         has_captures,
         transaction_batch_size,
         caches,
+        progress,
     );
     let finish_result = match &bulk_search_guard {
         Some(guard) => store
@@ -175,8 +274,15 @@ fn persist_provider_capture_lines(
     files_touched: Vec<(usize, ProviderFileTouchedEnvelope)>,
     has_captures: bool,
     transaction_batch_size: Option<NonZeroUsize>,
-    mut caches: ProviderImportCaches,
+    caches: &mut ProviderImportCaches,
+    mut progress: Option<&mut dyn FnMut(usize, usize)>,
 ) -> Result<ProviderImportSummary> {
+    let total_units = captures.len().saturating_add(files_touched.len());
+    let mut completed_units = 0usize;
+    let mut last_progress = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    if let Some(callback) = progress.as_mut() {
+        callback(0, total_units);
+    }
     let pending_cursors = if options.persist_cursors && summary.failed == 0 {
         captures
             .iter()
@@ -192,9 +298,13 @@ fn persist_provider_capture_lines(
         transaction_batch_size,
     )?;
     for (line_number, capture) in captures {
-        let unit_bytes = serialized_len_or_rollback(&mut transaction, store, &capture)?;
+        let unit_bytes = if transaction_batch_size.is_some() {
+            serialized_len_or_rollback(&mut transaction, store, &capture)?
+        } else {
+            0
+        };
         transaction.prepare_unit(store, unit_bytes)?;
-        match import_provider_capture_line(store, &capture, options, line_number, &mut caches) {
+        match import_provider_capture_line(store, &capture, options, line_number, caches) {
             Ok(line_summary) => summary.merge(line_summary),
             Err(err @ CaptureError::Store(_)) => {
                 transaction.rollback(store);
@@ -209,10 +319,21 @@ fn persist_provider_capture_lines(
             }
         }
         transaction.record_unit(store, unit_bytes)?;
+        completed_units = completed_units.saturating_add(1);
+        if last_progress.elapsed() >= std::time::Duration::from_millis(250) {
+            if let Some(callback) = progress.as_mut() {
+                callback(completed_units, total_units);
+            }
+            last_progress = std::time::Instant::now();
+        }
     }
-    resolve_pending_provider_edges_batched(store, &mut summary, &mut caches, &mut transaction)?;
+    resolve_pending_provider_edges_batched(store, &mut summary, caches, &mut transaction)?;
     for (line_number, file) in files_touched {
-        let unit_bytes = serialized_len_or_rollback(&mut transaction, store, &file)?;
+        let unit_bytes = if transaction_batch_size.is_some() {
+            serialized_len_or_rollback(&mut transaction, store, &file)?
+        } else {
+            0
+        };
         transaction.prepare_unit(store, unit_bytes)?;
         match import_provider_file_touched_line(store, &file, options) {
             Ok(()) => summary.accepted_content_records += 1,
@@ -231,10 +352,21 @@ fn persist_provider_capture_lines(
             },
         }
         transaction.record_unit(store, unit_bytes)?;
+        completed_units = completed_units.saturating_add(1);
+        if last_progress.elapsed() >= std::time::Duration::from_millis(250) {
+            if let Some(callback) = progress.as_mut() {
+                callback(completed_units, total_units);
+            }
+            last_progress = std::time::Instant::now();
+        }
     }
     if summary.failed == 0 {
         for cursor in pending_cursors.into_values() {
-            let unit_bytes = serialized_len_or_rollback(&mut transaction, store, &cursor)?;
+            let unit_bytes = if transaction_batch_size.is_some() {
+                serialized_len_or_rollback(&mut transaction, store, &cursor)?
+            } else {
+                0
+            };
             transaction.prepare_unit(store, unit_bytes)?;
             if let Err(err) = persist_provider_sync_cursor(store, &cursor) {
                 transaction.rollback(store);
@@ -244,6 +376,9 @@ fn persist_provider_capture_lines(
         }
     }
     transaction.commit(store)?;
+    if let Some(callback) = progress.as_mut() {
+        callback(total_units, total_units);
+    }
     Ok(summary)
 }
 

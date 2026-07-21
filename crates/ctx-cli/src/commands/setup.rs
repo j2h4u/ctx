@@ -32,7 +32,6 @@ pub(crate) fn run_setup(
 ) -> Result<()> {
     fs::create_dir_all(&data_root)?;
     let db_path = database_path(data_root.clone());
-    let store = Store::open(&db_path)?;
     let config_path = data_root.join(CONFIG_FILE);
     config::write_default_config(&data_root)?;
     let semantic_enabled = config.semantic_search_enabled();
@@ -49,6 +48,9 @@ pub(crate) fn run_setup(
     let foreground_import = !args.catalog_only && (args.wait || !daemon_backgrounding_enabled);
     let mut inventory_only = None;
     let import_report = if args.catalog_only || !foreground_import {
+        progress.message("opening_database", "Opening local index...");
+        let store = Store::open(&db_path)?;
+        progress.done("opening_database", "Local index ready.", 0);
         progress.message("inventorying", "Preparing local history...");
         let inventory = inventory_available_sources(&store, &sources)?;
         progress.done(
@@ -64,7 +66,6 @@ pub(crate) fn run_setup(
         inventory_only = Some(inventory);
         None
     } else {
-        drop(store);
         let import_args = ImportArgs {
             provider: None,
             path: None,

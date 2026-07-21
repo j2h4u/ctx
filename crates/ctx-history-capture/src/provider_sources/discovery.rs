@@ -70,6 +70,9 @@ fn discover_provider_sources_for_spec(
         .collect::<Vec<_>>();
 
     match spec.provider {
+        CaptureProvider::Claude => {
+            sources.extend(discover_claude_config_sources(home, spec));
+        }
         CaptureProvider::OpenClaw => {
             if let Some(path) = env_path("OPENCLAW_STATE_DIR") {
                 sources.push(provider_source_from_parts(
@@ -377,6 +380,42 @@ fn discover_provider_sources_for_spec(
     }
 
     sources
+}
+
+/// Finds additional Claude Code config directories such as `~/.claude-work`.
+///
+/// Claude Code keeps transcript projects below a config root's `projects/`
+/// directory. The standard `~/.claude` root is declared in the provider spec;
+/// this supplements it with existing sibling roots and the documented config
+/// directory environment override.
+fn discover_claude_config_sources(home: &Path, spec: &ProviderSourceSpec) -> Vec<ProviderSource> {
+    let mut roots = Vec::new();
+    if let Some(config_dir) = env_path_with_home("CLAUDE_CONFIG_DIR", home) {
+        roots.push(config_dir);
+    }
+
+    if let Ok(entries) = fs::read_dir(home) {
+        roots.extend(entries.filter_map(Result::ok).filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            (file_type.is_dir() && name.starts_with(".claude-")).then(|| entry.path())
+        }));
+    }
+
+    roots
+        .into_iter()
+        .map(|root| root.join("projects"))
+        .filter(|projects| projects.is_dir())
+        .map(|projects| {
+            provider_source_from_parts(
+                spec,
+                projects,
+                "claude_projects_jsonl_tree",
+                ProviderSourceKind::NativeHistory,
+            )
+        })
+        .collect()
 }
 
 fn discover_forgecode_sources(home: &Path, spec: &ProviderSourceSpec) -> Vec<ProviderSource> {

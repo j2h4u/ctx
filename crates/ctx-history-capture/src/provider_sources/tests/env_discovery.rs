@@ -40,6 +40,34 @@ fn continue_discovery_uses_global_dir_env_sessions_subdir() {
 }
 
 #[test]
+fn claude_discovery_includes_named_and_env_config_roots() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let temp = tempdir();
+    let work_projects = temp.path().join(".claude-work/projects/workspace");
+    std::fs::create_dir_all(&work_projects).unwrap();
+    std::fs::write(work_projects.join("session.jsonl"), "{}\n").unwrap();
+
+    let custom_root = temp.path().join("claude-custom");
+    let custom_projects = custom_root.join("projects/workspace");
+    std::fs::create_dir_all(&custom_projects).unwrap();
+    std::fs::write(custom_projects.join("session.jsonl"), "{}\n").unwrap();
+    let _config_dir = EnvGuard::set("CLAUDE_CONFIG_DIR", custom_root.as_os_str());
+
+    let sources = discover_provider_sources_for_provider(temp.path(), CaptureProvider::Claude);
+    for path in [
+        temp.path().join(".claude-work/projects"),
+        custom_root.join("projects"),
+    ] {
+        let source = sources
+            .iter()
+            .find(|source| source.path == path)
+            .unwrap_or_else(|| panic!("missing Claude source {path:?}: {sources:#?}"));
+        assert_eq!(source.status, ProviderSourceStatus::Available);
+        assert_eq!(source.import_support, ProviderImportSupport::Native);
+    }
+}
+
+#[test]
 fn kilo_discovery_uses_xdg_kilo_db_env_override_and_channel_dbs() {
     let _lock = ENV_LOCK.lock().unwrap();
     let temp = tempdir();

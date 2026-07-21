@@ -673,6 +673,15 @@ fn setup_inventories_and_imports_claude_sources_by_default() {
     assert_eq!(status["pending_inventory_units"], 0);
     assert_eq!(status["indexed_catalog_sessions"], 0);
     assert!(status["indexed_items"].as_u64().unwrap() > 0);
+
+    let conn = Connection::open(temp.path().join("work.sqlite")).unwrap();
+    assert!(
+        sqlite_count(
+            &conn,
+            "SELECT COUNT(*) FROM event_search WHERE event_search MATCH 'setup AND import AND claude'"
+        ) > 0,
+        "Claude events must be searchable without a global projection rebuild"
+    );
 }
 
 #[test]

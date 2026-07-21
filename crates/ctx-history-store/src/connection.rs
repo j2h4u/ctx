@@ -2,6 +2,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
     time::Duration,
 };
 
@@ -56,6 +57,8 @@ impl Store {
             conn,
             busy_timeout: BUSY_TIMEOUT,
             event_search_bulk_depth: Default::default(),
+            deferred_event_search_depth: Default::default(),
+            event_search_projection_tables: Default::default(),
         })
     }
 
@@ -86,6 +89,8 @@ impl Store {
             conn,
             busy_timeout,
             event_search_bulk_depth: Default::default(),
+            deferred_event_search_depth: Default::default(),
+            event_search_projection_tables: Default::default(),
         };
         store.migrate()?;
         store.recover_event_search_bulk_mode()?;
@@ -93,11 +98,45 @@ impl Store {
             store.normalize_legacy_blob_paths()?;
         }
         store.ensure_search_projection_initialized()?;
+        store.initialize_event_search_projection_tables()?;
         Ok(store)
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn defer_event_search_projections(&self) -> crate::DeferredEventSearchGuard {
+        self.deferred_event_search_depth
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        crate::DeferredEventSearchGuard {
+            depth: Arc::clone(&self.deferred_event_search_depth),
+        }
+    }
+
+    pub(crate) fn event_search_projections_deferred(&self) -> bool {
+        self.deferred_event_search_depth
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0
+    }
+
+    fn initialize_event_search_projection_tables(&self) -> Result<()> {
+        let tables = crate::search::projections::event_search_projection_tables(&self.conn)?;
+        let _ = self.event_search_projection_tables.set(tables);
+        Ok(())
+    }
+
+    pub(crate) fn event_search_projection_tables(
+        &self,
+    ) -> Result<crate::search::projections::EventSearchProjectionTables> {
+        if let Some(tables) = self.event_search_projection_tables.get() {
+            return Ok(*tables);
+        }
+        self.initialize_event_search_projection_tables()?;
+        Ok(*self
+            .event_search_projection_tables
+            .get()
+            .expect("projection tables must be initialized"))
     }
 
     pub fn begin_immediate_batch(&self) -> Result<()> {
@@ -127,7 +166,7 @@ impl Store {
 
     pub fn checkpoint_wal_truncate_required(&self) -> Result<()> {
         let outcome = self.checkpoint_wal("TRUNCATE")?;
-        if outcome.busy {
+        if outcome.busy && outcome.checkpointed_frames < outcome.log_frames {
             return Err(StoreError::WalCheckpointBusy {
                 log_frames: outcome.log_frames,
                 checkpointed_frames: outcome.checkpointed_frames,
@@ -223,7 +262,7 @@ pub(crate) fn configure_connection(conn: &Connection, busy_timeout: Duration) ->
         PRAGMA journal_mode = WAL;
         PRAGMA synchronous = NORMAL;
         PRAGMA temp_store = MEMORY;
-        PRAGMA cache_size = -32768;
+        PRAGMA cache_size = -262144;
         PRAGMA wal_autocheckpoint = 10000;
         "#,
     )?;
@@ -256,7 +295,8 @@ pub(crate) fn configure_read_only_connection(
         r#"
         PRAGMA foreign_keys = ON;
         PRAGMA temp_store = MEMORY;
-        PRAGMA cache_size = -32768;
+        PRAGMA cache_size = -262144;
+        PRAGMA mmap_size = 1073741824;
         PRAGMA query_only = ON;
         "#,
     )?;

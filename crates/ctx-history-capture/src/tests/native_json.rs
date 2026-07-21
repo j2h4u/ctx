@@ -1,5 +1,6 @@
 use super::support::*;
 use crate::PROVIDER_MAX_PREVIEW_CHARS;
+use std::sync::{Arc, Mutex};
 
 #[test]
 
@@ -758,6 +759,42 @@ fn native_claude_projects_imports_jsonl_tree() {
     assert!(events
         .iter()
         .any(|event| event.event_type == EventType::ToolOutput));
+}
+
+#[test]
+fn native_claude_file_import_reports_byte_progress() {
+    let temp = tempdir();
+    let fixture = write_claude_smoke_fixture(&temp).join("-workspace/claude-native-parent.jsonl");
+    let total_bytes = std::fs::metadata(&fixture).unwrap().len();
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let callback_progress = Arc::clone(&progress);
+    let mut store = Store::open(temp.path().join("work.sqlite")).unwrap();
+
+    import_claude_projects_jsonl_tree(
+        &fixture,
+        &mut store,
+        ClaudeProjectsImportOptions {
+            source_path: Some(fixture.clone()),
+            progress: Some(Arc::new(move |event| {
+                callback_progress.lock().unwrap().push(event);
+            })),
+            ..ClaudeProjectsImportOptions::default()
+        },
+    )
+    .unwrap();
+
+    let events = progress.lock().unwrap();
+    assert!(
+        events.len() >= 2,
+        "expected read and completion progress: {events:#?}"
+    );
+    assert!(events.iter().any(|event| {
+        !event.done && event.completed_bytes > 0 && event.completed_bytes <= total_bytes
+    }));
+    let completed = events.last().unwrap();
+    assert!(completed.done);
+    assert_eq!(completed.completed_bytes, total_bytes);
+    assert_eq!(completed.total_bytes, total_bytes);
 }
 
 #[test]

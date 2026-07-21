@@ -499,6 +499,10 @@ pub(crate) fn search_packet_with_backend(
     }
 
     let lexical_search_packet = || -> Result<ctx_history_search::SearchPacket> {
+        match daemon_lexical_search(data_root, query, terms, options) {
+            Ok(Some(packet)) => return Ok(packet),
+            Ok(None) | Err(_) => {}
+        }
         if uses_composed_terms {
             ctx_history_search::search_packet_terms(store, query, terms, options)
                 .map_err(Into::into)

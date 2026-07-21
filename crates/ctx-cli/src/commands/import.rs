@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     io::{Cursor, Read},
     path::{Path, PathBuf},
@@ -13,17 +14,17 @@ use uuid::Uuid;
 
 use ctx_history_capture::{
     catalog_codex_session_tree, import_antigravity_cli_history, import_astrbot_sqlite,
-    import_auggie_history, import_claude_projects_jsonl_tree, import_cline_task_json_history,
-    import_codebuddy_history, import_codex_history_jsonl, import_codex_session_jsonl,
-    import_codex_session_jsonl_tail, import_codex_session_paths, import_codex_session_tree,
-    import_continue_cli_sessions, import_copilot_cli_session_events, import_crush_sqlite,
-    import_cursor_native_history, import_custom_history_jsonl_v1,
-    import_custom_history_jsonl_v1_reader, import_deepagents_sqlite,
-    import_factory_ai_droid_sessions, import_firebender_sqlite, import_forgecode_sqlite,
-    import_gemini_cli_history, import_goose_sessions_sqlite, import_hermes_sqlite,
-    import_junie_history, import_kilo_sqlite, import_kimi_code_cli_history, import_kiro_sqlite,
-    import_lingma_sqlite, import_mimocode_sqlite, import_mistral_vibe_history, import_mux_history,
-    import_nanoclaw_project, import_openclaw_history, import_opencode_sqlite,
+    import_auggie_history, import_claude_projects_jsonl_files_bounded_parallel,
+    import_claude_projects_jsonl_tree, import_cline_task_json_history, import_codebuddy_history,
+    import_codex_history_jsonl, import_codex_session_jsonl, import_codex_session_jsonl_tail,
+    import_codex_session_paths, import_codex_session_tree, import_continue_cli_sessions,
+    import_copilot_cli_session_events, import_crush_sqlite, import_cursor_native_history,
+    import_custom_history_jsonl_v1, import_custom_history_jsonl_v1_reader,
+    import_deepagents_sqlite, import_factory_ai_droid_sessions, import_firebender_sqlite,
+    import_forgecode_sqlite, import_gemini_cli_history, import_goose_sessions_sqlite,
+    import_hermes_sqlite, import_junie_history, import_kilo_sqlite, import_kimi_code_cli_history,
+    import_kiro_sqlite, import_lingma_sqlite, import_mimocode_sqlite, import_mistral_vibe_history,
+    import_mux_history, import_nanoclaw_project, import_openclaw_history, import_opencode_sqlite,
     import_openhands_file_events, import_pi_session_jsonl, import_qoder_history,
     import_qwen_code_history, import_roo_task_json_history, import_rovodev_history,
     import_shelley_sqlite, import_tabnine_cli_history, import_trae_history, import_warp_sqlite,
@@ -31,19 +32,19 @@ use ctx_history_capture::{
     stable_capture_uuid, AntigravityCliImportOptions, AstrBotSqliteImportOptions,
     AuggieImportOptions, CaptureError, CatalogSummary, ClaudeProjectsImportOptions,
     ClineTaskJsonImportOptions, CodeBuddyImportOptions, CodexHistoryImportOptions,
-    CodexSessionCatalogOptions, CodexSessionImportOptions, CodexSessionImportProgressCallback,
-    ContinueCliImportOptions, CopilotCliImportOptions, CrushSqliteImportOptions,
-    CursorNativeImportOptions, CustomHistoryJsonlV1ImportOptions, DeepAgentsSqliteImportOptions,
-    FactoryAiDroidImportOptions, FirebenderSqliteImportOptions, ForgeCodeSqliteImportOptions,
-    GeminiCliImportOptions, GooseSessionsSqliteImportOptions, HermesSqliteImportOptions,
-    JunieImportOptions, KiloSqliteImportOptions, KimiCodeCliImportOptions, KiroSqliteImportOptions,
+    CodexSessionCatalogOptions, CodexSessionImportOptions, ContinueCliImportOptions,
+    CopilotCliImportOptions, CrushSqliteImportOptions, CursorNativeImportOptions,
+    CustomHistoryJsonlV1ImportOptions, DeepAgentsSqliteImportOptions, FactoryAiDroidImportOptions,
+    FirebenderSqliteImportOptions, ForgeCodeSqliteImportOptions, GeminiCliImportOptions,
+    GooseSessionsSqliteImportOptions, HermesSqliteImportOptions, JunieImportOptions,
+    KiloSqliteImportOptions, KimiCodeCliImportOptions, KiroSqliteImportOptions,
     LingmaSqliteImportOptions, MiMoCodeSqliteImportOptions, MistralVibeImportOptions,
     MuxImportOptions, NanoClawImportOptions, OpenClawImportOptions, OpenCodeSqliteImportOptions,
-    OpenHandsImportOptions, PiSessionImportOptions, ProviderImportFailure, ProviderImportSummary,
-    ProviderImportSupport, ProviderSourceStatus, QoderImportOptions, QwenCodeImportOptions,
-    RooTaskJsonImportOptions, RovoDevImportOptions, ShelleySqliteImportOptions,
-    TabnineCliImportOptions, TraeImportOptions, WarpSqliteImportOptions,
-    WindsurfCascadeHookImportOptions, ZedThreadsSqliteImportOptions,
+    OpenHandsImportOptions, PiSessionImportOptions, ProviderImportFailure, ProviderImportProgress,
+    ProviderImportProgressCallback, ProviderImportSummary, ProviderImportSupport,
+    ProviderSourceStatus, QoderImportOptions, QwenCodeImportOptions, RooTaskJsonImportOptions,
+    RovoDevImportOptions, ShelleySqliteImportOptions, TabnineCliImportOptions, TraeImportOptions,
+    WarpSqliteImportOptions, WindsurfCascadeHookImportOptions, ZedThreadsSqliteImportOptions,
 };
 use ctx_history_core::{
     database_path, utc_now, CaptureProvider, CtxHistoryJsonlRecord, HistoryRecord,
@@ -58,6 +59,7 @@ use crate::history_source_plugins::{
     discover_history_source_plugins, run_history_source_plugin, HistorySourcePluginRunOptions,
     HistorySourcePluginSource,
 };
+use crate::import_diagnostics::ImportDiagnostics;
 use crate::output::print_json;
 use crate::progress::{
     format_bytes, format_count, plural, ProgressArg, ProgressReporter, SourceProgressSnapshot,
@@ -462,7 +464,25 @@ pub(crate) fn run_import_internal(
         source,
     })?;
     let db_path = database_path(data_root.clone());
+    let diagnostics_run = if args.format.is_none() {
+        let (guard, diagnostics) =
+            ImportDiagnostics::start(&data_root, &db_path, options.operation)?;
+        diagnostics.phase("opening_database", "Opening and recovering the local index");
+        Some((guard, diagnostics))
+    } else {
+        None
+    };
+    let opening_progress = diagnostics_run.as_ref().map(|(_, diagnostics)| {
+        ProgressReporter::new(options.progress, options.json, options.operation, 0)
+            .with_import_diagnostics(diagnostics.clone())
+    });
+    if let Some(progress) = opening_progress.as_ref() {
+        progress.message("opening_database", "Opening local index...");
+    }
     let mut store = Store::open(&db_path)?;
+    if let Some(progress) = opening_progress.as_ref() {
+        progress.done("opening_database", "Local index ready.", 0);
+    }
     let mut totals = ImportTotals::default();
     let mut imported_sources = Vec::new();
 
@@ -476,6 +496,9 @@ pub(crate) fn run_import_internal(
             options,
         );
     }
+
+    let (diagnostics_guard, diagnostics) =
+        diagnostics_run.expect("non-format imports initialize diagnostics");
 
     let requests = import_requests(args)?;
     let plugin_requests = history_source_plugin_import_requests(
@@ -493,7 +516,8 @@ pub(crate) fn run_import_internal(
     }
 
     let inventory_progress =
-        ProgressReporter::new(options.progress, options.json, options.operation, 0);
+        ProgressReporter::new(options.progress, options.json, options.operation, 0)
+            .with_import_diagnostics(diagnostics.clone());
     inventory_progress.message("inventorying", "Preparing local history...");
     let inventory = inventory_import_sources(&store, requests, args.resume)
         .context("inventory local history sources")?;
@@ -541,7 +565,8 @@ pub(crate) fn run_import_internal(
         options.json,
         options.operation,
         planned_total_bytes,
-    );
+    )
+    .with_import_diagnostics(diagnostics.clone());
     if let Some(warning) = low_disk_space_warning(&db_path, planned_total_bytes) {
         progress.warning(warning);
     }
@@ -551,7 +576,7 @@ pub(crate) fn run_import_internal(
 
     for failure in inventory_failures {
         totals.add_source_failure(&failure.stats);
-        progress.done(
+        progress.update(
             "inventorying",
             format!(
                 "skipped {}: {}",
@@ -584,7 +609,7 @@ pub(crate) fn run_import_internal(
         ) {
             Ok((summary, stats)) => {
                 totals.add(&summary, &stats);
-                progress.done(
+                progress.update(
                     "indexing",
                     format!("imported history source plugin {}", plugin_source.label()),
                     planned_total_bytes,
@@ -610,7 +635,7 @@ pub(crate) fn run_import_internal(
                     } else {
                         totals.add_source_failure(&SourceStats::default());
                     }
-                    progress.done(
+                    progress.update(
                         "indexing",
                         format!(
                             "skipped history source plugin {}: {}",
@@ -668,6 +693,7 @@ pub(crate) fn run_import_internal(
                 .map(|plan| SourceProgressSnapshot {
                     completed_bytes: 0,
                     total_bytes: plan.stats.bytes,
+                    ..SourceProgressSnapshot::default()
                 })
                 .collect::<Vec<_>>(),
         ));
@@ -676,7 +702,7 @@ pub(crate) fn run_import_internal(
             .enumerate()
             .map(|(index, plan)| {
                 let db_path = db_path.clone();
-                let progress_callback = progress.parallel_codex_import_callback(
+                let progress_callback = progress.parallel_source_import_callback(
                     &plan.source,
                     index,
                     Arc::clone(&source_states),
@@ -825,92 +851,121 @@ pub(crate) fn run_import_internal(
         }
 
         if final_refresh_required {
-            progress.message("finalizing", "Refreshing search index...");
+            progress.message("searching", "Building search index...");
             let store = Store::open(&db_path)?;
-            store.refresh_search_index()?;
+            let bulk_guard = store.begin_event_search_bulk_mode()?;
+            let mut search_progress = |completed: usize, total: usize| {
+                progress.search_index_progress(completed, total);
+            };
+            let refresh_result = store.refresh_search_index_with_progress(&mut search_progress);
+            let finish_result = store.finish_event_search_bulk_mode(&bulk_guard);
+            match (refresh_result, finish_result) {
+                (Ok(()), Ok(())) => {}
+                (_, Err(error)) => return Err(error.into()),
+                (Err(error), Ok(())) => return Err(error.into()),
+            }
         }
     } else {
         let mut completed_source_bytes = 0u64;
-        for plan in planned_sources {
-            if options.print_human {
-                progress.finish_line();
-                println!(
-                    "importing {} {} ({} files, {})",
-                    plan.source.provider.as_str(),
-                    plan.source.path.display(),
-                    plan.stats.files,
-                    format_bytes(plan.stats.bytes)
-                );
-            }
-            let source_progress =
-                progress.codex_import_callback(&plan.source, completed_source_bytes);
-            completed_source_bytes = completed_source_bytes.saturating_add(plan.stats.bytes);
-            match import_one_source(
-                &mut store,
-                &plan.source,
-                source_progress,
-                args.resume,
-                &plan.preinventory,
-            ) {
-                Ok(summary) => {
-                    totals.add(&summary, &plan.stats);
-                    progress.done(
-                        "indexing",
-                        format!("Indexed {}.", source_provider_label(&plan.source)),
-                        completed_source_bytes,
+        let command_bulk_guard = (!planned_sources.is_empty())
+            .then(|| store.begin_event_search_bulk_mode())
+            .transpose()?;
+        let import_result = (|| -> Result<()> {
+            for plan in planned_sources {
+                if options.print_human {
+                    progress.finish_line();
+                    println!(
+                        "importing {} {} ({} files, {})",
+                        plan.source.provider.as_str(),
+                        plan.source.path.display(),
+                        plan.stats.files,
+                        format_bytes(plan.stats.bytes)
                     );
-                    if options.print_human {
-                        progress.finish_line();
-                        print_source_imported(&plan.source, &summary);
-                    }
-                    imported_sources.push(source_import_json(&plan.source, &plan.stats, &summary));
                 }
-                Err(err) => {
-                    let failure_scope = import_error_scope(&err);
-                    let failure_type = import_failure_type(&err);
-                    let rejected_summary = rejected_source_summary(&err);
-                    let error = error_summary(&err);
-                    if failure_scope == ImportFailureScope::Source {
-                        let failure = ImportSourceFailure {
-                            index: imported_sources.len(),
-                            source: plan.source,
-                            stats: plan.stats,
-                            error,
-                            failure_scope,
-                            failure_type,
-                            rejected_summary,
-                            system_error: None,
-                        };
-                        if let Some(summary) = failure.rejected_summary.as_ref() {
-                            totals.add_rejected_source(summary, &failure.stats);
-                        } else {
-                            totals.add_source_failure(&failure.stats);
-                        }
-                        progress.done(
-                            "indexing",
-                            format!(
-                                "skipped {}: {}",
-                                failure.source.provider.as_str(),
-                                source_error_reason(&failure.source, &failure.error)
-                            ),
-                            completed_source_bytes,
-                        );
+                let source_progress =
+                    progress.source_import_callback(&plan.source, completed_source_bytes);
+                completed_source_bytes = completed_source_bytes.saturating_add(plan.stats.bytes);
+                match import_one_source(
+                    &mut store,
+                    &plan.source,
+                    source_progress,
+                    args.resume,
+                    &plan.preinventory,
+                ) {
+                    Ok(summary) => {
+                        totals.add(&summary, &plan.stats);
+                        progress.source_done(&plan.source, plan.stats, &summary);
                         if options.print_human {
                             progress.finish_line();
-                            print_source_failed(&failure);
+                            print_source_imported(&plan.source, &summary);
                         }
-                        imported_sources.push(source_failure_json(&failure));
-                    } else {
-                        return Err(err);
+                        imported_sources.push(source_import_json(
+                            &plan.source,
+                            &plan.stats,
+                            &summary,
+                        ));
+                    }
+                    Err(err) => {
+                        let failure_scope = import_error_scope(&err);
+                        let failure_type = import_failure_type(&err);
+                        let rejected_summary = rejected_source_summary(&err);
+                        let error = error_summary(&err);
+                        if failure_scope == ImportFailureScope::Source {
+                            let failure = ImportSourceFailure {
+                                index: imported_sources.len(),
+                                source: plan.source,
+                                stats: plan.stats,
+                                error,
+                                failure_scope,
+                                failure_type,
+                                rejected_summary,
+                                system_error: None,
+                            };
+                            if let Some(summary) = failure.rejected_summary.as_ref() {
+                                totals.add_rejected_source(summary, &failure.stats);
+                            } else {
+                                totals.add_source_failure(&failure.stats);
+                            }
+                            progress.update(
+                                "indexing",
+                                format!(
+                                    "skipped {}: {}",
+                                    failure.source.provider.as_str(),
+                                    source_error_reason(&failure.source, &failure.error)
+                                ),
+                                completed_source_bytes,
+                            );
+                            if options.print_human {
+                                progress.finish_line();
+                                print_source_failed(&failure);
+                            }
+                            imported_sources.push(source_failure_json(&failure));
+                        } else {
+                            return Err(err);
+                        }
                     }
                 }
             }
+            Ok(())
+        })();
+        if command_bulk_guard.is_some() {
+            progress.message("finalizing", "Finalizing bulk index...");
         }
-    }
-
-    if totals.imported_sessions > 0 || totals.imported_events > 0 || totals.imported_edges > 0 {
-        progress.message("finalizing", "Optimizing search index...");
-        Store::open(&db_path)?.optimize_search_index()?;
+        let finish_result = command_bulk_guard
+            .as_ref()
+            .map(|guard| store.finish_event_search_bulk_mode(guard))
+            .transpose();
+        match (import_result, finish_result) {
+            (Ok(()), Ok(_)) => {}
+            (_, Err(error)) => {
+                progress.finish_line();
+                return Err(error.into());
+            }
+            (Err(error), Ok(_)) => {
+                progress.finish_line();
+                return Err(error);
+            }
+        }
     }
 
     progress.message("finalizing", "Checkpointing search database...");
@@ -963,20 +1018,16 @@ pub(crate) fn run_import_internal(
         "rejected_records_bucket",
         totals.failed as u64,
     );
-    Ok(ImportReport {
+    let report = ImportReport {
         resume: args.resume && native_import_requested,
         totals,
         inventory: inventory.totals,
         catalog: inventory.catalog,
         catalog_sources: inventory.catalog_sources,
         sources: imported_sources,
-    })
-}
-
-fn source_provider_label(source: &SourceInfo) -> &'static str {
-    provider_source_spec(source.provider)
-        .map(|spec| spec.display_name)
-        .unwrap_or_else(|| source.provider.as_str())
+    };
+    diagnostics_guard.complete();
+    Ok(report)
 }
 
 #[derive(Debug)]
@@ -1033,7 +1084,7 @@ pub(crate) fn large_import_notice(
         return None;
     }
     Some(format!(
-        "Large first import: scanning {} existing history {} ({}). This may take a while.",
+        "Large history set: scanning {} existing history {} ({}). This may take a while.",
         format_count(planned_total_files),
         plural(planned_total_files, "file", "files"),
         format_bytes(planned_total_bytes)

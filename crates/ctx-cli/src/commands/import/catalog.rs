@@ -13,7 +13,7 @@ pub(crate) fn import_incremental_codex_session_tree(
     store: &mut Store,
     source: &SourceInfo,
     record_id: Uuid,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     preinventory_catalog: Option<&CatalogSummary>,
 ) -> Result<ProviderImportSummary> {
     let source_root = source.path.display().to_string();
@@ -269,9 +269,6 @@ pub(crate) fn mark_catalog_sessions_failed(
 }
 
 pub(crate) fn source_uses_incremental_event_search(source: &SourceInfo) -> bool {
-    // Every importable provider persists events through Store APIs that update
-    // the event-search projection transactionally. Unsupported sources have no
-    // importer and therefore cannot make that guarantee.
     source.import_support.is_importable()
 }
 

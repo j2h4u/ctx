@@ -1,6 +1,6 @@
 use chrono::Utc;
 use ctx_history_core::EventType;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -21,7 +21,7 @@ pub enum SearchError {
 
 pub type Result<T> = std::result::Result<T, SearchError>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PacketOptions {
     pub limit: usize,
     pub snippet_chars: usize,
@@ -40,13 +40,14 @@ impl Default for PacketOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SearchResultMode {
     Sessions,
     Events,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchFilters {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<Uuid>,
@@ -92,7 +93,7 @@ fn normalized_text_filter(value: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSessionFilter {
     pub provider: ctx_history_core::CaptureProvider,
     pub provider_session_id: String,

@@ -24,9 +24,7 @@ use crate::commands::import::{
     one_line_error, rejected_source_summary, should_parallelize_import, ImportFailureScope,
     ImportSourceOutcome, ImportTotals, SourceStats,
 };
-use crate::commands::setup::{
-    indexed_history_item_count, insert_db_size_bucket, insert_store_analytics_counts,
-};
+use crate::commands::setup::{indexed_history_item_count, insert_db_size_bucket};
 use crate::history_source_plugins::{
     discover_history_source_plugins, HistorySourcePluginRefresh, HistorySourcePluginSource,
 };
@@ -128,26 +126,6 @@ pub(crate) fn run_search(
 
     let db_path = database_path(data_root.clone());
     let had_existing_store = db_path.exists();
-    let indexed_content_before_search = if had_existing_store {
-        existing_store_indexed_content(&db_path)
-    } else {
-        Some(false)
-    };
-    analytics::insert_bool(
-        analytics_properties,
-        "had_existing_store_before_search",
-        had_existing_store,
-    );
-    analytics::insert_bool(
-        analytics_properties,
-        "indexed_content_before_search_known",
-        indexed_content_before_search.is_some(),
-    );
-    analytics::insert_bool(
-        analytics_properties,
-        "had_indexed_content_before_search",
-        indexed_content_before_search.unwrap_or(false),
-    );
     let refresh_started = Instant::now();
     let refresh = refresh_before_search(&args, &data_root, config.daemon.enabled)?;
     analytics::insert_duration(
@@ -173,6 +151,10 @@ pub(crate) fn run_search(
     let backend_override = args.backend;
     let requested_backend = resolve_search_backend(backend_override, config)?;
     let semantic_enabled = config.semantic_search_enabled();
+    if config.daemon.enabled && !semantic_enabled && semantic::semantic_query_service_supported() {
+        semantic::maybe_autostart_daemon_for_search(&data_root, config);
+        semantic::wait_for_daemon_query_service(&data_root, StdDuration::from_millis(250));
+    }
     if args.refresh == RefreshArg::Background
         && semantic_enabled
         && semantic::semantic_query_service_supported()
@@ -205,11 +187,10 @@ pub(crate) fn run_search(
         "store_created_by_search",
         !had_existing_store && db_path.exists(),
     );
-    insert_store_analytics_counts(analytics_properties, &store)?;
     analytics::insert_bool(
         analytics_properties,
-        "has_indexed_content_after_search",
-        indexed_history_item_count(&store)? > 0,
+        "had_existing_store_before_search",
+        had_existing_store,
     );
     let source_identity = SourceIdentityFilterArgs::from(&args);
     let query = args.query.unwrap_or_default();
@@ -401,13 +382,6 @@ pub(crate) fn resolve_search_backend(
     }
 }
 
-fn existing_store_indexed_content(db_path: &Path) -> Option<bool> {
-    open_existing_store_read_only(db_path, "ctx search analytics preflight")
-        .and_then(|store| indexed_history_item_count(&store))
-        .ok()
-        .map(|indexed_items| indexed_items > 0)
-}
-
 pub(crate) fn refresh_before_search(
     args: &SearchArgs,
     data_root: &Path,
@@ -561,6 +535,7 @@ pub(crate) fn refresh_sources_for_search(
                 .map(|plan| SourceProgressSnapshot {
                     completed_bytes: 0,
                     total_bytes: plan.stats.bytes,
+                    ..SourceProgressSnapshot::default()
                 })
                 .collect::<Vec<_>>(),
         ));
@@ -569,7 +544,7 @@ pub(crate) fn refresh_sources_for_search(
             .enumerate()
             .map(|(index, plan)| {
                 let db_path = db_path.clone();
-                let progress_callback = progress.parallel_codex_import_callback(
+                let progress_callback = progress.parallel_source_import_callback(
                     &plan.source,
                     index,
                     Arc::clone(&source_states),
@@ -628,7 +603,7 @@ pub(crate) fn refresh_sources_for_search(
                 format!("importing {}", plan.source.provider.as_str()),
             );
             let source_progress =
-                progress.codex_import_callback(&plan.source, completed_source_bytes);
+                progress.source_import_callback(&plan.source, completed_source_bytes);
             completed_source_bytes = completed_source_bytes.saturating_add(plan.stats.bytes);
             let import_result = import_one_source_for_search_refresh(
                 &mut store,

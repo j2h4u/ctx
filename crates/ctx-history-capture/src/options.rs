@@ -85,7 +85,6 @@ import_options!(
     CustomHistoryJsonlV1ImportOptions,
     CodexHistoryImportOptions,
     PiSessionImportOptions,
-    ClaudeProjectsImportOptions,
     ClineTaskJsonImportOptions,
     RooTaskJsonImportOptions,
     CodeBuddyImportOptions,
@@ -121,6 +120,39 @@ import_options!(
     MistralVibeImportOptions,
     MuxImportOptions,
 );
+
+#[derive(Clone)]
+pub struct ClaudeProjectsImportOptions {
+    pub machine_id: String,
+    pub source_path: Option<PathBuf>,
+    pub imported_at: DateTime<Utc>,
+    pub history_record_id: Option<Uuid>,
+    pub progress: Option<ProviderImportProgressCallback>,
+}
+
+impl Default for ClaudeProjectsImportOptions {
+    fn default() -> Self {
+        Self {
+            machine_id: default_machine_id(),
+            source_path: None,
+            imported_at: utc_now(),
+            history_record_id: None,
+            progress: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for ClaudeProjectsImportOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClaudeProjectsImportOptions")
+            .field("machine_id", &self.machine_id)
+            .field("source_path", &self.source_path)
+            .field("imported_at", &self.imported_at)
+            .field("history_record_id", &self.history_record_id)
+            .field("progress", &self.progress.as_ref().map(|_| "<callback>"))
+            .finish()
+    }
+}
 
 pub type KiloSqliteImportOptions = OpenCodeSqliteImportOptions;
 pub type KiroSqliteImportOptions = OpenCodeSqliteImportOptions;
@@ -169,16 +201,28 @@ impl std::fmt::Debug for CodexSessionImportOptions {
     }
 }
 
-pub type CodexSessionImportProgressCallback =
-    Arc<dyn Fn(CodexSessionImportProgress) + Send + Sync + 'static>;
+pub type ProviderImportProgressCallback =
+    Arc<dyn Fn(ProviderImportProgress) + Send + Sync + 'static>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderImportStage {
+    Reading,
+    Writing,
+    Searching,
+}
 
 #[derive(Debug, Clone)]
-pub struct CodexSessionImportProgress {
+pub struct ProviderImportProgress {
+    pub stage: ProviderImportStage,
     pub source_path: Option<PathBuf>,
     pub total_files: usize,
     pub total_bytes: u64,
     pub completed_files: usize,
     pub completed_bytes: u64,
+    /// Work units for the current stage. For `Writing`, one unit is one
+    /// normalized capture/file-touch persisted by the single SQLite writer.
+    pub completed_units: usize,
+    pub total_units: usize,
     pub imported_sessions: usize,
     pub imported_events: usize,
     pub imported_edges: usize,
@@ -186,6 +230,9 @@ pub struct CodexSessionImportProgress {
     pub failed: usize,
     pub done: bool,
 }
+
+pub type CodexSessionImportProgressCallback = ProviderImportProgressCallback;
+pub type CodexSessionImportProgress = ProviderImportProgress;
 
 #[derive(Debug, Clone)]
 pub struct CodexSessionCatalogOptions {

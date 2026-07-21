@@ -38,6 +38,13 @@ fn bulk_mode_marker(store: &Store) -> Option<i64> {
         .unwrap()
 }
 
+fn wal_autocheckpoint(store: &Store) -> i64 {
+    store
+        .conn
+        .pragma_query_value(None, "wal_autocheckpoint", |row| row.get(0))
+        .unwrap()
+}
+
 #[test]
 fn strict_truncating_checkpoint_reports_pinned_reader() {
     let temp = tempdir();
@@ -75,6 +82,38 @@ fn strict_truncating_checkpoint_reports_pinned_reader() {
 }
 
 #[test]
+fn strict_checkpoint_accepts_busy_reader_after_every_frame_is_checkpointed() {
+    let temp = tempdir();
+    let db_path = temp.path().join("work.sqlite");
+    let store = Store::open_with_busy_timeout(&db_path, Duration::from_millis(10)).unwrap();
+    store
+        .conn
+        .execute_batch(
+            "CREATE TABLE checkpoint_complete_probe(value INTEGER); \
+             INSERT INTO checkpoint_complete_probe VALUES (1);",
+        )
+        .unwrap();
+
+    let reader = Connection::open(&db_path).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    assert_eq!(
+        reader
+            .query_row(
+                "SELECT COUNT(*) FROM checkpoint_complete_probe",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+
+    store.checkpoint_wal_truncate_required().unwrap();
+
+    reader.execute_batch("ROLLBACK").unwrap();
+    store.checkpoint_wal_truncate_required().unwrap();
+}
+
+#[test]
 fn bulk_search_mode_recovers_on_reopen_and_restores_saved_config() {
     let temp = tempdir();
     let db_path = temp.path().join("work.sqlite");
@@ -86,6 +125,7 @@ fn bulk_search_mode_recovers_on_reopen_and_restores_saved_config() {
 
     let guard = store.begin_event_search_bulk_mode().unwrap();
     assert_eq!(bulk_mode_marker(&store), Some(1));
+    assert_eq!(wal_autocheckpoint(&store), 0);
     for table in ["event_search", "event_search_scriptgram"] {
         assert_eq!(fts_config(&store, table, "automerge", 4), 0);
         assert_eq!(fts_config(&store, table, "crisismerge", 16), 1_000_000);
@@ -95,10 +135,29 @@ fn bulk_search_mode_recovers_on_reopen_and_restores_saved_config() {
 
     let reopened = Store::open(&db_path).unwrap();
     assert_eq!(bulk_mode_marker(&reopened), None);
+    assert_eq!(wal_autocheckpoint(&reopened), 10_000);
     for table in ["event_search", "event_search_scriptgram"] {
         assert_eq!(fts_config(&reopened, table, "automerge", 4), 8);
         assert_eq!(fts_config(&reopened, table, "crisismerge", 16), 32);
     }
+}
+
+#[test]
+fn bulk_search_mode_restores_wal_autocheckpoint_after_clean_finish() {
+    let temp = tempdir();
+    let db_path = temp.path().join("work.sqlite");
+    let store = Store::open(&db_path).unwrap();
+    store
+        .conn
+        .pragma_update(None, "wal_autocheckpoint", 321_000)
+        .unwrap();
+
+    let guard = store.begin_event_search_bulk_mode().unwrap();
+    assert_eq!(wal_autocheckpoint(&store), 0);
+    store.finish_event_search_bulk_mode(&guard).unwrap();
+
+    assert_eq!(wal_autocheckpoint(&store), 321_000);
+    assert_eq!(bulk_mode_marker(&store), None);
 }
 
 #[test]
@@ -246,7 +305,7 @@ fn bulk_search_mode_crosses_crisis_threshold_without_automatic_merge() {
 
     store.finish_event_search_bulk_mode(&guard).unwrap();
     assert_eq!(bulk_mode_marker(&store), None);
-    let compacted_segments = store
+    let remaining_segments = store
         .conn
         .query_row(
             "SELECT COUNT(DISTINCT segid) FROM event_search_idx",
@@ -254,7 +313,7 @@ fn bulk_search_mode_crosses_crisis_threshold_without_automatic_merge() {
             |row| row.get::<_, i64>(0),
         )
         .unwrap();
-    assert_eq!(compacted_segments, 1);
+    assert_eq!(remaining_segments, segments);
     assert_eq!(
         store
             .conn
@@ -278,17 +337,17 @@ fn bulk_search_finish_preserves_preexisting_optimized_segment() {
     insert_bulk_search_events(&store, "historic", 80, 512);
     store.finish_event_search_bulk_mode(&first_guard).unwrap();
     drop(first_guard);
-    assert_eq!(event_search_segment_count(&store), 1);
+    assert_eq!(event_search_segment_count(&store), 80);
 
     let second_guard = store.begin_event_search_bulk_mode().unwrap();
     insert_bulk_search_events(&store, "new", 20, 128);
-    assert_eq!(event_search_segment_count(&store), 21);
+    assert_eq!(event_search_segment_count(&store), 100);
     store.finish_event_search_bulk_mode(&second_guard).unwrap();
 
     assert_eq!(
         event_search_segment_count(&store),
-        2,
-        "finishing one provider import must not re-optimize the historical index"
+        100,
+        "finishing an import must not rewrite existing FTS segments"
     );
     assert_eq!(
         store
@@ -390,7 +449,7 @@ fn event_search_segment_count(store: &Store) -> i64 {
 }
 
 #[test]
-fn interrupted_bounded_merge_resumes_after_reopen() {
+fn bulk_finish_is_not_blocked_by_a_reader() {
     let temp = tempdir();
     let db_path = temp.path().join("work.sqlite");
     let store = Store::open_with_busy_timeout(&db_path, Duration::from_millis(10)).unwrap();
@@ -421,9 +480,8 @@ fn interrupted_bounded_merge_resumes_after_reopen() {
         .unwrap();
     assert_eq!(visible, 20);
 
-    let error = store.finish_event_search_bulk_mode(&guard).unwrap_err();
-    assert!(matches!(error, StoreError::WalCheckpointBusy { .. }));
-    assert_eq!(bulk_mode_marker(&store), Some(1));
+    store.finish_event_search_bulk_mode(&guard).unwrap();
+    assert_eq!(bulk_mode_marker(&store), None);
     reader.execute_batch("ROLLBACK").unwrap();
     drop(reader);
     drop(store);
@@ -439,7 +497,7 @@ fn interrupted_bounded_merge_resumes_after_reopen() {
             |row| row.get::<_, i64>(0),
         )
         .unwrap();
-    assert_eq!(segments, 1);
+    assert_eq!(segments, 20);
     assert_eq!(
         reopened
             .conn

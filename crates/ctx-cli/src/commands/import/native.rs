@@ -22,7 +22,7 @@ pub(crate) fn validate_source_import_supported(source: &SourceInfo) -> Result<()
 pub(crate) fn import_one_source(
     store: &mut Store,
     source: &SourceInfo,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     full_rescan: bool,
     preinventory: &SourcePreinventory,
 ) -> Result<ProviderImportSummary> {
@@ -42,7 +42,7 @@ pub(crate) fn import_one_source(
 pub(crate) fn import_one_source_without_search_refresh(
     store: &mut Store,
     source: &SourceInfo,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     full_rescan: bool,
     preinventory: &SourcePreinventory,
 ) -> Result<ProviderImportSummary> {
@@ -52,7 +52,7 @@ pub(crate) fn import_one_source_without_search_refresh(
 pub(crate) fn import_one_source_for_search_refresh(
     store: &mut Store,
     source: &SourceInfo,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     preinventory: &SourcePreinventory,
 ) -> Result<ProviderImportSummary> {
     if !source_uses_import_file_manifest(source)
@@ -63,7 +63,14 @@ pub(crate) fn import_one_source_for_search_refresh(
     {
         store.upsert_record(&import_record_for_source(source))?;
         if store.event_search_projection_needs_backfill()? {
-            store.refresh_search_index()?;
+            let bulk_guard = store.begin_event_search_bulk_mode()?;
+            let refresh_result = store.refresh_search_index();
+            let finish_result = store.finish_event_search_bulk_mode(&bulk_guard);
+            match (refresh_result, finish_result) {
+                (Ok(()), Ok(())) => {}
+                (_, Err(error)) => return Err(error.into()),
+                (Err(error), Ok(())) => return Err(error.into()),
+            }
         }
         return Ok(ProviderImportSummary::default());
     }
@@ -73,30 +80,52 @@ pub(crate) fn import_one_source_for_search_refresh(
 pub(crate) fn import_one_source_inner(
     store: &mut Store,
     source: &SourceInfo,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     refresh_search_after_import: bool,
     full_rescan: bool,
     preinventory: &SourcePreinventory,
 ) -> Result<ProviderImportSummary> {
     let bulk_guard = store.begin_event_search_bulk_mode()?;
     let import_result =
-        import_one_source_inner_batched(store, source, progress, full_rescan, preinventory);
+        import_one_source_inner_batched(store, source, progress.clone(), full_rescan, preinventory);
+    let import_result = import_result.and_then(|summary| {
+        if refresh_search_after_import {
+            let mut search_progress = |completed_units: usize, total_units: usize| {
+                if let Some(callback) = progress.as_ref() {
+                    callback(ProviderImportProgress {
+                        stage: ctx_history_capture::ProviderImportStage::Searching,
+                        source_path: Some(source.path.clone()),
+                        total_files: 1,
+                        total_bytes: 0,
+                        completed_files: 1,
+                        completed_bytes: 0,
+                        completed_units,
+                        total_units,
+                        imported_sessions: 0,
+                        imported_events: summary.imported_events,
+                        imported_edges: 0,
+                        skipped: 0,
+                        failed: 0,
+                        done: completed_units >= total_units,
+                    });
+                }
+            };
+            store.refresh_search_index_with_progress(&mut search_progress)?;
+        }
+        Ok(summary)
+    });
     let finish_result = store.finish_event_search_bulk_mode(&bulk_guard);
-    let summary = match (import_result, finish_result) {
+    match (import_result, finish_result) {
         (Ok(summary), Ok(())) => Ok(summary),
         (_, Err(error)) => Err(error.into()),
         (Err(error), Ok(())) => Err(error),
-    }?;
-    if refresh_search_after_import {
-        store.refresh_search_index()?;
     }
-    Ok(summary)
 }
 
 fn import_one_source_inner_batched(
     store: &mut Store,
     source: &SourceInfo,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     full_rescan: bool,
     preinventory: &SourcePreinventory,
 ) -> Result<ProviderImportSummary> {
@@ -183,6 +212,7 @@ fn import_one_source_inner_batched(
                 ClaudeProjectsImportOptions {
                     source_path: Some(source.path.clone()),
                     history_record_id: Some(record_id),
+                    progress: progress.clone(),
                     ..ClaudeProjectsImportOptions::default()
                 },
             )
@@ -709,7 +739,7 @@ pub(crate) fn import_manifested_source(
     store: &mut Store,
     source: &SourceInfo,
     record_id: Uuid,
-    progress: Option<CodexSessionImportProgressCallback>,
+    progress: Option<ProviderImportProgressCallback>,
     preinventoried_files: Option<&[SourceImportFile]>,
 ) -> Result<ProviderImportSummary> {
     let source_root = source.path.display().to_string();
@@ -736,15 +766,31 @@ pub(crate) fn import_manifested_source(
         return Ok(ProviderImportSummary::default());
     }
 
+    if source.provider == CaptureProvider::Claude {
+        return import_manifested_claude_parallel(
+            store,
+            source,
+            record_id,
+            progress,
+            &source_root,
+            pending,
+        );
+    }
+
+    let total_files = pending.len();
+    let total_bytes = pending.iter().map(|file| file.file_size_bytes).sum::<u64>();
+    let mut completed_files = 0usize;
+    let mut completed_bytes = 0u64;
     let mut summary = ProviderImportSummary::default();
     for pending_file in pending {
+        let file_progress = progress.clone();
         let path = PathBuf::from(&pending_file.source_path);
         let mut pending_source = explicit_path_source(source.provider, path);
         pending_source.source_format = source.source_format;
         let imported = import_one_source_inner(
             store,
             &pending_source,
-            progress.clone(),
+            file_progress,
             false,
             true,
             &SourcePreinventory::None,
@@ -788,8 +834,159 @@ pub(crate) fn import_manifested_source(
                     .push(ProviderImportFailure { line: 0, error });
             }
         }
+        completed_files = completed_files.saturating_add(1);
+        completed_bytes = completed_bytes.saturating_add(pending_file.file_size_bytes);
+        if let Some(callback) = progress.as_ref() {
+            callback(ProviderImportProgress {
+                stage: ctx_history_capture::ProviderImportStage::Writing,
+                source_path: Some(source.path.clone()),
+                total_files,
+                total_bytes,
+                completed_files,
+                completed_bytes,
+                completed_units: summary.imported_events,
+                total_units: summary.imported_events,
+                imported_sessions: summary.imported_sessions,
+                imported_events: summary.imported_events,
+                imported_edges: summary.imported_edges,
+                skipped: summary.skipped,
+                failed: summary.failed,
+                done: false,
+            });
+        }
     }
     let _ = record_id;
+    Ok(summary)
+}
+
+fn import_manifested_claude_parallel(
+    store: &mut Store,
+    source: &SourceInfo,
+    record_id: Uuid,
+    progress: Option<ProviderImportProgressCallback>,
+    source_root: &str,
+    pending: Vec<SourceImportFile>,
+) -> Result<ProviderImportSummary> {
+    let total_files = pending.len();
+    let total_bytes = pending.iter().map(|file| file.file_size_bytes).sum::<u64>();
+    let paths = pending
+        .iter()
+        .map(|file| PathBuf::from(&file.source_path))
+        .collect::<Vec<_>>();
+    let parsed_bytes = Arc::new(Mutex::new(
+        pending
+            .iter()
+            .map(|file| {
+                (
+                    file.source_path.clone(),
+                    (file.file_size_bytes, 0u64, 0usize),
+                )
+            })
+            .collect::<BTreeMap<_, _>>(),
+    ));
+    let parse_progress = progress.as_ref().map(|callback| {
+        let callback = Arc::clone(callback);
+        let parsed_bytes = Arc::clone(&parsed_bytes);
+        let source_path = source.path.clone();
+        Arc::new(move |file_progress: ProviderImportProgress| {
+            let (completed_bytes, completed_files, completed_units) = {
+                let mut files = parsed_bytes.lock().expect("Claude progress state poisoned");
+                if let Some(path) = file_progress.source_path.as_ref() {
+                    if let Some((total, completed, units)) =
+                        files.get_mut(&path.display().to_string())
+                    {
+                        if file_progress.stage == ctx_history_capture::ProviderImportStage::Reading
+                        {
+                            *completed = file_progress.completed_bytes.min(*total);
+                        }
+                        if file_progress.stage == ctx_history_capture::ProviderImportStage::Writing
+                        {
+                            *units = (*units).max(file_progress.completed_units);
+                        }
+                    }
+                }
+                files.values().fold(
+                    (0u64, 0usize, 0usize),
+                    |(bytes, files, units), (total, completed, file_units)| {
+                        (
+                            bytes.saturating_add(*completed),
+                            files.saturating_add(usize::from(*completed >= *total)),
+                            units.saturating_add(*file_units),
+                        )
+                    },
+                )
+            };
+            callback(ProviderImportProgress {
+                stage: file_progress.stage,
+                source_path: Some(source_path.clone()),
+                total_files,
+                total_bytes,
+                completed_files,
+                completed_bytes,
+                completed_units,
+                total_units: 0,
+                imported_sessions: file_progress.imported_sessions,
+                imported_events: file_progress.imported_events,
+                imported_edges: file_progress.imported_edges,
+                skipped: file_progress.skipped,
+                failed: file_progress.failed,
+                done: false,
+            });
+        }) as ProviderImportProgressCallback
+    });
+    let imported_result = import_claude_projects_jsonl_files_bounded_parallel(
+        store,
+        &paths,
+        &ClaudeProjectsImportOptions {
+            source_path: Some(source.path.clone()),
+            history_record_id: Some(record_id),
+            progress: parse_progress,
+            ..ClaudeProjectsImportOptions::default()
+        },
+    );
+    let imported = imported_result?;
+    let mut completed_files = 0usize;
+    let mut completed_bytes = 0u64;
+    let mut summary = ProviderImportSummary::default();
+    for (pending_file, (path, file_summary)) in pending.into_iter().zip(imported) {
+        if path.as_path() != std::path::Path::new(&pending_file.source_path) {
+            return Err(anyhow!(
+                "Claude parallel importer returned files out of order"
+            ));
+        }
+        if file_summary.failed > 0 {
+            mark_source_import_file_failed(
+                store,
+                source.provider,
+                source_root,
+                &pending_file.source_path,
+                &source_import_file_failure(&file_summary),
+            )?;
+        } else {
+            mark_source_import_file_indexed(store, source.provider, source_root, &pending_file)?;
+        }
+        summary.merge_from(file_summary);
+        completed_files = completed_files.saturating_add(1);
+        completed_bytes = completed_bytes.saturating_add(pending_file.file_size_bytes);
+        if let Some(callback) = progress.as_ref() {
+            callback(ProviderImportProgress {
+                stage: ctx_history_capture::ProviderImportStage::Writing,
+                source_path: Some(source.path.clone()),
+                total_files,
+                total_bytes,
+                completed_files,
+                completed_bytes,
+                completed_units: summary.imported_events,
+                total_units: summary.imported_events,
+                imported_sessions: summary.imported_sessions,
+                imported_events: summary.imported_events,
+                imported_edges: summary.imported_edges,
+                skipped: summary.skipped,
+                failed: summary.failed,
+                done: false,
+            });
+        }
+    }
     Ok(summary)
 }
 

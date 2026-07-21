@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -47,7 +47,7 @@ pub(crate) use cursors::{
 pub(crate) use identity::{
     pi_existing_event_identity_by_entry_id, provider_event_exists, provider_event_import_identity,
     provider_file_touch_event_id, provider_file_touch_import_id, provider_session_exists_cached,
-    ProviderEventImportIdentity,
+    provider_source_event_import_identity_with_seq, ProviderEventImportIdentity,
 };
 pub(crate) use ids::{
     provider_edge_uuid, provider_scoped_source_identity_key, provider_scoped_source_uuid,
@@ -110,6 +110,38 @@ pub fn import_normalized_provider_captures(
     options: NormalizedProviderImportOptions,
 ) -> Result<ProviderImportSummary> {
     batches::import_normalized_provider_captures(store, normalization, options)
+}
+
+pub(crate) fn import_normalized_provider_captures_stream_batch(
+    store: &mut Store,
+    normalization: ProviderNormalizationResult,
+    options: NormalizedProviderImportOptions,
+    state: &mut ProviderImportStreamState,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<ProviderImportSummary> {
+    batches::import_normalized_provider_captures_stream_batch(
+        store,
+        normalization,
+        options,
+        state,
+        progress,
+    )
+}
+
+pub(crate) fn import_normalized_provider_captures_shared_batch(
+    store: &mut Store,
+    normalization: ProviderNormalizationResult,
+    options: NormalizedProviderImportOptions,
+    state: &mut ProviderImportStreamState,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<ProviderImportSummary> {
+    batches::import_normalized_provider_captures_shared_batch(
+        store,
+        normalization,
+        options,
+        state,
+        progress,
+    )
 }
 
 pub(crate) fn import_provider_capture_lines(
@@ -255,7 +287,7 @@ fn provider_capture_lines_have_real_message(captures: &[(usize, ProviderCaptureE
         })
 }
 
-fn provider_event_is_real_conversation_message(event: &ProviderEventEnvelope) -> bool {
+pub(crate) fn provider_event_is_real_conversation_message(event: &ProviderEventEnvelope) -> bool {
     event.event_type == EventType::Message
         && matches!(
             event.role,
@@ -372,14 +404,23 @@ pub(crate) fn import_provider_file_touched_line(
 #[derive(Default)]
 pub(crate) struct ProviderImportCaches {
     pub(crate) imported_sessions: BTreeSet<Uuid>,
+    pub(crate) summarized_sessions: BTreeSet<Uuid>,
     pub(crate) processed_sources: BTreeSet<Uuid>,
     pub(crate) processed_sessions: BTreeSet<Uuid>,
     pub(crate) imported_edges: BTreeSet<Uuid>,
     pub(crate) processed_edges: BTreeSet<Uuid>,
     pub(crate) session_exists: BTreeMap<Uuid, bool>,
+    pub(crate) provider_session_ids: BTreeMap<(Uuid, String), Uuid>,
+    pub(crate) source_had_events_before_import: BTreeMap<Uuid, bool>,
+    pub(crate) event_ids_by_seq: Option<HashMap<u64, Uuid>>,
     pub(crate) pi_event_identities_by_entry_id:
         BTreeMap<Uuid, BTreeMap<String, ProviderEventImportIdentity>>,
     pub(crate) pending_edges: BTreeMap<Uuid, PendingProviderEdge>,
+}
+
+#[derive(Default)]
+pub(crate) struct ProviderImportStreamState {
+    caches: ProviderImportCaches,
 }
 
 #[derive(Clone)]
@@ -436,6 +477,29 @@ pub(crate) fn provider_import_session_uuid(
         Err(StoreError::NotFound(_)) => Ok(source_session_id),
         Err(err) => Err(CaptureError::Store(err)),
     }
+}
+
+fn provider_import_session_uuid_cached(
+    store: &Store,
+    provider: CaptureProvider,
+    provider_session_id: &str,
+    source_id: Uuid,
+    source_identity: Option<&str>,
+    caches: &mut ProviderImportCaches,
+) -> Result<Uuid> {
+    let key = (source_id, provider_session_id.to_owned());
+    if let Some(session_id) = caches.provider_session_ids.get(&key) {
+        return Ok(*session_id);
+    }
+    let session_id = provider_import_session_uuid(
+        store,
+        provider,
+        provider_session_id,
+        source_id,
+        source_identity,
+    )?;
+    caches.provider_session_ids.insert(key, session_id);
+    Ok(session_id)
 }
 
 fn provider_import_edge_uuid(
@@ -540,18 +604,26 @@ pub(crate) fn import_provider_capture_line(
         store.upsert_capture_source(&source_record)?;
     }
 
-    let session_id = provider_import_session_uuid(
+    let session_id = provider_import_session_uuid_cached(
         store,
         provider,
         &session.provider_session_id,
         source_id,
         source_identity.as_deref(),
+        caches,
     )?;
     let requested_parent_session_id = session
         .parent_provider_session_id
         .as_ref()
         .map(|id| {
-            provider_import_session_uuid(store, provider, id, source_id, source_identity.as_deref())
+            provider_import_session_uuid_cached(
+                store,
+                provider,
+                id,
+                source_id,
+                source_identity.as_deref(),
+                caches,
+            )
         })
         .transpose()?;
     let parent_session_id = match requested_parent_session_id {
@@ -566,7 +638,14 @@ pub(crate) fn import_provider_capture_line(
         .root_provider_session_id
         .as_ref()
         .map(|id| {
-            provider_import_session_uuid(store, provider, id, source_id, source_identity.as_deref())
+            provider_import_session_uuid_cached(
+                store,
+                provider,
+                id,
+                source_id,
+                source_identity.as_deref(),
+                caches,
+            )
         })
         .transpose()?
         .or_else(|| requested_parent_session_id.map(|_| session_id));
@@ -621,12 +700,14 @@ pub(crate) fn import_provider_capture_line(
     if process_session {
         store.upsert_session(&normalized_session)?;
         caches.session_exists.insert(session_id, true);
-        if is_new_session && caches.imported_sessions.insert(session_id) {
-            summary.imported_sessions += 1;
-            summary.imported += 1;
-        } else {
-            summary.skipped_sessions += 1;
-            summary.skipped += 1;
+        if caches.summarized_sessions.insert(session_id) {
+            if is_new_session && caches.imported_sessions.insert(session_id) {
+                summary.imported_sessions += 1;
+                summary.imported += 1;
+            } else {
+                summary.skipped_sessions += 1;
+                summary.skipped += 1;
+            }
         }
     }
 
@@ -725,17 +806,78 @@ pub(crate) fn import_provider_capture_line(
             caches,
         )? {
             Some(identity) => identity,
-            None => provider_event_import_identity(
-                store,
-                provider,
-                &session.provider_session_id,
-                source_id,
-                provider_event_identity_index,
-                event.provider_event_index,
-                &event_hash,
-                legacy_provider_event_index,
-                session_id == provider_session_uuid(provider, &session.provider_session_id),
-            )?,
+            None => {
+                let source_had_events = match caches
+                    .source_had_events_before_import
+                    .get(&source_id)
+                    .copied()
+                {
+                    Some(value) => value,
+                    None => {
+                        let value = store.capture_source_has_events(source_id)?;
+                        caches
+                            .source_had_events_before_import
+                            .insert(source_id, value);
+                        value
+                    }
+                };
+                if provider == CaptureProvider::Claude
+                    && options.fast_event_inserts
+                    && !source_had_events
+                    && provider_event_identity_index < (1 << 20)
+                {
+                    let candidate = provider_source_event_import_identity_with_seq(
+                        source_id,
+                        provider_event_identity_index,
+                        event.provider_event_index,
+                        &event_hash,
+                    );
+                    let event_ids_by_seq = match caches.event_ids_by_seq.as_mut() {
+                        Some(event_ids) => event_ids,
+                        None => {
+                            caches.event_ids_by_seq = Some(store.event_ids_by_seq()?);
+                            caches
+                                .event_ids_by_seq
+                                .as_mut()
+                                .expect("event seq cache set")
+                        }
+                    };
+                    if event_ids_by_seq
+                        .get(&candidate.seq)
+                        .is_none_or(|id| *id == candidate.id)
+                    {
+                        event_ids_by_seq.insert(candidate.seq, candidate.id);
+                        candidate
+                    } else {
+                        let identity = provider_event_import_identity(
+                            store,
+                            provider,
+                            &session.provider_session_id,
+                            source_id,
+                            provider_event_identity_index,
+                            event.provider_event_index,
+                            &event_hash,
+                            legacy_provider_event_index,
+                            session_id
+                                == provider_session_uuid(provider, &session.provider_session_id),
+                        )?;
+                        event_ids_by_seq.insert(identity.seq, identity.id);
+                        identity
+                    }
+                } else {
+                    provider_event_import_identity(
+                        store,
+                        provider,
+                        &session.provider_session_id,
+                        source_id,
+                        provider_event_identity_index,
+                        event.provider_event_index,
+                        &event_hash,
+                        legacy_provider_event_index,
+                        session_id == provider_session_uuid(provider, &session.provider_session_id),
+                    )?
+                }
+            }
         };
         let command_run = provider_command_run_from_event(ProviderCommandRunInput {
             provider,

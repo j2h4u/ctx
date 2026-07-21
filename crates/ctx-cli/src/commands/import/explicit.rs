@@ -55,7 +55,7 @@ pub(crate) fn run_explicit_format_import(
         && stats.files > 0
     {
         let notice = format!(
-            "Large first import: scanning {} existing history {} ({}). This may take a while.",
+            "Large history set: scanning {} existing history {} ({}). This may take a while.",
             format_count(stats.files),
             plural(stats.files, "file", "files"),
             format_bytes(stats.bytes)

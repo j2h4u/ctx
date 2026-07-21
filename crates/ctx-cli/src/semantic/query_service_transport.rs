@@ -123,6 +123,37 @@ fn daemon_query_request(
     Ok(Some(response))
 }
 
+fn daemon_lexical_search(
+    data_root: &Path,
+    query: &str,
+    terms: &[String],
+    options: &ctx_history_search::PacketOptions,
+) -> Result<Option<ctx_history_search::SearchPacket>> {
+    let Some(response) = daemon_query_request(
+        data_root,
+        compact_json(json!({
+            "schema_version": 1,
+            "op": "lexical_search",
+            "query": query,
+            "terms": terms,
+            "options": options,
+        })),
+        StdDuration::from_secs(30),
+        4 * 1024 * 1024,
+    )? else {
+        return Ok(None);
+    };
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Ok(None);
+    }
+    response
+        .get("packet")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("parse daemon lexical search response")
+}
+
 fn daemon_query_roundtrip(
     endpoint: &DaemonQueryEndpoint,
     request: &[u8],

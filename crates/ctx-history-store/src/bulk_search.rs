@@ -4,7 +4,9 @@
 //! producing a WAL far larger than the imported data. Bulk mode persists a
 //! recovery marker before disabling those merges. Event rows and their search
 //! projections still commit together; interrupted work remains searchable.
-//! Bounded merge steps run before the saved settings and marker are cleared.
+//! Finishing bulk mode restores normal merge settings without compacting the
+//! accumulated segments. FTS5 segments are immediately searchable; expensive
+//! compaction is reserved for an explicit optimize operation.
 
 use ctx_history_core::utc_now;
 use std::{
@@ -53,6 +55,7 @@ pub struct EventSearchBulkGuard {
     store_path: PathBuf,
     depth: Arc<AtomicUsize>,
     depth_counted: bool,
+    wal_autocheckpoint: Option<i64>,
 }
 
 impl Drop for EventSearchBulkGuard {
@@ -75,6 +78,7 @@ impl Store {
                 store_path: self.path.clone(),
                 depth: Arc::clone(&self.event_search_bulk_depth),
                 depth_counted: true,
+                wal_autocheckpoint: None,
             });
         }
         let acquired = match self.acquire_event_search_bulk_lock(self.busy_timeout) {
@@ -92,7 +96,13 @@ impl Store {
             }
         };
         guard.depth_counted = true;
-        self.begin_immediate_batch()?;
+        let wal_autocheckpoint = self.wal_autocheckpoint()?;
+        self.set_wal_autocheckpoint(0)?;
+        guard.wal_autocheckpoint = Some(wal_autocheckpoint);
+        if let Err(error) = self.begin_immediate_batch() {
+            let _ = self.restore_wal_autocheckpoint(&guard);
+            return Err(error);
+        }
         let result = (|| {
             ensure_search_projection_stats_table(self)?;
             if !bulk_mode_pending(self)? {
@@ -117,22 +127,22 @@ impl Store {
         })();
         if let Err(err) = result {
             let _ = self.rollback_batch();
+            let _ = self.restore_wal_autocheckpoint(&guard);
             return Err(err);
         }
         if let Err(err) = self.commit_batch() {
             let _ = self.rollback_batch();
+            let _ = self.restore_wal_autocheckpoint(&guard);
             return Err(err);
         }
         Ok(guard)
     }
 
-    /// Compact pending bulk segments in bounded steps, then restore saved settings.
+    /// Restore normal FTS merge settings after a bulk import.
     ///
-    /// Bulk finalization deliberately uses positive FTS5 merge commands. Starting
-    /// a full merge with a negative command would assign every pre-existing
-    /// segment to the same level and rewrite the entire shared event index. That
-    /// is appropriate for an explicit optimize, but not for finishing one
-    /// provider import in an already-populated multi-source index.
+    /// Pending segments remain searchable. Rewriting them here makes setup's
+    /// latency and temporary disk usage proportional to the entire existing
+    /// index, so compaction belongs to the explicit optimize path instead.
     pub fn finish_event_search_bulk_mode(&self, guard: &EventSearchBulkGuard) -> Result<()> {
         if guard.store_path != self.path {
             return Err(StoreError::InvalidBulkSearchGuard);
@@ -143,40 +153,17 @@ impl Store {
         if guard.depth_counted && guard.depth.load(Ordering::SeqCst) != 1 {
             return Err(StoreError::InvalidBulkSearchGuard);
         }
-        if !bulk_mode_pending(self)? {
-            return Ok(());
-        }
-        loop {
-            if self.finish_event_search_bulk_mode_step()? {
-                return Ok(());
-            }
+        let finish_result = self.restore_event_search_bulk_mode();
+        let restore_result = self.restore_wal_autocheckpoint(guard);
+        match (finish_result, restore_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (_, Err(error)) => Err(error),
+            (Err(error), Ok(())) => Err(error),
         }
     }
 
     pub(crate) fn recover_event_search_bulk_mode(&self) -> Result<()> {
-        // Check and reassert under one writer lock. A guarded importer may
-        // restore settings and clear the marker while another connection is
-        // waiting for this transaction, so an earlier check would be stale.
-        self.begin_immediate_batch()?;
-        let result = (|| {
-            let pending = bulk_mode_pending(self)?;
-            if pending {
-                suppress_event_search_merges(self)?;
-            }
-            Ok(pending)
-        })();
-        let pending = match result {
-            Ok(pending) => pending,
-            Err(err) => {
-                let _ = self.rollback_batch();
-                return Err(err);
-            }
-        };
-        if let Err(err) = self.commit_batch() {
-            let _ = self.rollback_batch();
-            return Err(err);
-        }
-        if !pending {
+        if !bulk_mode_pending(self)? {
             return Ok(());
         }
         // A live importer owns this lock. A stale marker has no owner, so the
@@ -242,19 +229,17 @@ impl Store {
         Ok(changed)
     }
 
-    /// Perform one bounded merge on both tables from the same writer snapshot.
-    /// A quiescent pass is checkpointed before a second locked pass may restore
-    /// settings, so a failed large-WAL checkpoint always leaves recovery marked.
-    fn finish_event_search_bulk_mode_step(&self) -> Result<bool> {
+    fn restore_event_search_bulk_mode(&self) -> Result<()> {
         self.begin_immediate_batch()?;
         let result = (|| {
             if !bulk_mode_pending(self)? {
-                return Ok(true);
+                return Ok(());
             }
-            Ok(!merge_event_search_tables_in_transaction(self)?)
+            restore_event_search_merge_config(self)?;
+            clear_bulk_mode_state(self)
         })();
-        let quiescent = match result {
-            Ok(quiescent) => quiescent,
+        match result {
+            Ok(()) => {}
             Err(err) => {
                 let _ = self.rollback_batch();
                 return Err(err);
@@ -264,42 +249,7 @@ impl Store {
             let _ = self.rollback_batch();
             return Err(err);
         }
-        self.checkpoint_wal_truncate_required()?;
-        if !quiescent {
-            return Ok(false);
-        }
-        self.restore_event_search_bulk_mode_if_quiescent()
-    }
-
-    /// Recheck both tables and restore settings while holding one writer lock.
-    /// If the final config-only checkpoint is pinned, the preceding potentially
-    /// large merge WAL has already been truncated successfully.
-    fn restore_event_search_bulk_mode_if_quiescent(&self) -> Result<bool> {
-        self.begin_immediate_batch()?;
-        let result = (|| {
-            if !bulk_mode_pending(self)? {
-                return Ok(true);
-            }
-            let changed = merge_event_search_tables_in_transaction(self)?;
-            if !changed {
-                restore_event_search_merge_config(self)?;
-                clear_bulk_mode_state(self)?;
-            }
-            Ok(!changed)
-        })();
-        let finished = match result {
-            Ok(finished) => finished,
-            Err(err) => {
-                let _ = self.rollback_batch();
-                return Err(err);
-            }
-        };
-        if let Err(err) = self.commit_batch() {
-            let _ = self.rollback_batch();
-            return Err(err);
-        }
-        self.checkpoint_wal_truncate_required()?;
-        Ok(finished)
+        Ok(())
     }
 
     fn acquire_event_search_bulk_lock(
@@ -321,10 +271,29 @@ impl Store {
                 store_path: self.path.clone(),
                 depth: Arc::clone(&self.event_search_bulk_depth),
                 depth_counted: false,
+                wal_autocheckpoint: None,
             })),
             Err(err) if sqlite_is_busy(&err) => Ok(None),
             Err(err) => Err(err.into()),
         }
+    }
+
+    fn wal_autocheckpoint(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .pragma_query_value(None, "wal_autocheckpoint", |row| row.get(0))?)
+    }
+
+    fn set_wal_autocheckpoint(&self, pages: i64) -> Result<()> {
+        self.conn.pragma_update(None, "wal_autocheckpoint", pages)?;
+        Ok(())
+    }
+
+    fn restore_wal_autocheckpoint(&self, guard: &EventSearchBulkGuard) -> Result<()> {
+        if let Some(pages) = guard.wal_autocheckpoint {
+            self.set_wal_autocheckpoint(pages)?;
+        }
+        Ok(())
     }
 }
 
@@ -337,16 +306,6 @@ fn merge_fts_table_in_transaction(
     let sql = format!("INSERT INTO {table}({table}, rank) VALUES ('merge', ?1)");
     store.conn.execute(&sql, params![page_budget])?;
     Ok(store.conn.total_changes().saturating_sub(before) >= 2)
-}
-
-fn merge_event_search_tables_in_transaction(store: &Store) -> Result<bool> {
-    let mut changed = false;
-    for table in EVENT_SEARCH_FTS_TABLES {
-        if table_exists(&store.conn, table)? {
-            changed |= merge_fts_table_in_transaction(store, table, FTS_MERGE_PAGE_BUDGET)?;
-        }
-    }
-    Ok(changed)
 }
 
 fn event_search_bulk_lock_path(store_path: &std::path::Path) -> PathBuf {
