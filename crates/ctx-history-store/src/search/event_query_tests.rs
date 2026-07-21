@@ -149,3 +149,16 @@ fn lexical_event_search_plan_scans_fts_once_per_match_clause() {
 
     assert_eq!(virtual_table_scans, expected_scans, "{details:#?}");
 }
+
+#[test]
+fn lexical_event_search_bounds_each_fts_candidate_scan_before_hydration() {
+    let clauses = fts_match_clauses("common rare");
+    let (sql, _) = lexical_event_search_query(clauses, 10, 7, false);
+
+    assert_eq!(sql.matches("ORDER BY rank").count(), 2, "{sql}");
+    assert_eq!(sql.matches("LIMIT 17").count(), 2, "{sql}");
+    assert!(
+        sql.find("LIMIT 17").unwrap() < sql.find("JOIN events e").unwrap(),
+        "candidate limiting must happen before event hydration: {sql}"
+    );
+}

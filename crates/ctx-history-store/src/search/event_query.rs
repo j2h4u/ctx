@@ -7,13 +7,15 @@ pub(super) fn lexical_event_search_query(
     prefer_conversation: bool,
 ) -> (String, Vec<Value>) {
     let mut values = Vec::<Value>::new();
+    let candidate_limit = limit.max(1).saturating_add(offset);
     let selects = match_clauses
         .into_iter()
         .enumerate()
         .map(|(term_index, clause)| {
             values.push(Value::Text(clause));
             format!(
-                r#"SELECT event_search.event_id,
+                r#"SELECT * FROM (
+                   SELECT event_search.event_id,
                           event_search.history_record_id,
                           event_search.session_id,
                           event_search.role,
@@ -21,8 +23,11 @@ pub(super) fn lexical_event_search_query(
                           {term_index},
                           bm25(event_search)
                    FROM event_search
-                   WHERE event_search MATCH ?{}"#,
-                values.len()
+                   WHERE event_search MATCH ?{}
+                   ORDER BY rank
+                   LIMIT {candidate_limit}
+                )"#,
+                values.len(),
             )
         })
         .collect::<Vec<_>>()

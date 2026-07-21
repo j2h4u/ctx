@@ -296,6 +296,7 @@ pub(crate) fn configure_read_only_connection(
         PRAGMA foreign_keys = ON;
         PRAGMA temp_store = MEMORY;
         PRAGMA cache_size = -262144;
+        PRAGMA mmap_size = 1073741824;
         PRAGMA query_only = ON;
         "#,
     )?;

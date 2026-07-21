@@ -167,24 +167,33 @@ impl Store {
             );
         }
 
+        let candidate_limit = limit.max(1).saturating_add(offset);
         let mut selects = Vec::new();
         let mut values = Vec::<Value>::new();
         for (term_index, clause) in match_clauses.into_iter().enumerate() {
             values.push(Value::Text(clause));
             selects.push(format!(
-                r#"SELECT event_search.event_id, {term_index}, bm25(event_search)
+                r#"SELECT * FROM (
+                   SELECT event_search.event_id, {term_index}, bm25(event_search)
                    FROM event_search
-                   WHERE event_search MATCH ?{}"#,
+                   WHERE event_search MATCH ?{}
+                   ORDER BY rank
+                   LIMIT {candidate_limit}
+                )"#,
                 values.len()
             ));
         }
         for (term_index, clause) in scriptgram_clauses {
             values.push(Value::Text(clause));
             selects.push(format!(
-                r#"SELECT event_search_scriptgram.event_id, {term_index},
+                r#"SELECT * FROM (
+                   SELECT event_search_scriptgram.event_id, {term_index},
                           bm25(event_search_scriptgram) + 0.35
                    FROM event_search_scriptgram
-                   WHERE event_search_scriptgram MATCH ?{}"#,
+                   WHERE event_search_scriptgram MATCH ?{}
+                   ORDER BY rank
+                   LIMIT {candidate_limit}
+                )"#,
                 values.len()
             ));
         }
