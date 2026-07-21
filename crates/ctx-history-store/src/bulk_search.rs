@@ -38,7 +38,8 @@ const BULK_MODE_AUTOMERGE_KEY_PREFIX: &str = "event_search_bulk_mode_v1:automerg
 const BULK_MODE_CRISISMERGE_KEY_PREFIX: &str = "event_search_bulk_mode_v1:crisismerge:";
 const FTS_AUTOMERGE_DEFAULT: i64 = 4;
 const FTS_CRISISMERGE_DEFAULT: i64 = 16;
-const FTS_BULK_CRISISMERGE: i64 = 1_000_000;
+// Preserve bulk throughput while merging well before FTS5 exhausts its segment ids.
+const FTS_BULK_CRISISMERGE: i64 = 1_024;
 // FTS5's merge page budget is not a hard upper bound on WAL pages: merging a
 // large segment can rewrite substantially more data inside one statement.
 // Keep each step deliberately small so checkpoints remain safe on large real

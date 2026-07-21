@@ -128,7 +128,7 @@ fn bulk_search_mode_recovers_on_reopen_and_restores_saved_config() {
     assert_eq!(wal_autocheckpoint(&store), 0);
     for table in ["event_search", "event_search_scriptgram"] {
         assert_eq!(fts_config(&store, table, "automerge", 4), 0);
-        assert_eq!(fts_config(&store, table, "crisismerge", 16), 1_000_000);
+        assert_eq!(fts_config(&store, table, "crisismerge", 16), 1_024);
     }
     drop(store);
     drop(guard);
@@ -192,7 +192,7 @@ fn overlapping_bulk_search_mode_is_rejected_until_guard_releases() {
     assert_eq!(bulk_mode_marker(&second), Some(1));
     for table in ["event_search", "event_search_scriptgram"] {
         assert_eq!(fts_config(&second, table, "automerge", 4), 0);
-        assert_eq!(fts_config(&second, table, "crisismerge", 16), 1_000_000);
+        assert_eq!(fts_config(&second, table, "crisismerge", 16), 1_024);
     }
 
     first.finish_event_search_bulk_mode(&guard).unwrap();
@@ -325,6 +325,52 @@ fn bulk_search_mode_crosses_crisis_threshold_without_automatic_merge() {
             .unwrap(),
         20
     );
+}
+
+#[test]
+fn bulk_search_mode_crisis_merges_before_fts_segment_limit() {
+    let temp = tempdir();
+    let db_path = temp.path().join("work.sqlite");
+    let store = Store::open(&db_path).unwrap();
+    let guard = store.begin_event_search_bulk_mode().unwrap();
+
+    for index in 0..1_100 {
+        store
+            .conn
+            .execute(
+                r#"
+                INSERT INTO event_search
+                (event_id, history_record_id, session_id, role, preview_text, rank_bucket)
+                VALUES (?1, NULL, NULL, 'user', ?2, 'message')
+                "#,
+                params![format!("bulk-event-{index}"), format!("bulk token {index}")],
+            )
+            .unwrap();
+    }
+
+    let segments = store
+        .conn
+        .query_row(
+            "SELECT COUNT(DISTINCT segid) FROM event_search_idx",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap();
+    assert!(
+        segments < 200,
+        "crisis merge did not bound FTS segments: {segments} remain"
+    );
+    let matching_rows = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM event_search WHERE event_search MATCH 'bulk'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap();
+    assert_eq!(matching_rows, 1_100);
+
+    store.finish_event_search_bulk_mode(&guard).unwrap();
 }
 
 #[test]
